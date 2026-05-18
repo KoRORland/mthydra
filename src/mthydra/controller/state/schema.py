@@ -100,6 +100,24 @@ _STATEMENTS: list[str] = [
       FOREIGN KEY (authority_generation) REFERENCES credential_authority(generation)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS users (
+      user_id              TEXT PRIMARY KEY,
+      display_name         TEXT,
+      out_of_band_channel  TEXT NOT NULL,
+      current_shard_id     TEXT,
+      added_at             TEXT NOT NULL,
+      FOREIGN KEY (current_shard_id) REFERENCES shards(shard_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS published_subsets (
+      publish_gen  INTEGER PRIMARY KEY AUTOINCREMENT,
+      payload_json TEXT NOT NULL,
+      published_at TEXT NOT NULL,
+      channel      TEXT NOT NULL
+    )
+    """,
 ]
 
 
