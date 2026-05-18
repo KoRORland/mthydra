@@ -62,6 +62,44 @@ _STATEMENTS: list[str] = [
       FOREIGN KEY (signing_key_generation) REFERENCES descriptor_signing_key(generation)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS shards (
+      shard_id           TEXT PRIMARY KEY,
+      members_json       TEXT NOT NULL,
+      last_reshuffled_at TEXT NOT NULL,
+      created_at         TEXT NOT NULL,
+      retired_at         TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ru_boxes (
+      box_id             TEXT PRIMARY KEY,
+      provider           TEXT NOT NULL,
+      region             TEXT NOT NULL,
+      public_ip          TEXT,
+      sni                TEXT UNIQUE NOT NULL,
+      shard_id           TEXT,
+      state              TEXT NOT NULL CHECK (state IN ('provisioning','live','terminated')),
+      image_version      TEXT NOT NULL,
+      created_at         TEXT NOT NULL,
+      went_live_at       TEXT,
+      terminated_at      TEXT,
+      termination_reason TEXT,
+      FOREIGN KEY (shard_id) REFERENCES shards(shard_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS onward_credentials (
+      cred_id              TEXT PRIMARY KEY,
+      box_id               TEXT NOT NULL,
+      credential           BLOB NOT NULL,
+      issued_at            TEXT NOT NULL,
+      revoked_at           TEXT,
+      authority_generation INTEGER NOT NULL,
+      FOREIGN KEY (box_id) REFERENCES ru_boxes(box_id),
+      FOREIGN KEY (authority_generation) REFERENCES credential_authority(generation)
+    )
+    """,
 ]
 
 
