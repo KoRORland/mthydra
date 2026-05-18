@@ -34,6 +34,34 @@ _STATEMENTS: list[str] = [
       details     TEXT
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS credential_authority (
+      generation  INTEGER PRIMARY KEY,
+      privkey_pem TEXT NOT NULL,
+      pubkey_pem  TEXT NOT NULL,
+      created_at  TEXT NOT NULL,
+      retired_at  TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS descriptor_signing_key (
+      generation  INTEGER PRIMARY KEY,
+      privkey     BLOB NOT NULL,
+      pubkey      BLOB NOT NULL,
+      created_at  TEXT NOT NULL,
+      retired_at  TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS descriptor_history (
+      generation             INTEGER PRIMARY KEY,
+      payload                TEXT NOT NULL,
+      signed_at              TEXT NOT NULL,
+      valid_until            TEXT NOT NULL,
+      signing_key_generation INTEGER NOT NULL,
+      FOREIGN KEY (signing_key_generation) REFERENCES descriptor_signing_key(generation)
+    )
+    """,
 ]
 
 
