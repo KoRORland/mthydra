@@ -132,6 +132,36 @@ _STATEMENTS: list[str] = [
       rotated_at TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS obligation_clocks (
+      obligation_id  TEXT PRIMARY KEY,
+      last_proven_at TEXT NOT NULL,
+      proven_by      TEXT NOT NULL,
+      details        TEXT,
+      next_due_at    TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS backup_log (
+      generation       INTEGER PRIMARY KEY,
+      created_at       TEXT NOT NULL,
+      size_bytes       INTEGER NOT NULL DEFAULT 0,
+      sha256           TEXT NOT NULL DEFAULT '',
+      pushed_at        TEXT,
+      index_updated_at TEXT,
+      trigger          TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts           TEXT NOT NULL,
+      actor        TEXT NOT NULL,
+      action       TEXT NOT NULL,
+      target       TEXT,
+      details_json TEXT
+    )
+    """,
 ]
 
 
