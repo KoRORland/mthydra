@@ -1,0 +1,35 @@
+[node]
+role = "active"                    # "active" | "standby"
+hostname = "controller-eu-1"
+
+[backup]
+floor_interval_hours = 24
+on_change_debounce_seconds = 30
+endpoint = "https://s3.us-west-002.backblazeb2.com"
+bucket = "mthydra-controller-state"
+# access-key-id is non-secret enough to live here; the secret access key
+# lives in provider_api_credentials inside the DB
+access_key_id = "..."
+
+[backup.retention]
+keep_daily = 30
+keep_monthly = 12
+object_lock_days = 365             # minimum retention period for Object Lock
+
+[gap_monitor]
+poll_interval_minutes = 30
+alarm_threshold_hours = 48
+recipient_email = "operator@example.org"
+
+[obligations]
+# how long is each obligation valid before it counts as stale
+[obligations.timers_hours]
+t1_dormant_health     = 168        # weekly
+t2_dryrun_caseA       = 720        # monthly
+t2_dryrun_caseB       = 720
+t3_vantage_revalidation = 168
+t3_profile_repin      = 0          # event-driven (T4 promotion); 0 means "must be tied to image_version"
+t4_upstream_check     = 168
+t5_pool_revalidation  = 168
+t6_reshuffle          = 168
+backup_restore_dryrun = 720
