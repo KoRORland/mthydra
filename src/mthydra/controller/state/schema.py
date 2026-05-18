@@ -118,6 +118,20 @@ _STATEMENTS: list[str] = [
       channel      TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS publishing_tokens (
+      kind       TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      rotated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS provider_api_credentials (
+      provider   TEXT PRIMARY KEY,
+      credential TEXT NOT NULL,
+      rotated_at TEXT NOT NULL
+    )
+    """,
 ]
 
 
