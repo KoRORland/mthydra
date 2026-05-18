@@ -14,6 +14,26 @@ _STATEMENTS: list[str] = [
       CHECK (rowid = 1)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS cover_domain_pool (
+      domain                TEXT PRIMARY KEY,
+      state                 TEXT NOT NULL CHECK (state IN ('candidate_unverified','candidate_verified','in_use')),
+      last_verified_at      TEXT,
+      verified_from_vantage TEXT,
+      assigned_box_id       TEXT,
+      added_at              TEXT NOT NULL,
+      notes                 TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS burned_domains (
+      domain      TEXT PRIMARY KEY,
+      burned_at   TEXT NOT NULL,
+      reason      TEXT NOT NULL,
+      last_box_id TEXT,
+      details     TEXT
+    )
+    """,
 ]
 
 
