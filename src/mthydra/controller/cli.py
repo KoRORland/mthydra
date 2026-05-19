@@ -206,6 +206,12 @@ def build_parser() -> argparse.ArgumentParser:
                      default=None)
     cl.add_argument("--json", action="store_true")
 
+    cr = sub.add_parser("cover-rotate",
+                         help="retire an in_use cover domain (in_use -> burned)")
+    cr.add_argument("domain")
+    cr.add_argument("--reason", default="manual_rotate")
+    cr.add_argument("--db-path", default=DEFAULT_DB)
+
     return p
 
 
@@ -390,6 +396,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "cover-list":
         return _cmd_cover_list(args)
+
+    if args.cmd == "cover-rotate":
+        return _cmd_cover_rotate(args)
 
     return 1
 
@@ -906,6 +915,35 @@ def _cmd_cover_list(args) -> int:
             print(f"{'state':24} {'domain':40} added_at")
             for r in rows:
                 print(f"{r.state:24} {r.domain:40} {r.added_at}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_cover_rotate(args) -> int:
+    from mthydra.controller.state.cover_pool import rotate_and_burn
+    from mthydra.controller.state.db import connect
+
+    conn = connect(args.db_path)
+    try:
+        row = conn.execute(
+            "SELECT state, assigned_box_id FROM cover_domain_pool WHERE domain=?",
+            (args.domain,),
+        ).fetchone()
+        if row is None:
+            print(f"cover-rotate: {args.domain} not in cover_domain_pool", file=sys.stderr)
+            return 2
+        try:
+            rotate_and_burn(
+                conn, args.domain,
+                reason=args.reason,
+                last_box_id=row[1] or "",
+                at=_now(),
+            )
+        except ValueError as e:
+            print(f"cover-rotate: {e}", file=sys.stderr)
+            return 2
+        print(f"cover-rotate: {args.domain} -> burned (reason={args.reason})")
         return 0
     finally:
         conn.close()

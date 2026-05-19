@@ -639,3 +639,52 @@ def test_cover_list_json_output_schema(tmp_path, age_recipient, capsys):
     assert isinstance(data, list)
     assert any(row["domain"] == "a.org" for row in data)
     assert all(set(row.keys()) >= {"domain", "state", "added_at"} for row in data)
+
+
+# ===== Task 17: cover-rotate =====
+
+def test_cover_rotate_burns_in_use_domain(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    from mthydra.controller.state.cover_pool import (
+        add_candidate, assign_to_box, attest_verified,
+    )
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import insert_box, mark_live
+    conn = connect(db)
+    insert_box(conn, "box-1", "aws", "eu-west-1", "10.0.0.1", "sni.invalid",
+               "img-v1", "2026-05-19T00:00:00Z")
+    mark_live(conn, "box-1", public_ip="10.0.0.1", at="2026-05-19T00:00:00Z")
+    add_candidate(conn, "rot.org", added_at="2026-05-19T00:00:00Z")
+    attest_verified(conn, "rot.org", from_vantage="ru-vps-01", at="2026-05-19T01:00:00Z")
+    assign_to_box(conn, "rot.org", box_id="box-1", at="2026-05-19T02:00:00Z")
+    conn.close()
+    rc = run([
+        "cover-rotate", "rot.org",
+        "--reason", "manual_rotate",
+        "--db-path", str(db),
+    ])
+    assert rc == 0
+    from mthydra.controller.state.burned import is_burned
+    conn = connect(db)
+    assert is_burned(conn, "rot.org")
+
+
+def test_cover_rotate_refuses_non_in_use(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    run(["cover-add", "newborn.org", "--db-path", str(db)])
+    rc = run(["cover-rotate", "newborn.org", "--db-path", str(db)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "is not in_use" in err
