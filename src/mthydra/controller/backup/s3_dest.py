@@ -52,8 +52,16 @@ class S3Destination:
             {"highest_gen": highest_gen, "sha256": sha256, "size_bytes": size_bytes, "ts": ts},
             sort_keys=True,
         ).encode("utf-8")
+        retain_until = datetime.now(timezone.utc) + timedelta(days=self.object_lock_days)
         self._client.put_object(
-            Bucket=self.bucket, Key="index.json", Body=body, ContentType="application/json"
+            Bucket=self.bucket,
+            Key="index.json",
+            Body=body,
+            ContentType="application/json",
+            # GOVERNANCE (not COMPLIANCE) so operator can override a corrupted index version
+            # while blobs remain under COMPLIANCE (plan §16 G7 resolution).
+            ObjectLockMode="GOVERNANCE",
+            ObjectLockRetainUntilDate=retain_until,
         )
 
     def head_index(self) -> dict[str, Any] | None:

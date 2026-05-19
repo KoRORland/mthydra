@@ -249,13 +249,36 @@ def run(argv: list[str]) -> int:
     return 1
 
 
+def _build_destination(cfg, secret: str, mode: str, bucket_override: str | None):
+    """Build an S3Destination, honouring bucket_override in dryrun mode.
+
+    In dryrun mode the destination bucket is replaced with bucket_override so
+    backups go to a non-prod bucket.  In production mode bucket_override is
+    ignored (the startup-check already rejected a matching override).
+    """
+    from mthydra.controller.backup.s3_dest import S3Destination
+
+    bucket = (
+        bucket_override
+        if (mode == "dryrun" and bucket_override)
+        else cfg.backup.bucket
+    )
+    return S3Destination(
+        endpoint_url=cfg.backup.endpoint or None,
+        bucket=bucket,
+        access_key_id=cfg.backup.access_key_id,
+        secret_access_key=secret,
+        region=os.environ.get("MTHYDRA_BACKUP_REGION", "us-east-1"),
+        object_lock_days=cfg.backup.retention.object_lock_days,
+    )
+
+
 def _cmd_serve(args) -> int:
     """Run the backup orchestrator loop (spec A stub; spec F will add the full controller plane)."""
     import signal
     import time
 
     from mthydra.controller.backup.pipeline import BackupPipeline
-    from mthydra.controller.backup.s3_dest import S3Destination
     from mthydra.controller.backup.triggers import BackupOrchestrator
     from mthydra.controller.config import load_config
     from mthydra.controller.state.tokens import get_provider_credential
@@ -278,14 +301,7 @@ def _cmd_serve(args) -> int:
     finally:
         conn.close()
 
-    dest = S3Destination(
-        endpoint_url=cfg.backup.endpoint or None,
-        bucket=cfg.backup.bucket,
-        access_key_id=cfg.backup.access_key_id,
-        secret_access_key=secret,
-        region=os.environ.get("MTHYDRA_BACKUP_REGION", "us-east-1"),
-        object_lock_days=cfg.backup.retention.object_lock_days,
-    )
+    dest = _build_destination(cfg, secret, mode=args.mode, bucket_override=args.bucket_override)
     tmp_dir = Path("/var/lib/mthydra/tmp")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -296,7 +312,6 @@ def _cmd_serve(args) -> int:
         destination=dest,
         clock=_now,
         mode=args.mode,
-        bucket_override=args.bucket_override,
     )
     orch = BackupOrchestrator(
         pipeline=pipeline,

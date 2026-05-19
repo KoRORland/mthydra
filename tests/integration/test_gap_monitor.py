@@ -13,6 +13,16 @@ def test_gap_monitor_against_moto_bucket():
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket=BUCKET)
+        client.put_bucket_versioning(
+            Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"}
+        )
+        client.put_object_lock_configuration(
+            Bucket=BUCKET,
+            ObjectLockConfiguration={
+                "ObjectLockEnabled": "Enabled",
+                "Rule": {"DefaultRetention": {"Mode": "COMPLIANCE", "Days": 365}},
+            },
+        )
         dest = S3Destination(None, BUCKET, "x", "y", "us-east-1", object_lock_days=30)
         dest._client = client
 

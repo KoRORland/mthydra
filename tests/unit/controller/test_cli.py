@@ -109,3 +109,36 @@ def test_dryrun_mode_without_bucket_override_fails():
         "--age-recipient", FAKE_RECIPIENT,
     ])
     assert exit_code != 0
+
+
+def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
+    """In dryrun mode, _build_destination must point at bucket_override, not cfg.backup.bucket."""
+    from mthydra.controller.cli import _build_destination
+    from mthydra.controller.config import (
+        BackupConfig, Config, GapMonitorConfig, NodeConfig, ObligationsConfig, RetentionConfig
+    )
+
+    cfg = Config(
+        node=NodeConfig(role="active", hostname="h"),
+        backup=BackupConfig(
+            floor_interval_hours=24,
+            on_change_debounce_seconds=30,
+            endpoint="",
+            bucket="prod-bucket",
+            access_key_id="id",
+            retention=RetentionConfig(keep_daily=30, keep_monthly=12, object_lock_days=365),
+        ),
+        gap_monitor=GapMonitorConfig(
+            poll_interval_minutes=30, alarm_threshold_hours=48, recipient_email="op@example.org"
+        ),
+        obligations=ObligationsConfig(),
+    )
+
+    dest_prod = _build_destination(cfg, "secret", mode="production", bucket_override="override-bucket")
+    assert dest_prod.bucket == "prod-bucket"
+
+    dest_dry = _build_destination(cfg, "secret", mode="dryrun", bucket_override="override-bucket")
+    assert dest_dry.bucket == "override-bucket"
+
+    dest_dry_no_override = _build_destination(cfg, "secret", mode="dryrun", bucket_override=None)
+    assert dest_dry_no_override.bucket == "prod-bucket"
