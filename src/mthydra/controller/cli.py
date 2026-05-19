@@ -79,9 +79,12 @@ def build_parser() -> argparse.ArgumentParser:
     sc_p.add_argument("--age-recipient-file", default=DEFAULT_RECIPIENT_FILE)
 
     # backup-now
-    bn_p = sub.add_parser("backup-now", help="trigger a manual backup")
+    bn_p = sub.add_parser("backup-now", help="run a manual backup immediately")
     bn_p.add_argument("--db-path", default=DEFAULT_DB)
-    bn_p.add_argument("--reason", default="manual")
+    bn_p.add_argument("--config", default="/etc/mthydra/controller.toml")
+    bn_p.add_argument("--tmp-dir", default="/var/lib/mthydra/tmp")
+    bn_p.add_argument("--reason", default="manual",
+                      help="advisory label stored in backup_log.trigger")
 
     # restore
     rst_p = sub.add_parser("restore", help="decrypt + summarize a backup blob")
@@ -185,13 +188,7 @@ def run(argv: list[str]) -> int:
         return 10
 
     if args.cmd == "backup-now":
-        # Until spec J ships, this CLI notifies via stdout only.
-        # Spec J will add a real IPC signal to the running daemon.
-        print(
-            f"backup-now: signalled (trigger=manual, reason={args.reason!r}). "
-            "The running daemon handles the S3 push; this CLI does not invoke S3 directly.",
-        )
-        return 0
+        return _cmd_backup_now(args, mode)
 
     if args.cmd == "restore":
         plain = Path(args.into)
@@ -247,6 +244,60 @@ def run(argv: list[str]) -> int:
         return _cmd_serve(args)
 
     return 1
+
+
+def _cmd_backup_now(args, mode: str) -> int:
+    """Run a manual backup synchronously (decision 2a — real pipeline call)."""
+    from mthydra.controller.backup.pipeline import BackupPipeline
+    from mthydra.controller.backup.s3_dest import S3Destination
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.backup_log import BackupTrigger
+    from mthydra.controller.state.tokens import get_provider_credential
+
+    if mode == "offline":
+        print("backup-now refused: controller is in offline mode", file=sys.stderr)
+        return 1
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"backup-now: config error: {e}", file=sys.stderr)
+        return 2
+
+    try:
+        recipient = _read_recipient(DEFAULT_RECIPIENT_FILE)
+    except FileNotFoundError:
+        print(f"backup-now: age recipient file not found: {DEFAULT_RECIPIENT_FILE}", file=sys.stderr)
+        return 6
+
+    conn = connect(args.db_path)
+    try:
+        try:
+            secret = get_provider_credential(conn, "b2")
+        except KeyError:
+            print("backup-now: b2 credential not in DB; run init first", file=sys.stderr)
+            return 7
+    finally:
+        conn.close()
+
+    dest = _build_destination(cfg, secret, mode=mode, bucket_override=args.bucket_override)
+    tmp_dir = Path(args.tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    pipeline = BackupPipeline(
+        db_path=args.db_path,
+        tmp_dir=tmp_dir,
+        recipient=recipient,
+        destination=dest,
+        clock=_now,
+        mode=mode,
+    )
+    try:
+        gen = pipeline.do_backup(BackupTrigger.MANUAL)
+        print(f"backup-now: pushed generation {gen}")
+        return 0
+    except Exception as e:
+        print(f"backup-now: failed: {e}", file=sys.stderr)
+        return 8
 
 
 def _build_destination(cfg, secret: str, mode: str, bucket_override: str | None):

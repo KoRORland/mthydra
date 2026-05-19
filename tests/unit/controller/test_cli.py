@@ -2,7 +2,10 @@
 import shutil
 import subprocess
 
+import boto3
 import pytest
+from moto import mock_aws
+from unittest.mock import patch
 
 from mthydra.controller.cli import build_parser, run
 from mthydra.controller.bootstrap import init_state
@@ -63,9 +66,81 @@ def test_startup_check_returns_nonzero_when_db_missing(tmp_path):
     assert exit_code != 0
 
 
-def test_backup_now_returns_zero(tmp_path):
-    exit_code = run(["backup-now"])
-    assert exit_code == 0
+def test_backup_now_offline_mode_refused(tmp_path):
+    """backup-now in offline mode must exit non-zero."""
+    exit_code = run(["--mode", "offline", "--bucket-override", "x", "backup-now"])
+    # offline mode is rejected at the backup-now level (not the global level)
+    assert exit_code != 0
+
+
+@pytest.mark.skipif(shutil.which("age") is None, reason="age binary not installed")
+def test_backup_now_performs_real_backup(tmp_path):
+    """backup-now wires to a real BackupPipeline call (moto S3)."""
+    import subprocess as _sp
+    # Generate a real age keypair
+    keyfile = tmp_path / "id.key"
+    r = _sp.run(["age-keygen", "-o", str(keyfile)], capture_output=True, text=True, check=True)
+    recipient = next(
+        line.removeprefix("# public key: ").strip()
+        for line in r.stderr.splitlines()
+        if line.startswith("# public key: ")
+    )
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(recipient + "\n")
+
+    # Write a minimal controller.toml
+    toml = tmp_path / "controller.toml"
+    toml.write_text(
+        "[node]\nrole = \"active\"\nhostname = \"test\"\n"
+        "[backup]\nfloor_interval_hours = 24\non_change_debounce_seconds = 30\n"
+        "endpoint = \"\"\nbucket = \"mthydra-test\"\naccess_key_id = \"x\"\n"
+        "[backup.retention]\nkeep_daily = 30\nkeep_monthly = 12\nobject_lock_days = 30\n"
+        "[gap_monitor]\npoll_interval_minutes = 30\nalarm_threshold_hours = 48\n"
+        "recipient_email = \"op@example.org\"\n"
+    )
+
+    db = tmp_path / "state.sqlite"
+    init_rc = run([
+        "init", "--db-path", str(db),
+        "--age-recipient-file", str(recipient_file),
+        "--provider-credential", "b2=secret",
+    ])
+    assert init_rc == 0
+
+    tmp_dir = tmp_path / "bak"
+    tmp_dir.mkdir()
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="mthydra-test")
+        client.put_bucket_versioning(
+            Bucket="mthydra-test", VersioningConfiguration={"Status": "Enabled"}
+        )
+        client.put_object_lock_configuration(
+            Bucket="mthydra-test",
+            ObjectLockConfiguration={
+                "ObjectLockEnabled": "Enabled",
+                "Rule": {"DefaultRetention": {"Mode": "COMPLIANCE", "Days": 365}},
+            },
+        )
+        # Patch DEFAULT_RECIPIENT_FILE and S3Destination._client
+        with patch("mthydra.controller.cli.DEFAULT_RECIPIENT_FILE", str(recipient_file)):
+            from mthydra.controller.backup.s3_dest import S3Destination
+            orig_init = S3Destination.__init__
+            def patched_init(self, *a, **kw):
+                orig_init(self, *a, **kw)
+                self._client = client
+            with patch.object(S3Destination, "__init__", patched_init):
+                exit_code = run([
+                    "backup-now",
+                    "--db-path", str(db),
+                    "--config", str(toml),
+                    "--tmp-dir", str(tmp_dir),
+                ])
+        assert exit_code == 0
+        # Verify blob appeared in S3
+        objs = client.list_objects_v2(Bucket="mthydra-test").get("Contents", [])
+        keys = [o["Key"] for o in objs]
+        assert any(k.startswith("gen-") for k in keys)
 
 
 def test_obligation_proven_updates_clock(tmp_path):
