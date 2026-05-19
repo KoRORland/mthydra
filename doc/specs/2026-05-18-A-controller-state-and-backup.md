@@ -297,7 +297,7 @@ Loaded once at startup. Changes require controller restart (acceptable — confi
 ### 6.1 Triggers
 
 - **Floor timer.** APScheduler `IntervalTrigger(hours=floor_interval_hours)` running in the controller process. Fires `do_backup(trigger='floor_timer')`.
-- **On-change.** A single application-layer chokepoint function `mark_burned(domain, reason, last_box_id, details)` performs the transactional move from `cover_domain_pool` → `burned_domains` and posts to an asyncio `Queue`. A debouncer task drains the queue, coalescing all events within `on_change_debounce_seconds` into one `do_backup(trigger='burned_domains_change')` call.
+- **On-change.** A single application-layer chokepoint function `mark_burned(domain, reason, last_box_id, details)` performs the transactional move from `cover_domain_pool` → `burned_domains` and resets a `threading.Timer`-based debouncer. The debouncer coalesces all events within `on_change_debounce_seconds` into one `do_backup(trigger='burned_domains_change')` call.
 - **Manual.** `mthydra-controller backup-now [--reason TEXT]` → `do_backup(trigger='manual')`.
 
 Only one backup runs at a time. A backup in progress when another trigger fires causes the second trigger to be queued (not dropped) and to fire immediately after the first completes; consecutive duplicate triggers collapse into one.
@@ -305,7 +305,7 @@ Only one backup runs at a time. A backup in progress when another trigger fires 
 ### 6.2 `do_backup()` procedure
 
 ```
-1. Acquire backup mutex (asyncio.Lock).
+1. Acquire backup mutex (threading.Lock).
 2. gen = SELECT COALESCE(MAX(generation), 0) + 1 FROM backup_log
 3. Insert (gen, created_at=now, trigger, sha256='', size_bytes=0, ...) into backup_log.
 4. snap_path = /var/lib/mthydra/tmp/snap-<gen>.db
@@ -466,8 +466,8 @@ Run unconditionally before the controller serves any request. Refuse to start on
 7. No `burned_domains` row is older than the oldest `audit_log` entry referencing its insertion (sanity).
 8. Exactly one `credential_authority` row has `retired_at IS NULL`.
 9. Exactly one `descriptor_signing_key` row has `retired_at IS NULL`.
-10. B2 endpoint reachable and credentials valid (HEAD on bucket).
-11. Any `backup_log` row with `pushed_at IS NOT NULL AND index_updated_at IS NULL` is reconciled per the §9 crash-recovery rule (HEAD S3, re-PUT index.json if needed). This is a recoverable state, not a failure.
+10. B2 endpoint reachable and credentials valid (HEAD on bucket). `production` mode: required. `dryrun` mode: runs against `MTHYDRA_BUCKET_OVERRIDE`; startup rejected if override is unset or matches the prod bucket. `offline` mode: skipped entirely.
+11. Any `backup_log` row with `pushed_at IS NOT NULL AND index_updated_at IS NULL` is reconciled per the §9 crash-recovery rule (HEAD S3, re-PUT index.json if needed). This is a recoverable state, not a failure. Skipped in `offline` mode.
 12. No `backup_log` row has `pushed_at IS NULL AND index_updated_at IS NOT NULL` (the truly impossible state — would mean we published an index pointing at a blob we never uploaded). Refuse to start on violation.
 
 Failures log a clear error citing the check number and exit with a distinct exit code per check. No silent degradation.
@@ -517,8 +517,8 @@ To be run on the schedule defined by `obligations.timers_hours.backup_restore_dr
 2. `mthydra-controller restore --from <latest-gen> --identity <operator-key> --into /tmp/r.sqlite --summary-only` — verify summary matches production's expected shape.
 3. `mthydra-controller restore --from <latest-gen> --identity <operator-key> --into /tmp/r.sqlite`
 4. `mthydra-controller adopt-restored-state /tmp/r.sqlite --reason dryrun`
-5. `systemctl start mthydra-controller`
-6. Observe one successful `do_backup` cycle to a *test* B2 bucket (config override).
+5. Create a systemd drop-in override: `Environment=MTHYDRA_MODE=dryrun MTHYDRA_BUCKET_OVERRIDE=<test-bucket>`, then `systemctl start mthydra-controller`. The controller will log `DRYRUN MODE` on startup and tag all backups with `dryrun:` in `backup_log.trigger`.
+6. Observe one successful `do_backup` cycle to the *test* B2 bucket (confirmed via `MTHYDRA_BUCKET_OVERRIDE`).
 7. Tear down the throwaway VM.
 8. The `adopt-restored-state ... --reason dryrun` in step 4 updated `obligation_clocks.backup_restore_dryrun` *on the throwaway VM's restored state.* This is NOT what we want — that state was discarded. Instead, the operator manually runs on the *production* controller:
    `mthydra-controller obligation-proven backup_restore_dryrun --details "dry-run completed gen-N → VM <id> at <ts>"`
@@ -576,4 +576,5 @@ The step-8 manual touch on the production controller is deliberate — the dry-r
 - **`age` external binary dependency.** If a future Ubuntu base image drops the package, the controller refuses to start (per §10 step 3). Acceptable loud failure; not a silent one.
 - **Operator-key compromise (#10 in build-plan).** Out of scope of this spec by construction — the spec defines what is encrypted *to* the key, never how it is held. If the operator key leaks, every historical backup is recoverable by the holder. The design accepts this as the operator's responsibility, not the controller's.
 - **Object-Lock retention floor (`object_lock_days = 365`).** Means even the operator cannot prune historical backups for a year, even on legitimate request. Accepted trade — append-only past is the point.
-- **Gap monitor on warm-standby (§8).** If standby and active controller share a failure mode (same operator account at AWS, same region), both can be lost together and the monitor is silent. Operator should deploy monitor on a *non-AWS* host for full independence; the spec recommends but does not enforce this — config-driven choice.
+- **Gap monitor on warm-standby (§8).** If standby and active controller share a failure mode (same operator account at AWS, same region), both can be lost together and the monitor is silent. Operator should deploy monitor on a *non-AWS* host for full independence; the spec recommends but does not enforce this — config-driven choice. Partially mitigated by the G1 resolution (separate wheel, independent deployment) but not fully closed.
+- **MVP backup-failure alerting blind window (G9).** Until spec J ships an alerting service, the controller cannot self-alarm on `do_backup` failure via an outbound channel. The operator-side gap monitor (§8) is the only out-of-band screamer; it fires after 48h of unchanging `index.json`, which is the same SLA as for a silently-dead controller. This yields a 0–48h alerting blind spot for the case "controller alive but backup pipeline broken." Accepted because this SLA is consistent with the design's RKN-response window (D5). On reaching 3 consecutive failures the controller writes an `audit_log` row tagged `self_alarm_unreachable` so the condition is locally observable if and when the operator inspects the controller.
