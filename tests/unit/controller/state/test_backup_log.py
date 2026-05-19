@@ -92,3 +92,47 @@ def test_consecutive_failures_simulates_restart(tmp_db_path):
     # New connection — simulates controller restart
     conn2 = connect(tmp_db_path)
     assert count_consecutive_failures(conn2) == 3
+
+
+# ---------------------------------------------------------------------------
+# abandon_zombie_starts
+# ---------------------------------------------------------------------------
+
+def test_abandon_zombie_tags_old_unpushed_rows(tmp_db_path):
+    from mthydra.controller.state.backup_log import abandon_zombie_starts
+    conn = _conn(tmp_db_path)
+    # Row started 2 hours ago — older than max_age_hours=1
+    record_started(conn, 1, BackupTrigger.FLOOR_TIMER, "2026-05-18T10:00:00Z")
+    n = abandon_zombie_starts(conn, now_iso="2026-05-18T12:00:00Z", max_age_hours=1)
+    assert n == 1
+    row = conn.execute("SELECT trigger FROM backup_log WHERE generation=1").fetchone()
+    assert row[0].endswith(":abandoned")
+
+
+def test_abandon_zombie_ignores_recent_rows(tmp_db_path):
+    from mthydra.controller.state.backup_log import abandon_zombie_starts
+    conn = _conn(tmp_db_path)
+    # Row started 30 minutes ago — within max_age_hours=1
+    record_started(conn, 1, BackupTrigger.FLOOR_TIMER, "2026-05-18T11:30:00Z")
+    n = abandon_zombie_starts(conn, now_iso="2026-05-18T12:00:00Z", max_age_hours=1)
+    assert n == 0
+    row = conn.execute("SELECT trigger FROM backup_log WHERE generation=1").fetchone()
+    assert ":abandoned" not in row[0]
+
+
+def test_abandon_zombie_ignores_already_pushed(tmp_db_path):
+    from mthydra.controller.state.backup_log import abandon_zombie_starts
+    conn = _conn(tmp_db_path)
+    record_started(conn, 1, BackupTrigger.FLOOR_TIMER, "2026-05-18T10:00:00Z")
+    record_pushed(conn, 1, sha256="ok", size_bytes=1, pushed_at="2026-05-18T10:00:01Z")
+    n = abandon_zombie_starts(conn, now_iso="2026-05-18T12:00:00Z", max_age_hours=1)
+    assert n == 0
+
+
+def test_abandon_zombie_idempotent(tmp_db_path):
+    from mthydra.controller.state.backup_log import abandon_zombie_starts
+    conn = _conn(tmp_db_path)
+    record_started(conn, 1, BackupTrigger.FLOOR_TIMER, "2026-05-18T10:00:00Z")
+    abandon_zombie_starts(conn, now_iso="2026-05-18T12:00:00Z", max_age_hours=1)
+    n2 = abandon_zombie_starts(conn, now_iso="2026-05-18T12:00:00Z", max_age_hours=1)
+    assert n2 == 0  # already tagged

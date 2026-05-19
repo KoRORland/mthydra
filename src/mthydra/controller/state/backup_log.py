@@ -56,6 +56,39 @@ def record_index_updated(conn: sqlite3.Connection, generation: int, at: str) -> 
     conn.commit()
 
 
+def abandon_zombie_starts(
+    conn: sqlite3.Connection, *, now_iso: str, max_age_hours: int = 1
+) -> int:
+    """Tag backup_log rows that started but never pushed and are older than max_age_hours.
+
+    Such rows are left by a controller crash between record_started and put_blob
+    (spec A §9 last row).  They are NOT deleted — the generation number is
+    preserved for forensics — but their trigger string is suffixed with
+    ':abandoned' so they are excluded from the pending-reconciliation list and
+    from the streak counter, and are clearly labelled in operator queries.
+
+    Returns the number of rows updated.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (
+        datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+        - timedelta(hours=max_age_hours)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    cur = conn.execute(
+        "UPDATE backup_log "
+        "SET trigger = trigger || ':abandoned' "
+        "WHERE pushed_at IS NULL "
+        "  AND index_updated_at IS NULL "
+        "  AND created_at < ? "
+        "  AND trigger NOT LIKE '%:abandoned'",
+        (cutoff,),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def count_consecutive_failures(conn: sqlite3.Connection, window_hours: int = 24) -> int:
     """Count consecutive backup failures at the head of backup_log.
 

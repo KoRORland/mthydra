@@ -13,6 +13,7 @@ from pathlib import Path
 
 from mthydra.controller.backup.age_crypt import AgeError, validate_recipient
 from mthydra.controller.backup.reconcile import reconcile_pending
+from mthydra.controller.state.backup_log import abandon_zombie_starts
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.invariants import InvariantViolation, check_all
 from mthydra.controller.state.schema import SCHEMA_VERSION
@@ -75,6 +76,11 @@ def run_startup_checks(
             check_all(conn, expected_schema_version=SCHEMA_VERSION)
         except InvariantViolation as e:
             return _fail("invariant", str(e))
+
+        # §9 zombie cleanup: tag pre-push rows older than 1h as abandoned (all modes)
+        from datetime import datetime, timezone
+        _now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        abandon_zombie_starts(conn, now_iso=_now_iso, max_age_hours=1)
     finally:
         conn.close()
 
