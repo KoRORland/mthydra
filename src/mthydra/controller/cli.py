@@ -169,6 +169,7 @@ def run(argv: list[str]) -> int:
                     "t4_upstream_check": 168,
                     "t5_pool_revalidation": 168,
                     "t6_reshuffle": 168,
+                    "descriptor_signing_key_rotation": 8760,
                 },
                 now=_now(),
             )

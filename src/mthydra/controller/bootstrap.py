@@ -1,4 +1,4 @@
-"""First-run bootstrap — spec A §10.1."""
+"""First-run bootstrap — spec A §10.1 + spec B Ed25519 key generation."""
 from __future__ import annotations
 
 import os
@@ -13,6 +13,7 @@ from mthydra.controller.state.descriptor import insert_signing_key
 from mthydra.controller.state.obligations import set_obligation
 from mthydra.controller.state.schema import apply_schema
 from mthydra.controller.state.tokens import set_provider_credential
+from mthydra.descriptor.keys import generate_keypair
 
 
 class BootstrapError(RuntimeError):
@@ -20,14 +21,9 @@ class BootstrapError(RuntimeError):
 
 
 def _placeholder_keypair_pem() -> tuple[str, str]:
-    """Placeholder key pair (spec B will replace with real X25519/Ed25519)."""
+    """Placeholder key pair for credential_authority (spec C will replace with real key)."""
     nonce = secrets.token_hex(16)
     return (f"PRIV-BOOTSTRAP-{nonce}", f"PUB-BOOTSTRAP-{nonce}")
-
-
-def _placeholder_keypair_bytes() -> tuple[bytes, bytes]:
-    """Placeholder signing key pair (spec B will replace with real Ed25519)."""
-    return (b"PRIV-DESC-" + secrets.token_bytes(16), b"PUB-DESC-" + secrets.token_bytes(16))
 
 
 def _add_hours(iso: str, hours: int) -> str:
@@ -77,7 +73,8 @@ def init_state(
         priv, pub = _placeholder_keypair_pem()
         insert_authority(conn, generation=1, privkey_pem=priv, pubkey_pem=pub, created_at=now)
 
-        dpriv, dpub = _placeholder_keypair_bytes()
+        # Spec B: generate a real Ed25519 keypair for the descriptor signing key.
+        dpriv, dpub = generate_keypair()
         insert_signing_key(conn, generation=1, privkey=dpriv, pubkey=dpub, created_at=now)
 
         for provider, cred in provider_credentials.items():
