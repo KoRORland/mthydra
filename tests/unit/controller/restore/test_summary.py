@@ -2,7 +2,7 @@
 from mthydra.controller.restore.summary import summarize_db
 from mthydra.controller.state.authority import insert_authority
 from mthydra.controller.state.burned import mark_burned
-from mthydra.controller.state.cover_pool import add_candidate, mark_verified, move_to_in_use
+from mthydra.controller.state.cover_pool import add_candidate, attest_verified, assign_to_box
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.descriptor import insert_signing_key
 from mthydra.controller.state.ru_boxes import insert_box, mark_live
@@ -17,15 +17,15 @@ def test_summary_reports_expected_counts(tmp_db_path):
 
     # pool: one in_use (b1/a.org), one will be burned (b2/z.org)
     add_candidate(conn, "a.org", added_at="2026-05-18T00:00:00Z")
-    mark_verified(conn, "a.org", from_vantage="v", at="2026-05-18T01:00:00Z")
+    attest_verified(conn, "a.org", from_vantage="v", at="2026-05-18T01:00:00Z")
     insert_box(conn, "b1", "h", "fsn1", None, "a.org", "img1", "2026-05-18T00:00:00Z")
-    move_to_in_use(conn, "a.org", box_id="b1")
+    assign_to_box(conn, "a.org", box_id="b1", at="2026-05-18T01:00:00Z")
     mark_live(conn, "b1", public_ip="1.2.3.4", at="2026-05-18T02:00:00Z")
 
     add_candidate(conn, "z.org", added_at="2026-05-18T00:00:00Z")
-    mark_verified(conn, "z.org", from_vantage="v", at="2026-05-18T01:00:00Z")
+    attest_verified(conn, "z.org", from_vantage="v", at="2026-05-18T01:00:00Z")
     insert_box(conn, "b2", "h", "fsn1", None, "z.org", "img1", "2026-05-18T00:00:00Z")
-    move_to_in_use(conn, "z.org", box_id="b2")
+    assign_to_box(conn, "z.org", box_id="b2", at="2026-05-18T01:00:00Z")
     mark_burned(conn, "z.org", "job2_kill", "b2", "2026-05-18T03:00:00Z", None)
     conn.close()
 

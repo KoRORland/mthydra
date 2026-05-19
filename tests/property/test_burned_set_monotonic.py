@@ -3,7 +3,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from mthydra.controller.state.burned import is_burned, mark_burned
-from mthydra.controller.state.cover_pool import add_candidate, list_by_state, mark_verified, move_to_in_use
+from mthydra.controller.state.cover_pool import add_candidate, list_by_state, attest_verified, assign_to_box
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.ru_boxes import insert_box
 from mthydra.controller.state.schema import apply_schema
@@ -29,10 +29,10 @@ def test_burned_set_only_grows(tmp_path_factory, domains):
 
     for i, d in enumerate(domains):
         add_candidate(conn, d, added_at="2026-05-18T00:00:00Z")
-        mark_verified(conn, d, from_vantage="v", at="2026-05-18T00:00:01Z")
+        attest_verified(conn, d, from_vantage="v", at="2026-05-18T00:00:01Z")
         box_id = f"box-{i}"
         insert_box(conn, box_id, "h", "fsn1", None, d, "img", "2026-05-18T00:00:02Z")
-        move_to_in_use(conn, d, box_id=box_id)
+        assign_to_box(conn, d, box_id=box_id, at="2026-05-18T00:00:02Z")
         mark_burned(conn, d, "job2_kill", box_id, f"2026-05-18T00:00:{i:02d}Z", None)
         burned_seen.add(d)
 

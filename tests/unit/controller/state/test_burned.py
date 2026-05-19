@@ -1,7 +1,7 @@
 import pytest
 
 from mthydra.controller.state.burned import is_burned, mark_burned
-from mthydra.controller.state.cover_pool import add_candidate, list_by_state, mark_verified, move_to_in_use
+from mthydra.controller.state.cover_pool import add_candidate, list_by_state, attest_verified, assign_to_box
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema
 
@@ -14,8 +14,8 @@ def _conn(tmp_db_path):
 
 def _seed(conn, domain):
     add_candidate(conn, domain, added_at="2026-05-18T00:00:00Z")
-    mark_verified(conn, domain, from_vantage="v1", at="2026-05-18T01:00:00Z")
-    move_to_in_use(conn, domain, box_id="box-1")
+    attest_verified(conn, domain, from_vantage="v1", at="2026-05-18T01:00:00Z")
+    assign_to_box(conn, domain, box_id="box-1", at="2026-05-18T01:00:00Z")
 
 
 def test_mark_burned_moves_domain_atomically(tmp_db_path):

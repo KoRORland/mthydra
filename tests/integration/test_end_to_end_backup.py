@@ -13,7 +13,7 @@ from mthydra.controller.restore.decrypt import decrypt_blob
 from mthydra.controller.restore.summary import summarize_db
 from mthydra.controller.state.backup_log import BackupTrigger
 from mthydra.controller.state.burned import mark_burned
-from mthydra.controller.state.cover_pool import add_candidate, mark_verified, move_to_in_use
+from mthydra.controller.state.cover_pool import add_candidate, attest_verified, assign_to_box
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.ru_boxes import insert_box
 
@@ -52,13 +52,13 @@ def test_backup_then_decrypt_then_summarize(tmp_path, keypair):
     # Produce some non-trivial state
     conn = connect(db)
     add_candidate(conn, "alpha.example", added_at="2026-05-18T00:00:00Z")
-    mark_verified(conn, "alpha.example", from_vantage="v", at="2026-05-18T00:00:01Z")
+    attest_verified(conn, "alpha.example", from_vantage="v", at="2026-05-18T00:00:01Z")
     insert_box(conn, "b1", "h", "fsn1", None, "alpha.example", "img1", "2026-05-18T00:00:02Z")
-    move_to_in_use(conn, "alpha.example", box_id="b1")
+    assign_to_box(conn, "alpha.example", box_id="b1", at="2026-05-18T00:00:02Z")
     add_candidate(conn, "beta.example", added_at="2026-05-18T00:00:03Z")
-    mark_verified(conn, "beta.example", from_vantage="v", at="2026-05-18T00:00:04Z")
+    attest_verified(conn, "beta.example", from_vantage="v", at="2026-05-18T00:00:04Z")
     insert_box(conn, "b2", "h", "fsn1", None, "beta.example", "img1", "2026-05-18T00:00:05Z")
-    move_to_in_use(conn, "beta.example", box_id="b2")
+    assign_to_box(conn, "beta.example", box_id="b2", at="2026-05-18T00:00:05Z")
     mark_burned(conn, "beta.example", "job2_kill", "b2", "2026-05-18T00:00:06Z", None)
     conn.close()
 

@@ -266,28 +266,3 @@ def _iso_minus_days(iso: str, days: int) -> str:
     return (t - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# ---------------------------------------------------------------------------
-# Backward-compatibility aliases (spec A names; callers outside test_cover_pool)
-# ---------------------------------------------------------------------------
-
-def mark_verified(
-    conn: sqlite3.Connection,
-    domain: str,
-    *,
-    from_vantage: str,
-    at: str,
-) -> None:
-    """Deprecated alias for attest_verified (no evidence/actor args)."""
-    attest_verified(conn, domain, from_vantage=from_vantage, at=at)
-
-
-def move_to_in_use(
-    conn: sqlite3.Connection,
-    domain: str,
-    *,
-    box_id: str,
-) -> None:
-    """Deprecated alias for assign_to_box (no at/actor args)."""
-    import datetime as _dt
-    at = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    assign_to_box(conn, domain, box_id=box_id, at=at)
