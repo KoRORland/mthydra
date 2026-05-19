@@ -178,3 +178,45 @@ def test_pool_health_not_frozen_when_above_threshold(conn):
     h = pool_health(conn, freeze_threshold=2)
     assert h.candidate_verified == 2
     assert h.rotation_frozen is False
+
+
+def test_rotate_and_burn_happy_path(conn):
+    _seed_live_box(conn, "box-1")
+    add_candidate(conn, "rotate.org", added_at=NOW)
+    attest_verified(conn, "rotate.org", from_vantage="ru-vps-01", at=NOW)
+    assign_to_box(conn, "rotate.org", box_id="box-1", at=NOW)
+
+    rotate_and_burn(
+        conn, "rotate.org",
+        reason="rotation_ttl",
+        last_box_id="box-1",
+        at="2026-06-01T00:00:00Z",
+        details="ttl elapsed",
+    )
+
+    assert list_by_state(conn, "in_use") == []
+    assert is_burned(conn, "rotate.org")
+    actions = [e.action for e in recent_events(conn, limit=10)]
+    assert "cover_rotated" in actions
+    assert "cover_burned" in actions
+
+
+def test_rotate_and_burn_refuses_non_in_use(conn):
+    add_candidate(conn, "newborn.org", added_at=NOW)
+    with pytest.raises(ValueError, match="is not in_use"):
+        rotate_and_burn(
+            conn, "newborn.org",
+            reason="manual_rotate",
+            last_box_id="none",
+            at=NOW,
+        )
+
+
+def test_rotate_and_burn_refuses_missing(conn):
+    with pytest.raises(ValueError, match="not in cover_domain_pool"):
+        rotate_and_burn(
+            conn, "ghost.org",
+            reason="manual_rotate",
+            last_box_id="none",
+            at=NOW,
+        )

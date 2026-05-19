@@ -1,7 +1,10 @@
 """Burned-domain repository — append-only, monotonic, never deleted from."""
 from __future__ import annotations
 
+import json
 import sqlite3
+
+from mthydra.controller.state.audit import log_event
 
 
 def is_burned(conn: sqlite3.Connection, domain: str) -> bool:
@@ -36,3 +39,11 @@ def mark_burned(
     except Exception:
         conn.execute("ROLLBACK")
         raise
+    log_event(
+        conn,
+        ts=at,
+        actor="controller",
+        action="cover_burned",
+        target=domain,
+        details_json=json.dumps({"reason": reason, "last_box_id": last_box_id}),
+    )
