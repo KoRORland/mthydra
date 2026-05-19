@@ -18,11 +18,11 @@ def test_apply_schema_is_idempotent(tmp_db_path):
     assert count == 1
 
 
-def test_fresh_schema_is_v2(tmp_db_path):
+def test_fresh_schema_is_v3(tmp_db_path):
     conn = sqlite3.connect(tmp_db_path)
     apply_schema(conn)
     version = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
-    assert version == 2
+    assert version == 3
 
 
 def test_fresh_schema_has_eu_exit_set(tmp_db_path):
@@ -71,3 +71,74 @@ def test_migration_from_v1_preserves_data(tmp_db_path):
         "SELECT name FROM sqlite_master WHERE type='table'"
     ).fetchall()}
     assert "eu_exit_set" in tables
+
+
+def test_schema_version_is_3(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+    assert SCHEMA_VERSION == 3
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 3
+
+
+def test_cover_pool_has_entered_in_use_at(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(cover_domain_pool)").fetchall()]
+    assert "entered_in_use_at" in cols
+
+
+def test_triggers_present(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    triggers = {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        ).fetchall()
+    }
+    assert "cover_pool_reject_burned" in triggers
+    assert "burned_domains_no_delete" in triggers
+
+
+def test_v2_to_v3_migration_adds_column_and_triggers(tmp_db_path):
+    import sqlite3
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v2_to_v3
+    # Manually construct a v2 DB (no entered_in_use_at, no triggers)
+    conn = connect(tmp_db_path)
+    conn.executescript(
+        "CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL, CHECK (rowid=1));"
+        "INSERT INTO schema_version (rowid, version, applied_at) VALUES (1, 2, '2026-05-19T00:00:00Z');"
+        "CREATE TABLE cover_domain_pool ("
+        "  domain TEXT PRIMARY KEY, state TEXT NOT NULL, last_verified_at TEXT,"
+        "  verified_from_vantage TEXT, assigned_box_id TEXT, added_at TEXT NOT NULL, notes TEXT);"
+        "CREATE TABLE burned_domains ("
+        "  domain TEXT PRIMARY KEY, burned_at TEXT NOT NULL, reason TEXT NOT NULL,"
+        "  last_box_id TEXT, details TEXT);"
+    )
+    conn.commit()
+    migrate_v2_to_v3(conn)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(cover_domain_pool)").fetchall()]
+    assert "entered_in_use_at" in cols
+    v = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    assert v == 3
+    # Trigger refuses INSERT of burned domain
+    conn.execute(
+        "INSERT INTO burned_domains (domain, burned_at, reason) VALUES ('x.org', '2026-05-19T00:00:00Z', 'manual')"
+    )
+    conn.commit()
+    try:
+        conn.execute(
+            "INSERT INTO cover_domain_pool (domain, state, added_at) "
+            "VALUES ('x.org', 'candidate_unverified', '2026-05-19T01:00:00Z')"
+        )
+    except sqlite3.IntegrityError as e:
+        assert "burned_domains" in str(e)
+    else:
+        raise AssertionError("expected IntegrityError")

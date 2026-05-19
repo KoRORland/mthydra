@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _STATEMENTS: list[str] = [
     """
@@ -22,7 +22,8 @@ _STATEMENTS: list[str] = [
       verified_from_vantage TEXT,
       assigned_box_id       TEXT,
       added_at              TEXT NOT NULL,
-      notes                 TEXT
+      notes                 TEXT,
+      entered_in_use_at     TEXT
     )
     """,
     """
@@ -172,6 +173,41 @@ _STATEMENTS: list[str] = [
       retired_at   TEXT
     )
     """,
+    # --- spec C additions: structural enforcement of T5 burned-set rule ---
+    """
+    CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
+    BEFORE INSERT ON cover_domain_pool
+    WHEN EXISTS (SELECT 1 FROM burned_domains WHERE domain = NEW.domain)
+    BEGIN
+      SELECT RAISE(ABORT, 'cover-pool: domain is in burned_domains; never reuse');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS burned_domains_no_delete
+    BEFORE DELETE ON burned_domains
+    BEGIN
+      SELECT RAISE(ABORT, 'cover-pool: burned_domains is append-only');
+    END
+    """,
+]
+
+# Spec C migration triggers (applied by migrate_v2_to_v3)
+_V3_MIGRATION_TRIGGERS: list[str] = [
+    """
+    CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
+    BEFORE INSERT ON cover_domain_pool
+    WHEN EXISTS (SELECT 1 FROM burned_domains WHERE domain = NEW.domain)
+    BEGIN
+      SELECT RAISE(ABORT, 'cover-pool: domain is in burned_domains; never reuse');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS burned_domains_no_delete
+    BEFORE DELETE ON burned_domains
+    BEGIN
+      SELECT RAISE(ABORT, 'cover-pool: burned_domains is append-only');
+    END
+    """,
 ]
 
 # Spec B migration statements (applied by migrate_v1_to_v2)
@@ -210,6 +246,20 @@ def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Idempotent v2 → v3 migration: add entered_in_use_at + spec-C triggers."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(cover_domain_pool)").fetchall()]
+    if "entered_in_use_at" not in cols:
+        conn.execute("ALTER TABLE cover_domain_pool ADD COLUMN entered_in_use_at TEXT")
+    for stmt in _V3_MIGRATION_TRIGGERS:
+        conn.execute(stmt)
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (3, _now()),
+    )
+    conn.commit()
+
+
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing; insert or migrate schema_version row."""
     for stmt in _STATEMENTS:
@@ -230,4 +280,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
         current = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
         if current < 2:
             migrate_v1_to_v2(conn)
+        if current < 3:
+            migrate_v2_to_v3(conn)
     conn.commit()
