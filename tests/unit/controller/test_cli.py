@@ -14,6 +14,38 @@ from mthydra.controller.state.obligations import list_obligations
 
 FAKE_RECIPIENT = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
 
+_MIN_TOML = """\
+[node]
+role = "active"
+hostname = "h"
+[backup]
+floor_interval_hours = 24
+on_change_debounce_seconds = 30
+endpoint = "https://example"
+bucket = "b"
+access_key_id = "k"
+[backup.retention]
+keep_daily = 30
+keep_monthly = 12
+object_lock_days = 365
+[gap_monitor]
+poll_interval_minutes = 30
+alarm_threshold_hours = 48
+recipient_email = "op@example.org"
+[descriptor]
+rotation_interval_hours = 1
+validity_window_hours = 24
+[obligations]
+[obligations.timers_hours]
+[cover_pool]
+rotation_ttl_days = 14
+reverify_after_days = 30
+freeze_threshold = 2
+reverify_sweep_interval = "1h"
+rotation_sweep_interval = "1h"
+replenishment_interval_days = 90
+"""
+
 
 def test_parser_knows_all_subcommands():
     p = build_parser()
@@ -433,3 +465,69 @@ def test_init_seeds_cover_pool_obligations_via_cli(tmp_path, age_recipient):
     ids = {o.obligation_id for o in list_obligations(conn)}
     assert "cover_pool_reverify_pass_proven" in ids
     assert "cover_pool_replenishment_proven" in ids
+
+
+# ===== Task 14: cover-add =====
+
+def test_cover_add_creates_unverified_row(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    rc = run(["cover-add", "fresh.org", "--db-path", str(db),
+              "--notes", "fall-2026 batch"])
+    assert rc == 0
+    from mthydra.controller.state.cover_pool import list_by_state
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    rows = list_by_state(conn, "candidate_unverified")
+    assert [r.domain for r in rows] == ["fresh.org"]
+    assert rows[0].notes == "fall-2026 batch"
+
+
+def test_cover_add_proves_replenishment_obligation(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import list_obligations, set_obligation
+    conn = connect(db)
+    set_obligation(conn, "cover_pool_replenishment_proven",
+                   last_proven_at="2025-01-01T00:00:00Z",
+                   proven_by="bootstrap",
+                   next_due_at="2025-04-01T00:00:00Z")
+    conn.close()
+    run(["cover-add", "fresh.org", "--db-path", str(db)])
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    assert obs["cover_pool_replenishment_proven"].last_proven_at > "2025-01-01T00:00:00Z"
+    conn.close()
+
+
+def test_cover_add_refuses_burned(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO burned_domains (domain, burned_at, reason) "
+        "VALUES ('burned.org', '2026-05-19T00:00:00Z', 'manual')"
+    )
+    conn.commit()
+    conn.close()
+    rc = run(["cover-add", "burned.org", "--db-path", str(db)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "burned_domains" in err

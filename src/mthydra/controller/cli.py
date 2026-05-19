@@ -185,6 +185,13 @@ def build_parser() -> argparse.ArgumentParser:
     srv_p.add_argument("--config", default="/etc/mthydra/controller.toml")
     srv_p.add_argument("--db-path", default=DEFAULT_DB)
 
+    # ----- spec C subcommands -----
+
+    ca = sub.add_parser("cover-add", help="add a candidate cover domain")
+    ca.add_argument("domain")
+    ca.add_argument("--db-path", default=DEFAULT_DB)
+    ca.add_argument("--notes", default=None)
+
     return p
 
 
@@ -360,6 +367,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "serve":
         return _cmd_serve(args)
+
+    if args.cmd == "cover-add":
+        return _cmd_cover_add(args)
 
     return 1
 
@@ -786,3 +796,40 @@ def _install_signal_handler():
     signal.signal(signal.SIGTERM, _handler)
     signal.signal(signal.SIGINT, _handler)
     return stop_event
+
+
+# ----- spec C handlers -----
+
+
+def _add_hours_iso(iso: str, hours: int) -> str:
+    from datetime import datetime, timedelta
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return (t + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _cmd_cover_add(args) -> int:
+    import sqlite3
+
+    from mthydra.controller.state.cover_pool import add_candidate
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import prove
+
+    conn = connect(args.db_path)
+    try:
+        now = _now()
+        try:
+            add_candidate(conn, args.domain, added_at=now, notes=args.notes)
+        except sqlite3.IntegrityError as e:
+            print(f"cover-add: {e}", file=sys.stderr)
+            return 2
+        next_due = _add_hours_iso(now, 90 * 24)  # default replenishment_interval_days
+        try:
+            prove(conn, "cover_pool_replenishment_proven",
+                  proven_by="operator", at=now,
+                  next_due_at=next_due, details=args.domain)
+        except KeyError:
+            pass  # obligation may not be seeded in older DBs; non-fatal
+        print(f"cover-add: {args.domain} added (candidate_unverified)")
+        return 0
+    finally:
+        conn.close()
