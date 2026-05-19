@@ -600,3 +600,42 @@ def test_cover_attest_verified_rejects_missing_domain(tmp_path, age_recipient, c
         "--db-path", str(db),
     ])
     assert rc == 2
+
+
+# ===== Task 16: cover-list =====
+
+def test_cover_list_default_shows_all_states(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    run(["cover-add", "a.org", "--db-path", str(db)])
+    run(["cover-add", "b.org", "--db-path", str(db)])
+    capsys.readouterr()
+    rc = run(["cover-list", "--db-path", str(db)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "a.org" in out
+    assert "b.org" in out
+
+
+def test_cover_list_json_output_schema(tmp_path, age_recipient, capsys):
+    import json
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    run(["cover-add", "a.org", "--db-path", str(db)])
+    capsys.readouterr()
+    rc = run(["cover-list", "--db-path", str(db), "--json"])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert isinstance(data, list)
+    assert any(row["domain"] == "a.org" for row in data)
+    assert all(set(row.keys()) >= {"domain", "state", "added_at"} for row in data)

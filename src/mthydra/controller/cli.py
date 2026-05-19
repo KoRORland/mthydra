@@ -199,6 +199,13 @@ def build_parser() -> argparse.ArgumentParser:
     cav.add_argument("--evidence", default=None)
     cav.add_argument("--db-path", default=DEFAULT_DB)
 
+    cl = sub.add_parser("cover-list", help="list cover_domain_pool rows")
+    cl.add_argument("--db-path", default=DEFAULT_DB)
+    cl.add_argument("--state",
+                     choices=["candidate_unverified", "candidate_verified", "in_use"],
+                     default=None)
+    cl.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -380,6 +387,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "cover-attest-verified":
         return _cmd_cover_attest_verified(args)
+
+    if args.cmd == "cover-list":
+        return _cmd_cover_list(args)
 
     return 1
 
@@ -869,6 +879,33 @@ def _cmd_cover_attest_verified(args) -> int:
         except KeyError:
             pass
         print(f"cover-attest-verified: {args.domain} -> candidate_verified (vantage={args.vantage})")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_cover_list(args) -> int:
+    import json
+    from dataclasses import asdict
+
+    from mthydra.controller.state.cover_pool import list_by_state
+    from mthydra.controller.state.db import connect
+
+    conn = connect(args.db_path)
+    try:
+        states = (
+            [args.state] if args.state else
+            ["candidate_unverified", "candidate_verified", "in_use"]
+        )
+        rows: list = []
+        for s in states:
+            rows.extend(list_by_state(conn, s))
+        if args.json:
+            print(json.dumps([asdict(r) for r in rows], indent=2))
+        else:
+            print(f"{'state':24} {'domain':40} added_at")
+            for r in rows:
+                print(f"{r.state:24} {r.domain:40} {r.added_at}")
         return 0
     finally:
         conn.close()
