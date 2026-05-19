@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _STATEMENTS: list[str] = [
     """
@@ -162,6 +162,30 @@ _STATEMENTS: list[str] = [
       details_json TEXT
     )
     """,
+    # --- spec B additions ---
+    """
+    CREATE TABLE IF NOT EXISTS eu_exit_set (
+      fingerprint  TEXT PRIMARY KEY,
+      endpoint     TEXT NOT NULL,
+      weight       INTEGER NOT NULL DEFAULT 1,
+      added_at     TEXT NOT NULL,
+      retired_at   TEXT
+    )
+    """,
+]
+
+# Spec B migration statements (applied by migrate_v1_to_v2)
+_V2_MIGRATION: list[str] = [
+    """
+    CREATE TABLE IF NOT EXISTS eu_exit_set (
+      fingerprint  TEXT PRIMARY KEY,
+      endpoint     TEXT NOT NULL,
+      weight       INTEGER NOT NULL DEFAULT 1,
+      added_at     TEXT NOT NULL,
+      retired_at   TEXT
+    )
+    """,
+    # ALTER TABLE is handled separately (may fail if column already exists)
 ]
 
 
@@ -169,14 +193,41 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """Idempotent v1 → v2 migration: add eu_exit_set and descriptor_history.signature."""
+    for stmt in _V2_MIGRATION:
+        conn.execute(stmt)
+    # ALTER TABLE fails if column already exists — catch and ignore
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(descriptor_history)").fetchall()]
+    if "signature" not in cols:
+        conn.execute(
+            "ALTER TABLE descriptor_history ADD COLUMN signature BLOB NOT NULL DEFAULT X''"
+        )
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (2, _now()),
+    )
+    conn.commit()
+
+
 def apply_schema(conn: sqlite3.Connection) -> None:
-    """Create tables if missing; insert the schema_version row exactly once."""
+    """Create tables if missing; insert or migrate schema_version row."""
     for stmt in _STATEMENTS:
         conn.execute(stmt)
+    # Ensure descriptor_history.signature column exists (spec B)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(descriptor_history)").fetchall()]
+    if "signature" not in cols:
+        conn.execute(
+            "ALTER TABLE descriptor_history ADD COLUMN signature BLOB NOT NULL DEFAULT X''"
+        )
     existing = conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
     if existing == 0:
         conn.execute(
             "INSERT INTO schema_version (rowid, version, applied_at) VALUES (1, ?, ?)",
             (SCHEMA_VERSION, _now()),
         )
+    else:
+        current = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
+        if current < 2:
+            migrate_v1_to_v2(conn)
     conn.commit()
