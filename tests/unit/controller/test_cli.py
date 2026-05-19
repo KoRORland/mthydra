@@ -688,3 +688,46 @@ def test_cover_rotate_refuses_non_in_use(tmp_path, age_recipient, capsys):
     assert rc == 2
     err = capsys.readouterr().err
     assert "is not in_use" in err
+
+
+# ===== Task 18: cover-due =====
+
+def test_cover_due_lists_overdue_and_stale(tmp_path, age_recipient, capsys):
+    import json
+
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+
+    from mthydra.controller.state.cover_pool import (
+        add_candidate, assign_to_box, attest_verified,
+    )
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import insert_box, mark_live
+    conn = connect(db)
+    old = "2026-04-01T00:00:00Z"
+    insert_box(conn, "box-1", "aws", "eu-west-1", "10.0.0.1", "sni.invalid", "img-v1", old)
+    mark_live(conn, "box-1", public_ip="10.0.0.1", at=old)
+    add_candidate(conn, "old.org", added_at=old)
+    attest_verified(conn, "old.org", from_vantage="ru-vps-01", at=old)
+    assign_to_box(conn, "old.org", box_id="box-1", at=old)
+    conn.close()
+
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+
+    capsys.readouterr()
+    rc = run([
+        "cover-due", "--db-path", str(db),
+        "--config", str(cfg_path),
+        "--json",
+    ])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "due_for_rotation" in out
+    assert any(r["domain"] == "old.org" for r in out["due_for_rotation"])
+    assert "pool_health" in out

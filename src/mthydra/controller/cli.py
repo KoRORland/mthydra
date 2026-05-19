@@ -212,6 +212,12 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--reason", default="manual_rotate")
     cr.add_argument("--db-path", default=DEFAULT_DB)
 
+    cd = sub.add_parser("cover-due",
+                         help="show due-for-rotation + stale-verified + pool health")
+    cd.add_argument("--db-path", default=DEFAULT_DB)
+    cd.add_argument("--config", default="/etc/mthydra/controller.toml")
+    cd.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -399,6 +405,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "cover-rotate":
         return _cmd_cover_rotate(args)
+
+    if args.cmd == "cover-due":
+        return _cmd_cover_due(args)
 
     return 1
 
@@ -944,6 +953,63 @@ def _cmd_cover_rotate(args) -> int:
             print(f"cover-rotate: {e}", file=sys.stderr)
             return 2
         print(f"cover-rotate: {args.domain} -> burned (reason={args.reason})")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_cover_due(args) -> int:
+    import json
+    from dataclasses import asdict
+
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.cover_pool import (
+        _iso_minus_days, list_due_for_rotation, pool_health,
+    )
+    from mthydra.controller.state.db import connect
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"cover-due: config error: {e}", file=sys.stderr)
+        return 2
+
+    conn = connect(args.db_path)
+    try:
+        due = list_due_for_rotation(
+            conn, now=_now(),
+            rotation_ttl_days=cfg.cover_pool.rotation_ttl_days,
+        )
+        cutoff = _iso_minus_days(_now(), cfg.cover_pool.reverify_after_days)
+        stale_rows = conn.execute(
+            "SELECT domain, last_verified_at FROM cover_domain_pool "
+            "WHERE state='candidate_verified' AND last_verified_at < ? "
+            "ORDER BY last_verified_at",
+            (cutoff,),
+        ).fetchall()
+        stale = [{"domain": d, "last_verified_at": v} for d, v in stale_rows]
+        health = pool_health(conn, freeze_threshold=cfg.cover_pool.freeze_threshold)
+
+        payload = {
+            "due_for_rotation": [asdict(r) for r in due],
+            "stale_verified": stale,
+            "pool_health": asdict(health),
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"pool: unverified={health.candidate_unverified} "
+                  f"verified={health.candidate_verified} "
+                  f"in_use={health.in_use} burned={health.burned}")
+            print(f"rotation_frozen: {health.rotation_frozen}")
+            if due:
+                print("due for rotation:")
+                for r in due:
+                    print(f"  {r.domain}  entered_in_use_at={r.entered_in_use_at}")
+            if stale:
+                print("stale candidate_verified (will downgrade on next sweep):")
+                for r in stale:
+                    print(f"  {r['domain']}  last_verified_at={r['last_verified_at']}")
         return 0
     finally:
         conn.close()
