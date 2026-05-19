@@ -69,11 +69,18 @@ def run_startup_checks(
     except AgeError as e:
         return _fail("age_recipient", str(e))
 
-    # Checks 4–9, 12: invariants (pure SQLite, all modes)
+    # Checks 4–9, 12–16: invariants (pure SQLite, all modes)
+    from datetime import datetime, timezone as _tz
+    _now_iso = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn = connect(db_path)
     try:
         try:
-            check_all(conn, expected_schema_version=SCHEMA_VERSION)
+            check_all(
+                conn,
+                expected_schema_version=SCHEMA_VERSION,
+                mode=mode,
+                now_iso=_now_iso,
+            )
         except InvariantViolation as e:
             return _fail("invariant", str(e))
 

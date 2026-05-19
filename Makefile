@@ -1,4 +1,4 @@
-.PHONY: test test-monitor cov lint smoke help
+.PHONY: test test-monitor cov lint smoke smoke-descriptor help
 
 help:
 	@echo "Targets:"
@@ -20,6 +20,17 @@ cov:
 lint:
 	ruff check src/ tests/
 	ruff check mthydra-backup-monitor/src/ mthydra-backup-monitor/tests/
+
+smoke-descriptor:
+	@echo "--- descriptor smoke test (spec B §13.4) ---"
+	@echo "1. mthydra-controller init --db-path /tmp/smoke.sqlite \\"
+	@echo "     --age-recipient-file /etc/mthydra/age-recipient.txt"
+	@echo "2. mthydra-controller eu-add <fingerprint> <endpoint> --db-path /tmp/smoke.sqlite"
+	@echo "3. mthydra-controller descriptor-sign-now --db-path /tmp/smoke.sqlite"
+	@echo "4. mthydra-controller descriptor-show --db-path /tmp/smoke.sqlite"
+	@echo "5. Extract payload + sig from DB, then:"
+	@echo "   mthydra-controller descriptor-verify payload.json sig.bin --db-path /tmp/smoke.sqlite"
+	@echo "6. Remove /tmp/smoke.sqlite"
 
 # Smoke test: manual procedure only — cannot be automated without a real B2 bucket
 # and the operator's age private key.  Run before every release.
