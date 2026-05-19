@@ -36,6 +36,7 @@ def test_insert_descriptor_references_active_key(tmp_db_path):
         signing_key_generation=1,
     )
     d = latest_descriptor(conn)
+    assert d is not None
     assert d.generation == 1
     assert d.signing_key_generation == 1
 

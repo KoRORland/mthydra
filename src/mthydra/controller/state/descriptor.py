@@ -58,21 +58,44 @@ def insert_descriptor(
     signed_at: str,
     valid_until: str,
     signing_key_generation: int,
+    signature: bytes = b"",
 ) -> None:
     conn.execute(
         "INSERT INTO descriptor_history "
-        "(generation, payload, signed_at, valid_until, signing_key_generation) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (generation, payload, signed_at, valid_until, signing_key_generation),
+        "(generation, payload, signed_at, valid_until, signing_key_generation, signature) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (generation, payload, signed_at, valid_until, signing_key_generation, signature),
     )
     conn.commit()
 
 
-def latest_descriptor(conn: sqlite3.Connection) -> Descriptor:
+def latest_descriptor(conn: sqlite3.Connection) -> Descriptor | None:
+    """Return the most recent descriptor, or None if none exist."""
     row = conn.execute(
         "SELECT generation, payload, signed_at, valid_until, signing_key_generation "
         "FROM descriptor_history ORDER BY generation DESC LIMIT 1"
     ).fetchone()
     if row is None:
-        raise LookupError("no descriptors recorded")
+        return None
     return Descriptor(*row)
+
+
+def latest_descriptor_with_signature(
+    conn: sqlite3.Connection,
+) -> tuple[int, bytes, bytes] | None:
+    """Return (generation, payload_bytes, signature) for the latest descriptor, or None."""
+    row = conn.execute(
+        "SELECT generation, payload, signature FROM descriptor_history "
+        "ORDER BY generation DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    gen, payload_text, sig = row
+    return gen, payload_text.encode("utf-8"), bytes(sig)
+
+
+def next_descriptor_generation(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT COALESCE(MAX(generation), 0) FROM descriptor_history"
+    ).fetchone()
+    return int(row[0]) + 1
