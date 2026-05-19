@@ -5170,3 +5170,151 @@ Cross-spec contracts (deliberate, not gaps):
 
 **Which approach?**
 
+---
+
+## 16. Resolutions to plan-review questions (G1, G4, G6, G9)
+
+Recorded 2026-05-19 after plan review against `doc/specs/2026-05-18-A-controller-state-and-backup.md` and `doc/design.md`. Each subsection captures the question, the decision, and the concrete plan changes that follow. Earlier task numbering is preserved; new sub-tasks are inserted with decimal suffixes so existing checkboxes stay valid.
+
+### 16.1 G1 — Gap-monitor independence (decision: split into separate wheel)
+
+**Question.** Co-packaging `backup_monitor/` with the controller in a single wheel means a shared dependency bug can take out both the controller and its dead-man's-switch, violating spec §8's "no controller-side privileges" intent and the design's "independent of the EU node and its provider" framing.
+
+**Decision.** Ship the backup monitor as its own wheel, `mthydra-backup-monitor`, with `boto3` + stdlib only. The controller wheel (`mthydra`) no longer contains `backup_monitor/`.
+
+**Rationale.** Smallest move that delivers real independence while preserving pytest-based test discipline. A pure-shell rewrite (option G1-C) was considered and rejected — loses the test-discipline mandate in build-plan §4.
+
+**Plan changes.**
+
+- **Repo layout** gains a sibling package directory:
+
+  ```
+  mthydra/                       # existing
+  ├── pyproject.toml             # controller only; drops backup_monitor entry-point
+  ├── src/mthydra/
+  │   └── (no backup_monitor/ here)
+  └── ...
+  mthydra-backup-monitor/        # NEW sibling, same git repo
+  ├── pyproject.toml             # minimal: boto3 + stdlib
+  ├── src/mthydra_backup_monitor/
+  │   ├── __init__.py
+  │   ├── __main__.py
+  │   ├── cli.py
+  │   ├── poller.py
+  │   └── emailer.py
+  └── tests/
+      └── unit/
+          ├── test_poller.py
+          └── test_emailer.py
+  ```
+
+- **Task 0 (already done)** is amended retroactively in the addendum prose only — the existing skeleton commit stands; the second wheel will be created in Task 21.0.
+
+- **Task 21 (Backup-monitor poller)** is preceded by a new **Task 21.0 — Second wheel skeleton**:
+  - Create `mthydra-backup-monitor/pyproject.toml` with `name = "mthydra-backup-monitor"`, `version = "0.0.1"`, deps `boto3>=1.34` only, dev-deps `pytest>=8` + `moto[s3]>=5` only. No APScheduler, no SQLite, no `mthydra` import.
+  - Create `mthydra-backup-monitor/src/mthydra_backup_monitor/__init__.py` and matching test dir.
+  - Console script `mthydra-backup-monitor = "mthydra_backup_monitor.__main__:main"`.
+  - The two wheels share no code. Any utility duplicated between them (e.g. ISO-8601 parsing) is duplicated by design.
+
+- **Tasks 21, 22, 23** are re-rooted from `src/mthydra/backup_monitor/` to `mthydra-backup-monitor/src/mthydra_backup_monitor/`. Import paths in the plan are updated accordingly.
+
+- **Project root `pyproject.toml`** (controller) drops the `mthydra-backup-monitor` console script entry.
+
+- **CI.** Both wheels are built and tested in CI; `pytest` runs once per wheel from its own root. (CI configuration is out of this spec's scope but the directory layout enables it.)
+
+- **Operator install story.** The controller host installs `pip install mthydra`. The monitor host installs `pip install mthydra-backup-monitor`. The two are versioned independently; spec §8's recommendation to deploy the monitor on a non-AWS host is now mechanically supported.
+
+**Residual carried forward.** Spec A §15's note about gap-monitor co-location risk is now *partially* closed (no shared code) but still open with respect to operator deployment choice (operator may still deploy both on AWS). Spec §8's recommendation stands.
+
+### 16.2 G4 — Startup self-check vs. throwaway-VM dry-run (decision: `--mode` flag)
+
+**Question.** Spec §10's "run unconditionally" startup checks include B2 reachability with valid credentials (step 10), but spec §12's dry-run procedure runs `mthydra-controller` on a throwaway VM that should not hold prod credentials. The two are in direct tension.
+
+**Decision.** Introduce a first-class operating mode on the controller binary: `--mode {production|dryrun|offline}`. Default is `production` and is unchanged from the spec. `dryrun` and `offline` relax specific self-check steps as documented below.
+
+**Rationale.** Explicit modes encode the fact that the binary serves two distinct roles. Alternatives (bucket-targeted credentials only, or softening step 10 into a warning) either push complexity into the operator runbook where mistakes are silent, or violate spec §10's "no silent degradation" principle.
+
+**Plan changes.**
+
+- **Spec amendment applied in a separate commit:** spec §10 step 10 prose changes from "B2 endpoint reachable and credentials valid" to "B2 endpoint reachable and credentials valid (production mode); skipped in `dryrun` mode against a non-prod bucket override; skipped entirely in `offline` mode." Spec §12 step 5 changes to `systemctl start mthydra-controller` with a drop-in setting `Environment=MTHYDRA_MODE=dryrun MTHYDRA_BUCKET_OVERRIDE=<test-bucket>`.
+
+- **Task 10 (TOML config — already done):** no change. Mode is *not* a config field; it is a CLI/environment-only setting so a single deployed `controller.toml` works in all three modes.
+
+- **Task 19 (Startup self-check runner)** gains a `mode` parameter:
+  - `production`: all 12 steps run exactly as spec §10 specifies.
+  - `dryrun`: steps 1–9 and 11–12 run; step 10 runs but uses `MTHYDRA_BUCKET_OVERRIDE` and rejects startup if the override is unset or matches the prod bucket from `controller.toml`. Stderr logs `DRYRUN MODE — backups will be written to <override-bucket>, not <prod-bucket>` on every startup and every `do_backup` invocation.
+  - `offline`: steps 1–9 run; steps 10 and 11 are skipped; triggers (Task 14) refuse to arm. Used for forensic inspection of a restored DB.
+
+- **Task 13 (do_backup pipeline)** gains a precondition: refuse to run in `offline` mode; tag every backup with the mode in `backup_log.trigger` (e.g. `dryrun:floor_timer`) for forensic clarity.
+
+- **Task 14 (Triggers)** refuses to arm the floor timer and the on-change debouncer in `offline` mode.
+
+- **Task 20 (Controller CLI)** parses `--mode` as a global flag and reads `MTHYDRA_MODE` from the environment as fallback. `--bucket-override` is accepted only with `--mode dryrun`. Invalid combinations exit with distinct exit codes per spec §10's "loud failure" rule.
+
+- **Task 19 tests** gain three new cases: production-rejects-without-network, dryrun-rejects-when-override-matches-prod, offline-skips-network-entirely.
+
+### 16.3 G6 — Async/sync execution model (decision: all-synchronous)
+
+**Question.** Spec §6.1's mention of "asyncio Queue" plus APScheduler invited an asyncio-everywhere design, but `do_backup`'s blocking I/O (sqlite3 transactions, `subprocess.run age`, boto3 calls) would stall an event loop unless every call is dispatched through `loop.run_in_executor`. The plan didn't pin the threading model.
+
+**Decision.** All of `state/`, `backup/`, and `restore/` are synchronous Python. APScheduler `BackgroundScheduler`. The on-change debouncer is a `threading.Timer` reset on each `mark_burned` event. The backup mutex is `threading.Lock`. No asyncio anywhere in spec A.
+
+**Rationale.** The spec doesn't actually require asyncio — "asyncio Queue" was an implementation hint, not a constraint. The workload is one timer + one debounced event source + one mutex; that is squarely synchronous territory. Avoiding asyncio removes a whole class of failure modes (event-loop stalls, executor thread-pool starvation, lock-type confusion) and removes `pytest-asyncio` as a dependency for the affected modules.
+
+If spec J later mandates asyncio in the alerting pipeline, J introduces its own loop; spec A's modules remain callable from either world via plain function calls.
+
+**Plan changes.**
+
+- **Tech Stack (plan header):** `pytest-asyncio>=0.23` is removed from the dev dependency list. `asyncio_mode = "auto"` is removed from `pyproject.toml`.
+
+- **Spec amendment applied in a separate commit:** spec §6.1's "posts to an asyncio Queue" → "posts to a debounce timer (`threading.Timer`-based) that coalesces all events within `on_change_debounce_seconds` into one `do_backup` call." Spec §6.2's `asyncio.Lock` → `threading.Lock`.
+
+- **Task 11 (age wrapper — already done):** no change. Already synchronous.
+
+- **Task 12 (S3 destination — uncommitted, in progress):** no change. Already synchronous.
+
+- **Task 13 (do_backup pipeline):** function signature is `def do_backup(trigger: str) -> None`. Mutex is `threading.Lock` held for the duration of the call. The function runs on whichever thread invokes it — APScheduler's executor thread for floor-timer ticks, the debouncer's thread for on-change events, the CLI's main thread for `backup-now`.
+
+- **Task 14 (Triggers):**
+  - APScheduler is `BackgroundScheduler(daemon=True)` with a single-worker `ThreadPoolExecutor`. Floor timer is `IntervalTrigger(hours=floor_interval_hours)`.
+  - On-change debouncer: a module-level `threading.Timer` that `mark_burned` resets on each call (cancel + new Timer). When the timer fires it submits `do_backup('burned_domains_change')` to the same scheduler so the mutex naturally serializes against the floor timer.
+  - All Queue/asyncio prose in the plan's Task 14 description is replaced with the Timer description above.
+
+- **Task 2 (DB connection — already done):** stays single-thread per process by default. The new model has at most one thread inside `do_backup` at a time (mutex-protected), so the existing `db.py` works unchanged.
+
+- **Task 13/14 tests:** no `@pytest.mark.asyncio`; tests use `threading.Event` and short `time.sleep` intervals to exercise the debouncer. Where `time.sleep` would be flaky, inject a fake timer factory via a `_timer_factory` module-level seam.
+
+### 16.4 G9 — Scream path until spec J ships (decision: accept 48h SLA)
+
+**Question.** Spec §6.2 promises "spec-J's email path" as the out-of-band self-alarm for ≥3 consecutive `do_backup` failures, but spec J is unscoped. Until J ships, the controller has no way to alert on backup-pipeline failure.
+
+**Decision.** Accept the 48-hour alerting blind spot for backup-pipeline-only failures during the MVP window. The operator-side gap monitor (spec §8) is the sole out-of-band screamer; it fires after `alarm_threshold_hours = 48` of stuck `index.json`. This covers both "controller silently dead" and "controller alive but backup broken" with the same SLA, because both manifest as stuck `index.json`.
+
+No interim SMTP path is built inside spec A. No coupling to the gap monitor's emailer is introduced (would re-violate G1's independence intent).
+
+**Rationale.** Spec D5 already accepts a ≥24h RKN-response window. A 48h backup-pipeline-failure window is consistent with that operational rhythm. Building a throwaway SMTP path now and ripping it out when spec J lands is busywork. The gap monitor *already is* the screamer.
+
+**Plan changes.**
+
+- **Task 13 (do_backup pipeline):** the prose "N=3 consecutive failures → out-of-band self-alarm" stays as written but the *only* implemented effect is:
+  - Increment a `consecutive_failure_count` in memory.
+  - On reaching 3, write an `audit_log` row with `actor='controller'`, `action='self_alarm_unreachable'`, `details_json` containing the failure-trace summary.
+  - Continue retry-on-next-trigger. No outbound network call.
+  The audit-log row exists so that if the operator inspects the controller during the blind window, the failure is immediately visible. Spec J, when it ships, will attach an outbound transport to this same condition.
+
+- **Spec amendment applied in a separate commit:** append to spec A §15 honest-residuals:
+  > **MVP backup-failure alerting blind window (G9).** Until spec J ships an alerting service, the controller cannot self-alarm on `do_backup` failure via an outbound channel. The operator-side gap monitor (§8) is the only out-of-band screamer; it fires after 48h of unchanging `index.json`, which is the same SLA as for a silently-dead controller. This yields a 0–48h alerting blind spot for the case "controller alive but backup pipeline broken." Accepted because this SLA is consistent with the design's RKN-response window (D5). On reaching 3 consecutive failures the controller writes an `audit_log` row tagged `self_alarm_unreachable` so the condition is locally observable if and when the operator inspects the controller.
+
+- **No new task.** No code is added beyond the audit-log row, which is one line in Task 13.
+
+### 16.5 Summary of net changes to the plan
+
+| Plan element | Change |
+|---|---|
+| Repo layout | New sibling package `mthydra-backup-monitor/` with its own `pyproject.toml`. Controller's `pyproject.toml` drops the monitor console-script and `pytest-asyncio`. |
+| Tasks | New **Task 21.0** (second-wheel skeleton). Tasks 21–23 re-rooted into the new package. Task 13 + Task 14 rewritten from async to synchronous. Task 19 + Task 20 gain `--mode {production|dryrun|offline}` plumbing. |
+| Dependencies | `pytest-asyncio` removed from controller dev-deps. `boto3` is the *only* runtime dep in the monitor wheel. |
+| Spec amendments (applied in separate commit) | §6.1/§6.2 wording: asyncio → threading; §10 step 10: acknowledge modes; §12 step 5: reference `MTHYDRA_MODE=dryrun`; §15: add G9 blind-window residual. |
+| Test surface | Task 19 gains 3 mode-handling tests; Task 14 tests use `threading.Event` instead of asyncio primitives. |
+
+These changes preserve every previously-committed task (Tasks 0–11 stand unchanged). Task 12 (in progress, uncommitted) is unaffected — `s3_dest.py` is already synchronous.
