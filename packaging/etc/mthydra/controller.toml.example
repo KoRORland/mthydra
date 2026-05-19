@@ -38,3 +38,11 @@ t5_pool_revalidation             = 168
 t6_reshuffle                     = 168
 backup_restore_dryrun            = 720
 descriptor_signing_key_rotation  = 8760       # yearly
+
+[cover_pool]
+rotation_ttl_days       = 14
+reverify_after_days     = 30
+freeze_threshold        = 2
+reverify_sweep_interval = "1h"
+rotation_sweep_interval = "1h"
+replenishment_interval_days = 90
