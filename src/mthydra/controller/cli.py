@@ -112,6 +112,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="advance next_due_at by this many hours (default 720)",
     )
 
+    # rotate-provider-credential
+    rpc_p = sub.add_parser(
+        "rotate-provider-credential",
+        help="update a provider credential (e.g. after B2 key rotation)",
+    )
+    rpc_p.add_argument("provider", help="provider name (e.g. aws, b2)")
+    rpc_p.add_argument("--db-path", default=DEFAULT_DB)
+    cred_g = rpc_p.add_mutually_exclusive_group(required=True)
+    cred_g.add_argument("--credential", help="credential string")
+    cred_g.add_argument("--credential-file", help="path to file containing the credential")
+
     # serve — long-running daemon stub (spec F will expand this)
     srv_p = sub.add_parser(
         "serve",
@@ -238,6 +249,25 @@ def run(argv: list[str]) -> int:
         finally:
             conn.close()
         print(f"stamped {args.obligation_id}")
+        return 0
+
+    if args.cmd == "rotate-provider-credential":
+        cred = (
+            args.credential
+            if args.credential
+            else Path(args.credential_file).read_text().strip()
+        )
+        from mthydra.controller.state.audit import log_event
+        from mthydra.controller.state.tokens import set_provider_credential
+        conn = connect(args.db_path)
+        try:
+            set_provider_credential(conn, provider=args.provider, credential=cred, at=_now())
+            log_event(conn, ts=_now(), actor="operator",
+                      action="rotate_provider_credential", target=args.provider,
+                      details_json=None)
+        finally:
+            conn.close()
+        print(f"rotated credential for {args.provider}")
         return 0
 
     if args.cmd == "serve":

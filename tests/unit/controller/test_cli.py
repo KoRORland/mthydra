@@ -176,6 +176,37 @@ def test_obligation_proven_fails_for_unknown_id(tmp_path):
     assert exit_code != 0
 
 
+def test_rotate_provider_credential_updates_db(tmp_path):
+    from mthydra.controller.state.tokens import get_provider_credential
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    run(["init", "--db-path", str(db), "--age-recipient-file", str(recipient_file),
+         "--provider-credential", "b2=old_secret"])
+    exit_code = run([
+        "rotate-provider-credential", "b2",
+        "--db-path", str(db),
+        "--credential", "new_secret",
+    ])
+    assert exit_code == 0
+    conn = connect(db)
+    assert get_provider_credential(conn, "b2") == "new_secret"
+
+
+def test_rotate_provider_credential_writes_audit_row(tmp_path):
+    from mthydra.controller.state.audit import recent_events
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    run(["init", "--db-path", str(db), "--age-recipient-file", str(recipient_file),
+         "--provider-credential", "b2=old_secret"])
+    run(["rotate-provider-credential", "b2", "--db-path", str(db), "--credential", "new"])
+    conn = connect(db)
+    events = [e for e in recent_events(conn) if e.action == "rotate_provider_credential"]
+    assert len(events) == 1
+    assert events[0].target == "b2"
+
+
 def test_dryrun_mode_without_bucket_override_fails():
     exit_code = run([
         "--mode", "dryrun",
