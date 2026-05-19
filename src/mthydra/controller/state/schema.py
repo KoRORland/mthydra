@@ -6,6 +6,23 @@ from datetime import datetime, timezone
 
 SCHEMA_VERSION = 3
 
+_TRIGGER_COVER_POOL_REJECT_BURNED = """
+    CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
+    BEFORE INSERT ON cover_domain_pool
+    WHEN EXISTS (SELECT 1 FROM burned_domains WHERE domain = NEW.domain)
+    BEGIN
+      SELECT RAISE(ABORT, 'cover-pool: domain is in burned_domains; never reuse');
+    END
+    """
+
+_TRIGGER_BURNED_DOMAINS_NO_DELETE = """
+    CREATE TRIGGER IF NOT EXISTS burned_domains_no_delete
+    BEFORE DELETE ON burned_domains
+    BEGIN
+      SELECT RAISE(ABORT, 'cover-pool: burned_domains is append-only');
+    END
+    """
+
 _STATEMENTS: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -174,40 +191,14 @@ _STATEMENTS: list[str] = [
     )
     """,
     # --- spec C additions: structural enforcement of T5 burned-set rule ---
-    """
-    CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
-    BEFORE INSERT ON cover_domain_pool
-    WHEN EXISTS (SELECT 1 FROM burned_domains WHERE domain = NEW.domain)
-    BEGIN
-      SELECT RAISE(ABORT, 'cover-pool: domain is in burned_domains; never reuse');
-    END
-    """,
-    """
-    CREATE TRIGGER IF NOT EXISTS burned_domains_no_delete
-    BEFORE DELETE ON burned_domains
-    BEGIN
-      SELECT RAISE(ABORT, 'cover-pool: burned_domains is append-only');
-    END
-    """,
+    _TRIGGER_COVER_POOL_REJECT_BURNED,
+    _TRIGGER_BURNED_DOMAINS_NO_DELETE,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
 _V3_MIGRATION_TRIGGERS: list[str] = [
-    """
-    CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
-    BEFORE INSERT ON cover_domain_pool
-    WHEN EXISTS (SELECT 1 FROM burned_domains WHERE domain = NEW.domain)
-    BEGIN
-      SELECT RAISE(ABORT, 'cover-pool: domain is in burned_domains; never reuse');
-    END
-    """,
-    """
-    CREATE TRIGGER IF NOT EXISTS burned_domains_no_delete
-    BEFORE DELETE ON burned_domains
-    BEGIN
-      SELECT RAISE(ABORT, 'cover-pool: burned_domains is append-only');
-    END
-    """,
+    _TRIGGER_COVER_POOL_REJECT_BURNED,
+    _TRIGGER_BURNED_DOMAINS_NO_DELETE,
 ]
 
 # Spec B migration statements (applied by migrate_v1_to_v2)
