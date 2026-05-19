@@ -140,3 +140,51 @@ def check_all(
                     "check 16: active descriptor_signing_key is a spec A placeholder; "
                     "run: mthydra-controller descriptor-migrate-placeholder"
                 )
+
+    # --- spec C checks (#17–#20) ---
+
+    # Check 17: structural triggers present (cover_pool_reject_burned + burned_domains_no_delete)
+    trigs = {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        ).fetchall()
+    }
+    for required in ("cover_pool_reject_burned", "burned_domains_no_delete"):
+        if required not in trigs:
+            raise InvariantViolation(f"check 17: trigger {required} is missing")
+
+    # Check 18: entered_in_use_at IS NOT NULL iff state='in_use'
+    row = conn.execute(
+        "SELECT domain, state, entered_in_use_at FROM cover_domain_pool WHERE "
+        "(state='in_use' AND entered_in_use_at IS NULL) OR "
+        "(state!='in_use' AND entered_in_use_at IS NOT NULL) LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 18: cover_domain_pool row violates entered_in_use_at invariant: "
+            f"domain={row[0]} state={row[1]} entered_in_use_at={row[2]!r}"
+        )
+
+    # Check 19: every in_use row has a live (non-terminated) box
+    row = conn.execute(
+        "SELECT cdp.domain, cdp.assigned_box_id, rb.state FROM cover_domain_pool cdp "
+        "LEFT JOIN ru_boxes rb ON cdp.assigned_box_id = rb.box_id "
+        "WHERE cdp.state='in_use' AND (rb.box_id IS NULL OR rb.state='terminated') LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 19: cover_domain_pool.domain={row[0]!r} in_use but "
+            f"assigned_box_id={row[1]!r} is missing or terminated"
+        )
+
+    # Check 20: last_verified_at and verified_from_vantage populated for non-unverified rows
+    row = conn.execute(
+        "SELECT domain, state FROM cover_domain_pool "
+        "WHERE state IN ('candidate_verified', 'in_use') "
+        "AND (last_verified_at IS NULL OR verified_from_vantage IS NULL) LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 20: cover_domain_pool.domain={row[0]!r} state={row[1]!r} "
+            "missing last_verified_at or verified_from_vantage"
+        )

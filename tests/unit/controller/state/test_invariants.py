@@ -147,3 +147,55 @@ def test_check_16_allows_placeholder_in_offline_mode(tmp_db_path):
     # Should NOT raise in offline mode
     check_all(conn, expected_schema_version=SCHEMA_VERSION,
               mode="offline", now_iso=NOW)
+
+
+# ---------------------------------------------------------------------------
+# Spec C invariant checks (#17–#20)
+# ---------------------------------------------------------------------------
+
+def test_check_17_rejects_missing_triggers(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute("DROP TRIGGER IF EXISTS cover_pool_reject_burned")
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 17"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_18_rejects_in_use_without_entered_at(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute("PRAGMA foreign_keys=OFF")  # box FK not relevant here
+    conn.execute(
+        "INSERT INTO cover_domain_pool (domain, state, added_at, "
+        "last_verified_at, verified_from_vantage, assigned_box_id) "
+        "VALUES ('x.org', 'in_use', ?, ?, 'ru-vps-01', 'box-x')",
+        (NOW, NOW),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 18"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_19_rejects_in_use_without_live_box(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(
+        "INSERT INTO cover_domain_pool (domain, state, added_at, "
+        "last_verified_at, verified_from_vantage, assigned_box_id, entered_in_use_at) "
+        "VALUES ('x.org', 'in_use', ?, ?, 'ru-vps-01', 'missing-box', ?)",
+        (NOW, NOW, NOW),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 19"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_20_rejects_verified_without_vantage(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO cover_domain_pool (domain, state, added_at, last_verified_at) "
+        "VALUES ('x.org', 'candidate_verified', ?, ?)",
+        (NOW, NOW),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 20"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
