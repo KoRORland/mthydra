@@ -128,6 +128,55 @@ def build_parser() -> argparse.ArgumentParser:
     cred_g.add_argument("--credential", help="credential string")
     cred_g.add_argument("--credential-file", help="path to file containing the credential")
 
+    # ----- spec B subcommands -----
+
+    # descriptor-sign-now
+    dsn = sub.add_parser("descriptor-sign-now", help="force-sign a new descriptor immediately")
+    dsn.add_argument("--db-path", default=DEFAULT_DB)
+    dsn.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    # descriptor-show
+    dsh = sub.add_parser("descriptor-show", help="print descriptor payload as pretty JSON")
+    dsh.add_argument("--generation", type=int, default=None,
+                     help="generation number (default: latest)")
+    dsh.add_argument("--db-path", default=DEFAULT_DB)
+
+    # descriptor-verify
+    dvf = sub.add_parser("descriptor-verify",
+                          help="verify a descriptor file against trusted keys in DB")
+    dvf.add_argument("payload_file", help="path to canonical JSON payload bytes")
+    dvf.add_argument("sig_file", help="path to raw 64-byte Ed25519 signature")
+    dvf.add_argument("--db-path", default=DEFAULT_DB)
+    dvf.add_argument("--now", default=None, help="ISO-8601 timestamp override (default: now)")
+
+    # signing-key-rotate
+    skr = sub.add_parser("signing-key-rotate",
+                          help="generate new descriptor signing key, activate, sign (B-D11)")
+    skr.add_argument("--db-path", default=DEFAULT_DB)
+    skr.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    # eu-add
+    eua = sub.add_parser("eu-add", help="add an EU exit node to the descriptor exit set")
+    eua.add_argument("fingerprint", help="hex SHA256 of EU node public key")
+    eua.add_argument("endpoint", help="host:port or opaque transport address")
+    eua.add_argument("--weight", type=int, default=1)
+    eua.add_argument("--db-path", default=DEFAULT_DB)
+    eua.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    # eu-retire
+    eur = sub.add_parser("eu-retire", help="retire an EU exit node from the descriptor exit set")
+    eur.add_argument("fingerprint")
+    eur.add_argument("--db-path", default=DEFAULT_DB)
+    eur.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    # descriptor-migrate-placeholder
+    dmp = sub.add_parser(
+        "descriptor-migrate-placeholder",
+        help="one-shot: replace spec A placeholder signing key with real Ed25519",
+    )
+    dmp.add_argument("--db-path", default=DEFAULT_DB)
+    dmp.add_argument("--config", default="/etc/mthydra/controller.toml")
+
     # serve — long-running daemon stub (spec F will expand this)
     srv_p = sub.add_parser(
         "serve",
@@ -286,6 +335,27 @@ def run(argv: list[str]) -> int:
         print(f"rotated credential for {args.provider}")
         return 0
 
+    if args.cmd == "descriptor-sign-now":
+        return _cmd_descriptor_sign_now(args)
+
+    if args.cmd == "descriptor-show":
+        return _cmd_descriptor_show(args)
+
+    if args.cmd == "descriptor-verify":
+        return _cmd_descriptor_verify(args)
+
+    if args.cmd == "signing-key-rotate":
+        return _cmd_signing_key_rotate(args)
+
+    if args.cmd == "eu-add":
+        return _cmd_eu_add(args)
+
+    if args.cmd == "eu-retire":
+        return _cmd_eu_retire(args)
+
+    if args.cmd == "descriptor-migrate-placeholder":
+        return _cmd_descriptor_migrate_placeholder(args)
+
     if args.cmd == "serve":
         return _cmd_serve(args)
 
@@ -344,6 +414,261 @@ def _cmd_backup_now(args, mode: str) -> int:
     except Exception as e:
         print(f"backup-now: failed: {e}", file=sys.stderr)
         return 8
+
+
+def _descriptor_valid_until(cfg_path: str, now_dt) -> str:
+    """Compute valid_until from config, falling back to now+24h."""
+    from datetime import timedelta
+    from mthydra.controller.config import ConfigError, load_config
+    try:
+        cfg = load_config(cfg_path)
+        hours = cfg.descriptor.validity_window_hours
+    except ConfigError:
+        hours = 24
+    return (now_dt + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _cmd_descriptor_sign_now(args) -> int:
+    from datetime import datetime, timezone
+    from mthydra.descriptor.sign import SignError, sign_new_descriptor
+    now = _now()
+    now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    valid_until = _descriptor_valid_until(args.config, now_dt)
+    conn = connect(args.db_path)
+    try:
+        gen, _, _ = sign_new_descriptor(conn, now_iso=now, valid_until_iso=valid_until)
+        print(f"signed descriptor generation {gen}")
+        return 0
+    except Exception as e:
+        print(f"descriptor-sign-now: {e}", file=sys.stderr)
+        return 3
+    finally:
+        conn.close()
+
+
+def _cmd_descriptor_show(args) -> int:
+    import json as _json
+    from mthydra.controller.state.descriptor import latest_descriptor_with_signature
+    conn = connect(args.db_path)
+    try:
+        if args.generation is not None:
+            row = conn.execute(
+                "SELECT generation, payload, signature FROM descriptor_history WHERE generation=?",
+                (args.generation,),
+            ).fetchone()
+            if row is None:
+                print(f"generation {args.generation} not found", file=sys.stderr)
+                return 3
+            blob = row[1].encode("utf-8")
+        else:
+            result = latest_descriptor_with_signature(conn)
+            if result is None:
+                print("no descriptors in DB", file=sys.stderr)
+                return 3
+            _, blob, _ = result
+        obj = _json.loads(blob)
+        print(_json.dumps(obj, indent=2, sort_keys=True))
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_descriptor_verify(args) -> int:
+    from mthydra.descriptor.verify import TrustedKey, VerifyError, verify_descriptor
+    blob = Path(args.payload_file).read_bytes()
+    sig = Path(args.sig_file).read_bytes()
+    now_str = args.now or _now()
+    conn = connect(args.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT generation, pubkey FROM descriptor_signing_key "
+            "WHERE retired_at IS NULL OR retired_at > ?",
+            (now_str,),
+        ).fetchall()
+        trusted = [TrustedKey(generation=r[0], pubkey=bytes(r[1])) for r in rows]
+    finally:
+        conn.close()
+    try:
+        p = verify_descriptor(blob, sig, trusted, now_str)
+        print(f"PASS  generation={p.generation} valid_until={p.valid_until}")
+        return 0
+    except VerifyError as e:
+        print(f"FAIL  {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_signing_key_rotate(args) -> int:
+    from datetime import datetime, timedelta, timezone
+    from mthydra.controller.state.audit import log_event
+    from mthydra.controller.state.obligations import prove
+    from mthydra.descriptor.keys import generate_keypair
+    from mthydra.descriptor.sign import SignError, sign_new_descriptor
+
+    now = _now()
+    now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    valid_until = _descriptor_valid_until(args.config, now_dt)
+
+    conn = connect(args.db_path)
+    try:
+        # Get current active signing key
+        row = conn.execute(
+            "SELECT generation FROM descriptor_signing_key "
+            "WHERE retired_at IS NULL ORDER BY generation DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            print("no active descriptor_signing_key — run init first", file=sys.stderr)
+            return 3
+        cur_gen = row[0]
+
+        # Compute outgoing_retired_at = now + validity_window_hours
+        from mthydra.controller.config import ConfigError, load_config
+        try:
+            cfg = load_config(args.config)
+            vh = cfg.descriptor.validity_window_hours
+        except ConfigError:
+            vh = 24
+        outgoing_at = (now_dt + timedelta(hours=vh)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Mark current key as outgoing (retired_at = now + validity_window)
+        conn.execute(
+            "UPDATE descriptor_signing_key SET retired_at=? WHERE generation=? AND retired_at IS NULL",
+            (outgoing_at, cur_gen),
+        )
+        # Insert new key
+        new_priv, new_pub = generate_keypair()
+        new_gen = cur_gen + 1
+        conn.execute(
+            "INSERT INTO descriptor_signing_key (generation, privkey, pubkey, created_at) "
+            "VALUES (?,?,?,?)",
+            (new_gen, new_priv, new_pub, now),
+        )
+        conn.commit()
+
+        # Sign under new key
+        gen, _, _ = sign_new_descriptor(conn, now_iso=now, valid_until_iso=valid_until)
+        log_event(conn, ts=now, actor="operator", action="signing_key_rotated",
+                  target=str(new_gen), details_json=None)
+
+        # Update obligation clock
+        try:
+            from mthydra.controller.config import load_config as lc
+            cfg2 = lc(args.config)
+            vh2 = cfg2.obligations.timers_hours.get("descriptor_signing_key_rotation", 8760)
+        except Exception:
+            vh2 = 8760
+        nxt = (now_dt + timedelta(hours=vh2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            prove(conn, obligation_id="descriptor_signing_key_rotation",
+                  proven_by="operator", at=now, next_due_at=nxt, details=None)
+        except KeyError:
+            pass  # obligation may not exist on old DBs
+
+        print(f"rotated: new signing key gen={new_gen}, descriptor gen={gen}")
+        return 0
+    except Exception as e:
+        print(f"signing-key-rotate: {e}", file=sys.stderr)
+        return 4
+    finally:
+        conn.close()
+
+
+def _cmd_eu_add(args) -> int:
+    from datetime import datetime, timezone
+    from mthydra.controller.state.audit import log_event
+    from mthydra.controller.state.eu_exit_set import add_exit
+    from mthydra.descriptor.sign import SignError, sign_new_descriptor
+
+    now = _now()
+    now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    valid_until = _descriptor_valid_until(args.config, now_dt)
+    conn = connect(args.db_path)
+    try:
+        add_exit(conn, args.fingerprint, args.endpoint, args.weight, now)
+        gen, _, _ = sign_new_descriptor(conn, now_iso=now, valid_until_iso=valid_until)
+        log_event(conn, ts=now, actor="operator", action="eu_exit_added",
+                  target=args.fingerprint, details_json=None)
+        print(f"added {args.fingerprint} → descriptor gen={gen}")
+        return 0
+    except Exception as e:
+        print(f"eu-add: {e}", file=sys.stderr)
+        return 4
+    finally:
+        conn.close()
+
+
+def _cmd_eu_retire(args) -> int:
+    from datetime import datetime, timezone
+    from mthydra.controller.state.audit import log_event
+    from mthydra.controller.state.eu_exit_set import retire_exit
+    from mthydra.descriptor.sign import SignError, sign_new_descriptor
+
+    now = _now()
+    now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    valid_until = _descriptor_valid_until(args.config, now_dt)
+    conn = connect(args.db_path)
+    try:
+        retire_exit(conn, args.fingerprint, at=now)
+        gen, _, _ = sign_new_descriptor(conn, now_iso=now, valid_until_iso=valid_until)
+        log_event(conn, ts=now, actor="operator", action="eu_exit_retired",
+                  target=args.fingerprint, details_json=None)
+        print(f"retired {args.fingerprint} → descriptor gen={gen}")
+        return 0
+    except Exception as e:
+        print(f"eu-retire: {e}", file=sys.stderr)
+        return 4
+    finally:
+        conn.close()
+
+
+def _cmd_descriptor_migrate_placeholder(args) -> int:
+    from datetime import datetime, timezone
+    from mthydra.controller.state.audit import log_event
+    from mthydra.descriptor.keys import generate_keypair, is_placeholder
+    from mthydra.descriptor.sign import SignError, sign_new_descriptor
+
+    now = _now()
+    now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    valid_until = _descriptor_valid_until(args.config, now_dt)
+
+    conn = connect(args.db_path)
+    try:
+        row = conn.execute(
+            "SELECT generation, privkey FROM descriptor_signing_key "
+            "WHERE retired_at IS NULL ORDER BY generation DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            print("no active descriptor_signing_key — run init first", file=sys.stderr)
+            return 3
+        cur_gen, priv = row[0], bytes(row[1])
+        if not is_placeholder(priv):
+            print("active descriptor_signing_key is already a real Ed25519 key — nothing to do")
+            return 0
+        # Generate real key
+        new_priv, new_pub = generate_keypair()
+        new_gen = cur_gen + 1
+        # Retire placeholder
+        conn.execute(
+            "UPDATE descriptor_signing_key SET retired_at=? WHERE generation=?", (now, cur_gen)
+        )
+        # Insert real key
+        conn.execute(
+            "INSERT INTO descriptor_signing_key (generation, privkey, pubkey, created_at) "
+            "VALUES (?,?,?,?)",
+            (new_gen, new_priv, new_pub, now),
+        )
+        conn.commit()
+        # Sign first real descriptor
+        gen_out, _, _ = sign_new_descriptor(conn, now_iso=now, valid_until_iso=valid_until)
+        log_event(conn, ts=now, actor="operator",
+                  action="descriptor_migrated_from_placeholder",
+                  target=str(new_gen), details_json=None)
+        print(f"migrated: new signing key gen={new_gen}, signed descriptor gen={gen_out}")
+        return 0
+    except Exception as e:
+        print(f"descriptor-migrate-placeholder: {e}", file=sys.stderr)
+        return 4
+    finally:
+        conn.close()
 
 
 def _build_destination(cfg, secret: str, mode: str, bucket_override: str | None):

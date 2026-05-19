@@ -286,3 +286,125 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
 
     dest_dry_no_override = _build_destination(cfg, "secret", mode="dryrun", bucket_override=None)
     assert dest_dry_no_override.bucket == "prod-bucket"
+
+
+# ---------------------------------------------------------------------------
+# Spec B CLI subcommands
+# ---------------------------------------------------------------------------
+
+def _init_db(tmp_path):
+    """Helper: init a DB and return (db_path, toml_path)."""
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    toml = tmp_path / "controller.toml"
+    toml.write_text(
+        "[node]\nrole = \"active\"\nhostname = \"test\"\n"
+        "[backup]\nfloor_interval_hours = 24\non_change_debounce_seconds = 30\n"
+        "endpoint = \"\"\nbucket = \"b\"\naccess_key_id = \"x\"\n"
+        "[backup.retention]\nkeep_daily = 30\nkeep_monthly = 12\nobject_lock_days = 30\n"
+        "[gap_monitor]\npoll_interval_minutes = 30\nalarm_threshold_hours = 48\n"
+        "recipient_email = \"op@example.org\"\n"
+        "[descriptor]\nrotation_interval_hours = 1\nvalidity_window_hours = 24\n"
+    )
+    rc = run(["init", "--db-path", str(db), "--age-recipient-file", str(recipient_file)])
+    assert rc == 0
+    return db, toml
+
+
+def test_descriptor_sign_now_creates_generation(tmp_path):
+    db, toml = _init_db(tmp_path)
+    rc = run(["descriptor-sign-now", "--db-path", str(db), "--config", str(toml)])
+    assert rc == 0
+
+
+def test_descriptor_show_empty_db_returns_nonzero(tmp_path):
+    db, toml = _init_db(tmp_path)
+    rc = run(["descriptor-show", "--db-path", str(db)])
+    assert rc != 0  # no descriptors yet
+
+
+def test_descriptor_show_after_sign(tmp_path):
+    db, toml = _init_db(tmp_path)
+    run(["descriptor-sign-now", "--db-path", str(db), "--config", str(toml)])
+    rc = run(["descriptor-show", "--db-path", str(db)])
+    assert rc == 0
+
+
+def test_descriptor_verify_on_fresh_signed(tmp_path):
+    db, toml = _init_db(tmp_path)
+    run(["descriptor-sign-now", "--db-path", str(db), "--config", str(toml)])
+    # Extract payload and sig from DB
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT payload, signature FROM descriptor_history ORDER BY generation DESC LIMIT 1"
+    ).fetchone()
+    payload_file = tmp_path / "payload.json"
+    sig_file = tmp_path / "sig.bin"
+    payload_file.write_bytes(row[0].encode("utf-8"))
+    sig_file.write_bytes(bytes(row[1]))
+    rc = run([
+        "descriptor-verify", str(payload_file), str(sig_file),
+        "--db-path", str(db),
+    ])
+    assert rc == 0
+
+
+def test_eu_add_and_retire(tmp_path):
+    db, toml = _init_db(tmp_path)
+    rc_add = run([
+        "eu-add", "aabbcc", "eu1.example.org:443",
+        "--db-path", str(db), "--config", str(toml),
+    ])
+    assert rc_add == 0
+    # Verify exit appears in latest descriptor
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT payload FROM descriptor_history ORDER BY generation DESC LIMIT 1"
+    ).fetchone()
+    import json
+    p = json.loads(row[0])
+    assert any(e["fingerprint"] == "aabbcc" for e in p["eu_exit_set"])
+
+    rc_retire = run([
+        "eu-retire", "aabbcc",
+        "--db-path", str(db), "--config", str(toml),
+    ])
+    assert rc_retire == 0
+    row2 = conn.execute(
+        "SELECT payload FROM descriptor_history ORDER BY generation DESC LIMIT 1"
+    ).fetchone()
+    p2 = json.loads(row2[0])
+    assert not any(e["fingerprint"] == "aabbcc" for e in p2["eu_exit_set"])
+
+
+def test_signing_key_rotate(tmp_path):
+    db, toml = _init_db(tmp_path)
+    rc = run(["signing-key-rotate", "--db-path", str(db), "--config", str(toml)])
+    assert rc == 0
+    conn = connect(db)
+    rows = conn.execute("SELECT generation FROM descriptor_signing_key ORDER BY generation").fetchall()
+    assert len(rows) == 2  # original + new
+
+
+def test_descriptor_migrate_placeholder_on_real_key(tmp_path):
+    """On a post-spec-B DB, migration is a no-op."""
+    db, toml = _init_db(tmp_path)  # init now uses real Ed25519
+    rc = run(["descriptor-migrate-placeholder", "--db-path", str(db), "--config", str(toml)])
+    assert rc == 0  # prints "nothing to do"
+
+
+def test_descriptor_migrate_placeholder_on_placeholder_key(tmp_path):
+    """On a spec-A legacy DB, migration mints a real key and signs."""
+    db, toml = _init_db(tmp_path)
+    # Manually replace the signing key with a placeholder to simulate spec-A state
+    conn = connect(db)
+    conn.execute("UPDATE descriptor_signing_key SET privkey=?, pubkey=? WHERE generation=1",
+                 (b"PRIV-DESC-" + b"\x00" * 22, b"PUB-DESC-" + b"\x00" * 23))
+    conn.commit()
+    conn.close()
+    rc = run(["descriptor-migrate-placeholder", "--db-path", str(db), "--config", str(toml)])
+    assert rc == 0
+    conn = connect(db)
+    rows = conn.execute("SELECT generation FROM descriptor_signing_key ORDER BY generation").fetchall()
+    assert len(rows) == 2  # placeholder (retired) + new real key
