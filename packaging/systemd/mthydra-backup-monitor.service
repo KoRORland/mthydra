@@ -1,0 +1,22 @@
+[Unit]
+Description=mthydra backup generation-gap monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mthydra
+Group=mthydra
+EnvironmentFile=/etc/mthydra/backup-monitor.env
+ExecStart=/usr/local/bin/mthydra-backup-monitor \
+    --config /etc/mthydra/controller.toml
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mthydra
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

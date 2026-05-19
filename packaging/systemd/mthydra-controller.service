@@ -1,0 +1,29 @@
+[Unit]
+Description=mthydra controller (EU node — active or standby)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mthydra
+Group=mthydra
+WorkingDirectory=/var/lib/mthydra
+EnvironmentFile=-/etc/mthydra/controller.env
+ExecStartPre=/usr/local/bin/mthydra-controller startup-check \
+    --db-path /var/lib/mthydra/state.sqlite \
+    --age-recipient-file /etc/mthydra/age-recipient.txt
+ExecStart=/usr/local/bin/mthydra-controller serve \
+    --config /etc/mthydra/controller.toml
+Restart=on-failure
+RestartSec=10
+# Hard exit on startup-check failure (exit code ≥ 10) — do not auto-restart
+# startup-check failures require operator investigation, not a tight loop.
+RestartPreventExitStatus=10 11 12 13 14 15
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mthydra
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

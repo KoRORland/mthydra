@@ -109,6 +109,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="advance next_due_at by this many hours (default 720)",
     )
 
+    # serve — long-running daemon stub (spec F will expand this)
+    srv_p = sub.add_parser(
+        "serve",
+        help="run the backup orchestrator daemon (stub; spec F will add full controller plane)",
+    )
+    srv_p.add_argument("--config", default="/etc/mthydra/controller.toml")
+    srv_p.add_argument("--db-path", default=DEFAULT_DB)
+
     return p
 
 
@@ -235,4 +243,92 @@ def run(argv: list[str]) -> int:
         print(f"stamped {args.obligation_id}")
         return 0
 
+    if args.cmd == "serve":
+        return _cmd_serve(args)
+
     return 1
+
+
+def _cmd_serve(args) -> int:
+    """Run the backup orchestrator loop (spec A stub; spec F will add the full controller plane)."""
+    import signal
+    import time
+
+    from mthydra.controller.backup.pipeline import BackupPipeline
+    from mthydra.controller.backup.s3_dest import S3Destination
+    from mthydra.controller.backup.triggers import BackupOrchestrator
+    from mthydra.controller.config import load_config
+    from mthydra.controller.state.tokens import get_provider_credential
+
+    cfg = load_config(args.config)
+    recipient_path = DEFAULT_RECIPIENT_FILE
+    try:
+        recipient = _read_recipient(recipient_path)
+    except FileNotFoundError:
+        print(f"age recipient file not found: {recipient_path}", file=sys.stderr)
+        return 6
+
+    conn = connect(args.db_path)
+    try:
+        try:
+            secret = get_provider_credential(conn, "b2")
+        except KeyError:
+            print("b2 provider credential not in DB; run init first", file=sys.stderr)
+            return 7
+    finally:
+        conn.close()
+
+    dest = S3Destination(
+        endpoint_url=cfg.backup.endpoint or None,
+        bucket=cfg.backup.bucket,
+        access_key_id=cfg.backup.access_key_id,
+        secret_access_key=secret,
+        region=os.environ.get("MTHYDRA_BACKUP_REGION", "us-east-1"),
+        object_lock_days=cfg.backup.retention.object_lock_days,
+    )
+    tmp_dir = Path("/var/lib/mthydra/tmp")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    pipeline = BackupPipeline(
+        db_path=args.db_path,
+        tmp_dir=tmp_dir,
+        recipient=recipient,
+        destination=dest,
+        clock=_now,
+        mode=args.mode,
+        bucket_override=args.bucket_override,
+    )
+    orch = BackupOrchestrator(
+        pipeline=pipeline,
+        debounce_seconds=cfg.backup.on_change_debounce_seconds,
+        floor_interval_seconds=cfg.backup.floor_interval_hours * 3600,
+        mode=args.mode,
+    )
+
+    if args.mode != "offline":
+        orch.arm()
+        print("serve: backup orchestrator armed", flush=True)
+    else:
+        print("serve: offline mode — triggers not armed", flush=True)
+
+    stop_event = _install_signal_handler()
+    try:
+        while not stop_event.is_set():
+            stop_event.wait(timeout=60)
+    finally:
+        orch.disarm()
+        print("serve: stopped", flush=True)
+    return 0
+
+
+def _install_signal_handler():
+    import threading
+
+    stop_event = threading.Event()
+
+    def _handler(sig, frame):
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, _handler)
+    signal.signal(signal.SIGINT, _handler)
+    return stop_event

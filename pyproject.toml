@@ -15,22 +15,20 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
-    "pytest-asyncio>=0.23",
     "moto[s3]>=5",
     "hypothesis>=6",
     "ruff>=0.5",
 ]
 
 [project.scripts]
+# mthydra-backup-monitor ships in the separate mthydra-backup-monitor wheel (plan §16.1)
 mthydra-controller = "mthydra.controller.__main__:main"
-mthydra-backup-monitor = "mthydra.backup_monitor.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
 
 [tool.ruff]
