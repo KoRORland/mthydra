@@ -192,6 +192,13 @@ def build_parser() -> argparse.ArgumentParser:
     ca.add_argument("--db-path", default=DEFAULT_DB)
     ca.add_argument("--notes", default=None)
 
+    cav = sub.add_parser("cover-attest-verified",
+                          help="operator-attested Russia-vantage verification (spec C C-D1)")
+    cav.add_argument("domain")
+    cav.add_argument("--vantage", required=True)
+    cav.add_argument("--evidence", default=None)
+    cav.add_argument("--db-path", default=DEFAULT_DB)
+
     return p
 
 
@@ -370,6 +377,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "cover-add":
         return _cmd_cover_add(args)
+
+    if args.cmd == "cover-attest-verified":
+        return _cmd_cover_attest_verified(args)
 
     return 1
 
@@ -830,6 +840,35 @@ def _cmd_cover_add(args) -> int:
         except KeyError:
             pass  # obligation may not be seeded in older DBs; non-fatal
         print(f"cover-add: {args.domain} added (candidate_unverified)")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_cover_attest_verified(args) -> int:
+    from mthydra.controller.state.cover_pool import attest_verified
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import prove
+
+    conn = connect(args.db_path)
+    try:
+        now = _now()
+        try:
+            attest_verified(
+                conn, args.domain,
+                from_vantage=args.vantage, at=now, evidence=args.evidence,
+            )
+        except ValueError as e:
+            print(f"cover-attest-verified: {e}", file=sys.stderr)
+            return 2
+        next_due = _add_hours_iso(now, 60 * 24)
+        try:
+            prove(conn, "cover_pool_reverify_pass_proven",
+                  proven_by="operator", at=now,
+                  next_due_at=next_due, details=args.domain)
+        except KeyError:
+            pass
+        print(f"cover-attest-verified: {args.domain} -> candidate_verified (vantage={args.vantage})")
         return 0
     finally:
         conn.close()

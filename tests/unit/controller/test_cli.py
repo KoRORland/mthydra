@@ -531,3 +531,72 @@ def test_cover_add_refuses_burned(tmp_path, age_recipient, capsys):
     assert rc == 2
     err = capsys.readouterr().err
     assert "burned_domains" in err
+
+
+# ===== Task 15: cover-attest-verified =====
+
+def test_cover_attest_verified_transitions_state(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    run(["cover-add", "fresh.org", "--db-path", str(db)])
+    rc = run([
+        "cover-attest-verified", "fresh.org",
+        "--vantage", "ru-vps-01",
+        "--evidence", "curl + cert match",
+        "--db-path", str(db),
+    ])
+    assert rc == 0
+    from mthydra.controller.state.cover_pool import list_by_state
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    rows = list_by_state(conn, "candidate_verified")
+    assert rows[0].verified_from_vantage == "ru-vps-01"
+
+
+def test_cover_attest_verified_proves_reverify_pass_obligation(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import list_obligations, set_obligation
+    conn = connect(db)
+    set_obligation(conn, "cover_pool_reverify_pass_proven",
+                   last_proven_at="2025-01-01T00:00:00Z",
+                   proven_by="bootstrap",
+                   next_due_at="2025-03-01T00:00:00Z")
+    conn.close()
+    run(["cover-add", "fresh.org", "--db-path", str(db)])
+    run([
+        "cover-attest-verified", "fresh.org",
+        "--vantage", "ru-vps-01",
+        "--db-path", str(db),
+    ])
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    assert obs["cover_pool_reverify_pass_proven"].last_proven_at > "2025-01-01T00:00:00Z"
+    conn.close()
+
+
+def test_cover_attest_verified_rejects_missing_domain(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    rc = run([
+        "cover-attest-verified", "ghost.org",
+        "--vantage", "ru-vps-01",
+        "--db-path", str(db),
+    ])
+    assert rc == 2
