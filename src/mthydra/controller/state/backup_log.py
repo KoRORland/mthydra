@@ -29,10 +29,16 @@ def next_generation(conn: sqlite3.Connection) -> int:
     return int(row[0]) + 1
 
 
-def record_started(conn: sqlite3.Connection, generation: int, trigger: BackupTrigger, created_at: str) -> None:
+def record_started(
+    conn: sqlite3.Connection,
+    generation: int,
+    trigger: BackupTrigger | str,
+    created_at: str,
+) -> None:
+    trigger_str = trigger.value if isinstance(trigger, BackupTrigger) else trigger
     conn.execute(
         "INSERT INTO backup_log (generation, created_at, trigger) VALUES (?, ?, ?)",
-        (generation, created_at, trigger.value),
+        (generation, created_at, trigger_str),
     )
     conn.commit()
 
