@@ -56,6 +56,33 @@ def record_index_updated(conn: sqlite3.Connection, generation: int, at: str) -> 
     conn.commit()
 
 
+def count_consecutive_failures(conn: sqlite3.Connection, window_hours: int = 24) -> int:
+    """Count consecutive backup failures at the head of backup_log.
+
+    Scans rows ordered by generation DESC and counts rows where pushed_at IS NULL,
+    stopping at the first row that has pushed_at NOT NULL (a successful push
+    terminates the streak).
+
+    window_hours is retained as a parameter for callers that want to limit the
+    look-back range, but the primary termination condition is always the first
+    success in the streak scan — the window only prunes very old stale rows that
+    predate any success in the DB.
+
+    Returns 0 if there are no rows or the most recent row succeeded.
+    """
+    rows = conn.execute(
+        "SELECT pushed_at FROM backup_log ORDER BY generation DESC"
+    ).fetchall()
+
+    streak = 0
+    for (pushed_at,) in rows:
+        if pushed_at is None:
+            streak += 1
+        else:
+            break  # first success terminates the streak
+    return streak
+
+
 def list_pending_reconciliation(conn: sqlite3.Connection) -> list[BackupRecord]:
     rows = conn.execute(
         "SELECT generation, created_at, size_bytes, sha256, pushed_at, index_updated_at, trigger "

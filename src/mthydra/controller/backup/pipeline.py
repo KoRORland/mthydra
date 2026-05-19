@@ -12,6 +12,7 @@ from mthydra.controller.backup.s3_dest import S3Destination
 from mthydra.controller.state.audit import log_event
 from mthydra.controller.state.backup_log import (
     BackupTrigger,
+    count_consecutive_failures,
     next_generation,
     record_index_updated,
     record_pushed,
@@ -46,7 +47,6 @@ class BackupPipeline:
         self.mode = mode
         self.bucket_override = bucket_override
         self._mutex = threading.Lock()
-        self._consecutive_failures = 0
 
     def do_backup(self, trigger: BackupTrigger) -> int:
         """Run one backup cycle.  Returns the generation number produced.
@@ -64,12 +64,19 @@ class BackupPipeline:
         with self._mutex:
             try:
                 result = self._do_backup_locked(effective_trigger)
-                self._consecutive_failures = 0
                 return result
             except Exception:
-                self._consecutive_failures += 1
-                if self._consecutive_failures >= 3:
-                    self._record_self_alarm_unreachable()
+                # Count consecutive failures from the DB so restarts don't reset the alarm.
+                try:
+                    conn = connect(self.db_path)
+                    try:
+                        streak = count_consecutive_failures(conn)
+                    finally:
+                        conn.close()
+                except Exception:
+                    streak = 0
+                if streak >= 3:
+                    self._record_self_alarm_unreachable(streak)
                 raise
 
     def _do_backup_locked(self, trigger: BackupTrigger) -> int:
@@ -116,8 +123,11 @@ class BackupPipeline:
             if enc.exists():
                 enc.unlink()
 
-    def _record_self_alarm_unreachable(self) -> None:
-        """Write audit_log row on 3rd consecutive failure (spec §16.4 G9)."""
+    def _record_self_alarm_unreachable(self, streak: int) -> None:
+        """Write audit_log row on 3rd+ consecutive failure (spec §16.4 G9).
+
+        streak is the DB-derived consecutive-failure count so it survives restarts.
+        """
         import json
 
         try:
@@ -129,7 +139,7 @@ class BackupPipeline:
                     actor="controller",
                     action="self_alarm_unreachable",
                     target=None,
-                    details_json=json.dumps({"consecutive_failures": self._consecutive_failures}),
+                    details_json=json.dumps({"consecutive_failures": streak}),
                 )
             finally:
                 conn.close()
