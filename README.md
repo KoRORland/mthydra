@@ -9,19 +9,41 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 # Also install the backup-monitor wheel for integration tests:
 pip install -e 'mthydra-backup-monitor[dev]'
-pytest
+# Run controller tests:
+pytest tests/
+# Run monitor tests:
+pytest mthydra-backup-monitor/tests/
 ```
 
+## Building wheels
+
+Both packages use `setuptools` and `pyproject.toml`. Install `build` once, then:
+
+```bash
+pip install build
+# Controller wheel (output: dist/mthydra-*.whl)
+python -m build
+# Monitor wheel (output: mthydra-backup-monitor/dist/mthydra_backup_monitor-*.whl)
+python -m build mthydra-backup-monitor/
+```
+
+Copy the resulting `.whl` files to target hosts and install with `pip install <wheel>`.
+
 ## Deployment (Ubuntu 24.04)
+
+**Pre-requisites:** create the B2 (Backblaze) bucket with Object Lock + Versioning
+enabled *before* running `init`. The controller cannot create the bucket itself.
 
 ```bash
 sudo apt install python3-venv age
 sudo useradd --system --home /var/lib/mthydra --create-home mthydra
 sudo -u mthydra python3 -m venv /opt/mthydra
-sudo -u mthydra /opt/mthydra/bin/pip install <path-to-wheel>
 
-# Install the backup monitor wheel on the monitor host (separate from active controller)
-sudo -u mthydra /opt/mthydra/bin/pip install <path-to-mthydra-backup-monitor-wheel>
+# Controller host
+sudo -u mthydra /opt/mthydra/bin/pip install mthydra-*.whl
+
+# Monitor host (separate from active controller per spec A §8 / plan §16.1)
+sudo -u mthydra /opt/mthydra/bin/pip install mthydra_backup_monitor-*.whl
 
 # Create directory layout
 sudo systemd-tmpfiles --create packaging/tmpfiles.d/mthydra.conf
@@ -32,18 +54,34 @@ sudo install -Dm0644 packaging/systemd/mthydra-controller.service \
 sudo install -Dm0644 packaging/systemd/mthydra-backup-monitor.service \
     /etc/systemd/system/mthydra-backup-monitor.service
 
-# Configure
+# Configure — controller host
 sudo install -Dm0644 packaging/etc/mthydra/controller.toml.example \
     /etc/mthydra/controller.toml
-# Edit /etc/mthydra/controller.toml, then place the age public key:
+# Edit /etc/mthydra/controller.toml (bucket name, access_key_id, etc.)
 echo 'age1...' | sudo tee /etc/mthydra/age-recipient.txt
+sudo install -Dm0600 packaging/etc/mthydra/controller.env.example \
+    /etc/mthydra/controller.env
+# Edit /etc/mthydra/controller.env (uncomment/fill MTHYDRA_* vars as needed)
 
-# Initialise state
+# Configure — monitor host
+sudo install -Dm0644 packaging/etc/mthydra/controller.toml.example \
+    /etc/mthydra/controller.toml
+# Edit /etc/mthydra/controller.toml (same bucket config as controller)
+sudo install -Dm0600 packaging/etc/mthydra/backup-monitor.env.example \
+    /etc/mthydra/backup-monitor.env
+# Edit /etc/mthydra/backup-monitor.env (MTHYDRA_B2_SECRET, MTHYDRA_SMTP_*)
+
+# Initialise state (controller host only)
 sudo /opt/mthydra/bin/mthydra-controller init \
     --db-path /var/lib/mthydra/state.sqlite \
     --age-recipient-file /etc/mthydra/age-recipient.txt \
     --provider-credential aws=AKID:SECRET \
     --provider-credential b2=KEY_ID:KEY_SECRET
+
+# Verify the backup pipeline (optional but recommended before enabling the service)
+sudo /opt/mthydra/bin/mthydra-controller backup-now \
+    --db-path /var/lib/mthydra/state.sqlite \
+    --config /etc/mthydra/controller.toml
 
 # Start
 sudo systemctl daemon-reload
