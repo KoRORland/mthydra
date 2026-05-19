@@ -219,6 +219,8 @@ def run(argv: list[str]) -> int:
                     "t5_pool_revalidation": 168,
                     "t6_reshuffle": 168,
                     "descriptor_signing_key_rotation": 8760,
+                    "cover_pool_reverify_pass_proven": 60 * 24,   # reverify_after_days * 2 = 60 days
+                    "cover_pool_replenishment_proven": 90 * 24,   # 90 days
                 },
                 now=_now(),
             )

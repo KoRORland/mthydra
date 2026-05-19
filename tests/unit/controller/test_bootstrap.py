@@ -129,3 +129,23 @@ def test_init_sets_parent_dir_mode_0700(tmp_path):
     )
     mode = stat.S_IMODE(tmp_path.stat().st_mode)
     assert mode == 0o700, f"expected 0o700, got {oct(mode)}"
+
+
+def test_init_seeds_cover_pool_obligations(tmp_path):
+    db = tmp_path / "state.sqlite"
+    init_state(
+        db_path=db,
+        age_recipient=FAKE_RECIPIENT,
+        provider_credentials={"b2": "id:secret"},
+        obligation_timer_hours={
+            "cover_pool_reverify_pass_proven": 30 * 2 * 24,  # 60d
+            "cover_pool_replenishment_proven": 90 * 24,       # 90d
+        },
+        now="2026-05-19T00:00:00Z",
+    )
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import list_obligations
+    conn = connect(db)
+    ids = {o.obligation_id for o in list_obligations(conn)}
+    assert "cover_pool_reverify_pass_proven" in ids
+    assert "cover_pool_replenishment_proven" in ids

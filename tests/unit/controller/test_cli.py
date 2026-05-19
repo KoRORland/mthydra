@@ -416,3 +416,20 @@ def test_descriptor_migrate_placeholder_on_placeholder_key(tmp_path):
     conn = connect(db)
     rows = conn.execute("SELECT generation FROM descriptor_signing_key ORDER BY generation").fetchall()
     assert len(rows) == 2  # placeholder (retired) + new real key
+
+
+def test_init_seeds_cover_pool_obligations_via_cli(tmp_path, age_recipient):
+    db = tmp_path / "state.sqlite"
+    rc = run([
+        "init",
+        "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    assert rc == 0
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import list_obligations
+    conn = connect(db)
+    ids = {o.obligation_id for o in list_obligations(conn)}
+    assert "cover_pool_reverify_pass_proven" in ids
+    assert "cover_pool_replenishment_proven" in ids
