@@ -130,3 +130,24 @@ def test_downgrade_stale_verified_emits_one_audit_per_row(conn):
     )
     actions = [e.action for e in recent_events(conn, limit=10)]
     assert actions.count("cover_downgraded_stale") == 2
+
+
+def test_list_due_for_rotation_empty_when_no_in_use(conn):
+    add_candidate(conn, "fresh.org", added_at=NOW)
+    attest_verified(conn, "fresh.org", from_vantage="ru-vps-01", at=NOW)
+    due = list_due_for_rotation(conn, now=NOW, rotation_ttl_days=14)
+    assert due == []
+
+
+def test_list_due_for_rotation_returns_overdue_only(conn):
+    _seed_live_box(conn, "box-old")
+    _seed_live_box(conn, "box-new", sni="new-sni.invalid")
+    add_candidate(conn, "old.org", added_at="2026-04-01T00:00:00Z")
+    attest_verified(conn, "old.org", from_vantage="ru-vps-01", at="2026-04-01T01:00:00Z")
+    assign_to_box(conn, "old.org", box_id="box-old", at="2026-04-01T02:00:00Z")
+    add_candidate(conn, "new.org", added_at="2026-05-15T00:00:00Z")
+    attest_verified(conn, "new.org", from_vantage="ru-vps-01", at="2026-05-15T01:00:00Z")
+    assign_to_box(conn, "new.org", box_id="box-new", at="2026-05-15T02:00:00Z")
+
+    due = list_due_for_rotation(conn, now="2026-05-19T00:00:00Z", rotation_ttl_days=14)
+    assert [r.domain for r in due] == ["old.org"]
