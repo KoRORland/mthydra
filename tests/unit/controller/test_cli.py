@@ -176,6 +176,42 @@ def test_obligation_proven_fails_for_unknown_id(tmp_path):
     assert exit_code != 0
 
 
+def test_obligation_proven_cadence_from_config(tmp_path):
+    """obligation-proven should read cadence from controller.toml, not hardcode 720h."""
+    from mthydra.controller.state.obligations import list_obligations
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    # Use t1_dormant_health which has a 168h cadence in the spec
+    run(["init", "--db-path", str(db), "--age-recipient-file", str(recipient_file)])
+
+    toml = tmp_path / "controller.toml"
+    toml.write_text(
+        "[node]\nrole = \"active\"\nhostname = \"test\"\n"
+        "[backup]\nfloor_interval_hours = 24\non_change_debounce_seconds = 30\n"
+        "endpoint = \"\"\nbucket = \"b\"\naccess_key_id = \"x\"\n"
+        "[backup.retention]\nkeep_daily = 30\nkeep_monthly = 12\nobject_lock_days = 30\n"
+        "[gap_monitor]\npoll_interval_minutes = 30\nalarm_threshold_hours = 48\n"
+        "recipient_email = \"op@example.org\"\n"
+        "[obligations.timers_hours]\nt1_dormant_health = 168\n"
+    )
+
+    exit_code = run([
+        "obligation-proven", "t1_dormant_health",
+        "--db-path", str(db),
+        "--config", str(toml),
+    ])
+    assert exit_code == 0
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    # next_due_at should be last_proven_at + 168h, not + 720h
+    from datetime import datetime, timedelta, timezone
+    proven = datetime.fromisoformat(obs["t1_dormant_health"].last_proven_at.replace("Z", "+00:00"))
+    due = datetime.fromisoformat(obs["t1_dormant_health"].next_due_at.replace("Z", "+00:00"))
+    delta_hours = (due - proven).total_seconds() / 3600
+    assert abs(delta_hours - 168) < 1, f"expected ~168h, got {delta_hours}h"
+
+
 def test_rotate_provider_credential_updates_db(tmp_path):
     from mthydra.controller.state.tokens import get_provider_credential
     db = tmp_path / "state.sqlite"

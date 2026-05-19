@@ -104,12 +104,17 @@ def build_parser() -> argparse.ArgumentParser:
     op_p = sub.add_parser("obligation-proven", help="stamp an obligation clock as proven now")
     op_p.add_argument("obligation_id")
     op_p.add_argument("--db-path", default=DEFAULT_DB)
+    op_p.add_argument("--config", default="/etc/mthydra/controller.toml")
     op_p.add_argument("--details", default=None)
     op_p.add_argument(
         "--next-due-hours",
         type=int,
-        default=720,
-        help="advance next_due_at by this many hours (default 720)",
+        default=None,
+        help=(
+            "advance next_due_at by this many hours; "
+            "defaults to the value in controller.toml [obligations.timers_hours], "
+            "falling back to 720 if absent"
+        ),
     )
 
     # rotate-provider-credential
@@ -230,8 +235,18 @@ def run(argv: list[str]) -> int:
             return 4
 
     if args.cmd == "obligation-proven":
+        # Resolve next_due_hours: CLI flag > config > hardcoded default 720
+        next_due_hours = args.next_due_hours
+        if next_due_hours is None:
+            from mthydra.controller.config import ConfigError, load_config
+            try:
+                cfg = load_config(args.config)
+                next_due_hours = cfg.obligations.timers_hours.get(args.obligation_id, 720)
+            except ConfigError:
+                next_due_hours = 720
+
         now_dt = datetime.now(timezone.utc)
-        next_due = (now_dt + timedelta(hours=args.next_due_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        next_due = (now_dt + timedelta(hours=next_due_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
         conn = connect(args.db_path)
         try:
             try:
@@ -248,7 +263,7 @@ def run(argv: list[str]) -> int:
                 return 5
         finally:
             conn.close()
-        print(f"stamped {args.obligation_id}")
+        print(f"stamped {args.obligation_id} (next_due_hours={next_due_hours})")
         return 0
 
     if args.cmd == "rotate-provider-credential":
