@@ -1,6 +1,7 @@
 """First-run bootstrap — spec A §10.1."""
 from __future__ import annotations
 
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -94,3 +95,10 @@ def init_state(
             )
     finally:
         conn.close()
+
+    # Spec §3: enforce file-mode discipline after the connection is closed.
+    # 0600 on the DB (only owner can read), 0700 on the parent dir.
+    # No-op on non-POSIX systems (e.g. Windows CI) — spec is Ubuntu only.
+    if hasattr(os, "chmod"):
+        os.chmod(db_path, 0o600)
+        os.chmod(db_path.parent, 0o700)

@@ -83,3 +83,31 @@ def test_init_no_provider_creds(tmp_path):
         now="2026-05-18T00:00:00Z",
     )
     assert db.exists()
+
+
+def test_init_sets_file_mode_0600(tmp_path):
+    import stat
+    db = tmp_path / "state.sqlite"
+    init_state(
+        db_path=db,
+        age_recipient=FAKE_RECIPIENT,
+        provider_credentials={},
+        obligation_timer_hours={},
+        now="2026-05-18T00:00:00Z",
+    )
+    mode = stat.S_IMODE(db.stat().st_mode)
+    assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+
+def test_init_sets_parent_dir_mode_0700(tmp_path):
+    import stat
+    db = tmp_path / "state.sqlite"
+    init_state(
+        db_path=db,
+        age_recipient=FAKE_RECIPIENT,
+        provider_credentials={},
+        obligation_timer_hours={},
+        now="2026-05-18T00:00:00Z",
+    )
+    mode = stat.S_IMODE(tmp_path.stat().st_mode)
+    assert mode == 0o700, f"expected 0o700, got {oct(mode)}"
