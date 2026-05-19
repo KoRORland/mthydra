@@ -320,6 +320,10 @@ def _cmd_serve(args) -> int:
         mode=args.mode,
     )
 
+    # Enable audit-log file mirror (spec §4.7)
+    from mthydra.controller.state.audit import set_audit_mirror
+    set_audit_mirror("/var/lib/mthydra/logs/audit.log")
+
     if args.mode != "offline":
         orch.arm()
         print("serve: backup orchestrator armed", flush=True)
