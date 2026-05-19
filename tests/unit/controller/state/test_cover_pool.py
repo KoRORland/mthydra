@@ -95,3 +95,38 @@ def test_assign_to_box_refuses_stale_after_downgrade(conn):
     )
     with pytest.raises(ValueError, match="candidate_verified"):
         assign_to_box(conn, "example.org", box_id="box-1", at=NOW)
+
+
+def test_downgrade_stale_verified_returns_empty_when_no_stale(conn):
+    add_candidate(conn, "fresh.org", added_at="2026-05-19T00:00:00Z")
+    attest_verified(conn, "fresh.org", from_vantage="ru-vps-01", at="2026-05-19T01:00:00Z")
+    downgraded = downgrade_stale_verified(
+        conn, now="2026-05-20T00:00:00Z", reverify_after_days=30,
+    )
+    assert downgraded == []
+    assert [r.domain for r in list_by_state(conn, "candidate_verified")] == ["fresh.org"]
+
+
+def test_downgrade_stale_verified_returns_stale_only(conn):
+    add_candidate(conn, "stale.org", added_at="2026-04-01T00:00:00Z")
+    attest_verified(conn, "stale.org", from_vantage="ru-vps-01", at="2026-04-01T01:00:00Z")
+    add_candidate(conn, "fresh.org", added_at="2026-05-15T00:00:00Z")
+    attest_verified(conn, "fresh.org", from_vantage="ru-vps-01", at="2026-05-15T01:00:00Z")
+    downgraded = downgrade_stale_verified(
+        conn, now="2026-05-19T00:00:00Z", reverify_after_days=30,
+    )
+    assert downgraded == ["stale.org"]
+    assert {r.domain for r in list_by_state(conn, "candidate_verified")} == {"fresh.org"}
+    assert {r.domain for r in list_by_state(conn, "candidate_unverified")} == {"stale.org"}
+
+
+def test_downgrade_stale_verified_emits_one_audit_per_row(conn):
+    add_candidate(conn, "a.org", added_at="2026-04-01T00:00:00Z")
+    attest_verified(conn, "a.org", from_vantage="ru-vps-01", at="2026-04-01T01:00:00Z")
+    add_candidate(conn, "b.org", added_at="2026-04-01T00:00:00Z")
+    attest_verified(conn, "b.org", from_vantage="ru-vps-01", at="2026-04-01T01:00:00Z")
+    downgrade_stale_verified(
+        conn, now="2026-05-19T00:00:00Z", reverify_after_days=30,
+    )
+    actions = [e.action for e in recent_events(conn, limit=10)]
+    assert actions.count("cover_downgraded_stale") == 2
