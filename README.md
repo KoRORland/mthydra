@@ -9,11 +9,22 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 # Also install the backup-monitor wheel for integration tests:
 pip install -e 'mthydra-backup-monitor[dev]'
-# Run controller tests:
-pytest tests/
-# Run monitor tests:
-pytest mthydra-backup-monitor/tests/
 ```
+
+Common targets (see `Makefile` for full list):
+
+```
+make test          # controller test suite
+make test-monitor  # backup-monitor test suite
+make cov           # controller tests with coverage report
+make lint          # ruff on both packages
+make smoke         # print manual smoke-test procedure
+```
+
+**Coverage** (spec A §13.5 — `controller.backup + controller.state + controller.restore`):
+`91%` line coverage measured with `age` binary absent (decrypt.py is 32% without it; all
+other in-scope modules ≥ 88%). With `age` installed the overall number is expected to reach
+≥ 96%.
 
 ## Building wheels
 

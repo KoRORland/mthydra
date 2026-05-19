@@ -8,6 +8,30 @@ from mthydra.controller.backup.triggers import BackupOrchestrator
 from mthydra.controller.state.backup_log import BackupTrigger
 
 
+@pytest.fixture(autouse=True)
+def _ensure_scheduler_stopped():
+    """Guarantee any BackupOrchestrator started by a test is disarmed afterwards.
+
+    Prevents background APScheduler threads from leaking between tests and
+    causing flaky failures (item 1.1 in post-implementation gap review).
+    """
+    orchestrators: list[BackupOrchestrator] = []
+    _orig_arm = BackupOrchestrator.arm
+
+    def _tracking_arm(self, *a, **kw):
+        orchestrators.append(self)
+        return _orig_arm(self, *a, **kw)
+
+    BackupOrchestrator.arm = _tracking_arm
+    yield
+    BackupOrchestrator.arm = _orig_arm
+    for orch in orchestrators:
+        try:
+            orch.disarm()
+        except Exception:
+            pass
+
+
 class FakePipeline:
     def __init__(self) -> None:
         self.calls: list[str] = []
