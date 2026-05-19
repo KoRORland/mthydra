@@ -21,15 +21,20 @@ poll_interval_minutes = 30
 alarm_threshold_hours = 48
 recipient_email = "operator@example.org"
 
+[descriptor]
+rotation_interval_hours = 1        # how often the controller re-signs the descriptor (routine R1)
+validity_window_hours   = 24       # how far ahead valid_until is set from issued_at
+
 [obligations]
 # how long is each obligation valid before it counts as stale
 [obligations.timers_hours]
-t1_dormant_health     = 168        # weekly
-t2_dryrun_caseA       = 720        # monthly
-t2_dryrun_caseB       = 720
-t3_vantage_revalidation = 168
-t3_profile_repin      = 0          # event-driven (T4 promotion); 0 means "must be tied to image_version"
-t4_upstream_check     = 168
-t5_pool_revalidation  = 168
-t6_reshuffle          = 168
-backup_restore_dryrun = 720
+t1_dormant_health                = 168        # weekly
+t2_dryrun_caseA                  = 720        # monthly
+t2_dryrun_caseB                  = 720
+t3_vantage_revalidation          = 168
+t3_profile_repin                 = 0          # event-driven; 0 = must be tied to image_version
+t4_upstream_check                = 168
+t5_pool_revalidation             = 168
+t6_reshuffle                     = 168
+backup_restore_dryrun            = 720
+descriptor_signing_key_rotation  = 8760       # yearly

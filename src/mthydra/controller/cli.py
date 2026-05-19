@@ -419,11 +419,21 @@ def _cmd_serve(args) -> int:
 
     # Enable audit-log file mirror (spec §4.7)
     from mthydra.controller.state.audit import set_audit_mirror
+    from mthydra.descriptor.scheduler import DescriptorRotator
+
     set_audit_mirror("/var/lib/mthydra/logs/audit.log")
+
+    rotator = DescriptorRotator(
+        db_path=args.db_path,
+        rotation_interval_seconds=cfg.descriptor.rotation_interval_hours * 3600,
+        validity_window_seconds=cfg.descriptor.validity_window_hours * 3600,
+        mode=args.mode,
+    )
 
     if args.mode != "offline":
         orch.arm()
-        print("serve: backup orchestrator armed", flush=True)
+        rotator.arm()
+        print("serve: backup orchestrator + descriptor rotator armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -433,6 +443,7 @@ def _cmd_serve(args) -> int:
             stop_event.wait(timeout=60)
     finally:
         orch.disarm()
+        rotator.disarm()
         print("serve: stopped", flush=True)
     return 0
 

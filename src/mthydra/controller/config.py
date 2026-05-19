@@ -46,11 +46,18 @@ class ObligationsConfig:
 
 
 @dataclass(frozen=True)
+class DescriptorConfig:
+    rotation_interval_hours: int
+    validity_window_hours: int
+
+
+@dataclass(frozen=True)
 class Config:
     node: NodeConfig
     backup: BackupConfig
     gap_monitor: GapMonitorConfig
     obligations: ObligationsConfig
+    descriptor: DescriptorConfig
 
 
 _VALID_ROLES = {"active", "standby"}
@@ -84,6 +91,8 @@ def load_config(path: Path | str) -> Config:
     if role not in _VALID_ROLES:
         raise ConfigError(f"node.role must be one of {sorted(_VALID_ROLES)}, got {role!r}")
 
+    desc = raw.get("descriptor", {})
+
     return Config(
         node=NodeConfig(role=role, hostname=str(node["hostname"])),
         backup=BackupConfig(
@@ -108,4 +117,8 @@ def load_config(path: Path | str) -> Config:
             recipient_email=str(gap["recipient_email"]),
         ),
         obligations=ObligationsConfig(timers_hours={str(k): int(v) for k, v in obligations.items()}),
+        descriptor=DescriptorConfig(
+            rotation_interval_hours=int(desc.get("rotation_interval_hours", 1)),
+            validity_window_hours=int(desc.get("validity_window_hours", 24)),
+        ),
     )
