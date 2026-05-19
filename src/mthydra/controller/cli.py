@@ -218,6 +218,12 @@ def build_parser() -> argparse.ArgumentParser:
     cd.add_argument("--config", default="/etc/mthydra/controller.toml")
     cd.add_argument("--json", action="store_true")
 
+    cps = sub.add_parser("cover-pool-stats",
+                          help="pool counts + rotation_frozen + oldest ages")
+    cps.add_argument("--db-path", default=DEFAULT_DB)
+    cps.add_argument("--config", default="/etc/mthydra/controller.toml")
+    cps.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -408,6 +414,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "cover-due":
         return _cmd_cover_due(args)
+
+    if args.cmd == "cover-pool-stats":
+        return _cmd_cover_pool_stats(args)
 
     return 1
 
@@ -1010,6 +1019,39 @@ def _cmd_cover_due(args) -> int:
                 print("stale candidate_verified (will downgrade on next sweep):")
                 for r in stale:
                     print(f"  {r['domain']}  last_verified_at={r['last_verified_at']}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_cover_pool_stats(args) -> int:
+    import json
+    from dataclasses import asdict
+
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.cover_pool import pool_health
+    from mthydra.controller.state.db import connect
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"cover-pool-stats: config error: {e}", file=sys.stderr)
+        return 2
+
+    conn = connect(args.db_path)
+    try:
+        h = pool_health(conn, freeze_threshold=cfg.cover_pool.freeze_threshold)
+        if args.json:
+            print(json.dumps(asdict(h), indent=2))
+        else:
+            print(f"candidate_unverified : {h.candidate_unverified}")
+            print(f"candidate_verified   : {h.candidate_verified}")
+            print(f"in_use               : {h.in_use}")
+            print(f"burned               : {h.burned}")
+            print(f"rotation_frozen      : {h.rotation_frozen}")
+            print(f"oldest_in_use_at     : {h.oldest_in_use_at}")
+            print(f"oldest_unverified_at : {h.oldest_unverified_at}")
+            print(f"last_attest_at       : {h.last_attest_at}")
         return 0
     finally:
         conn.close()

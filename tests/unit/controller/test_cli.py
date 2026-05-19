@@ -731,3 +731,31 @@ def test_cover_due_lists_overdue_and_stale(tmp_path, age_recipient, capsys):
     assert "due_for_rotation" in out
     assert any(r["domain"] == "old.org" for r in out["due_for_rotation"])
     assert "pool_health" in out
+
+
+# ===== Task 19: cover-pool-stats =====
+
+def test_cover_pool_stats_json(tmp_path, age_recipient, capsys):
+    import json
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    run(["cover-add", "a.org", "--db-path", str(db)])
+    capsys.readouterr()
+    rc = run([
+        "cover-pool-stats", "--db-path", str(db),
+        "--config", str(cfg_path),
+        "--json",
+    ])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["candidate_unverified"] == 1
+    assert payload["candidate_verified"] == 0
+    assert payload["in_use"] == 0
+    assert "rotation_frozen" in payload
