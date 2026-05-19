@@ -64,3 +64,34 @@ def test_attest_verified_rejects_non_unverified(conn):
     attest_verified(conn, "example.org", from_vantage="ru-vps-01", at=NOW)
     with pytest.raises(ValueError, match="candidate_unverified"):
         attest_verified(conn, "example.org", from_vantage="ru-vps-01", at=NOW)
+
+
+def test_assign_to_box_sets_entered_in_use_at(conn):
+    _seed_live_box(conn, "box-1")
+    add_candidate(conn, "example.org", added_at=NOW)
+    attest_verified(conn, "example.org", from_vantage="ru-vps-01", at=NOW)
+    assign_to_box(conn, "example.org", box_id="box-1", at="2026-05-20T00:00:00Z")
+    rows = list_by_state(conn, "in_use")
+    assert rows[0].entered_in_use_at == "2026-05-20T00:00:00Z"
+    assert rows[0].assigned_box_id == "box-1"
+
+
+def test_assign_to_box_refuses_non_verified(conn):
+    _seed_live_box(conn, "box-1")
+    add_candidate(conn, "example.org", added_at=NOW)
+    with pytest.raises(ValueError, match="candidate_verified"):
+        assign_to_box(conn, "example.org", box_id="box-1", at=NOW)
+
+
+def test_assign_to_box_refuses_stale_after_downgrade(conn):
+    _seed_live_box(conn, "box-1")
+    add_candidate(conn, "example.org", added_at="2026-04-01T00:00:00Z")
+    attest_verified(
+        conn, "example.org", from_vantage="ru-vps-01",
+        at="2026-04-01T01:00:00Z",
+    )
+    downgrade_stale_verified(
+        conn, now="2026-05-19T00:00:00Z", reverify_after_days=30,
+    )
+    with pytest.raises(ValueError, match="candidate_verified"):
+        assign_to_box(conn, "example.org", box_id="box-1", at=NOW)
