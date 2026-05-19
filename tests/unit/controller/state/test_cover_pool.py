@@ -151,3 +151,30 @@ def test_list_due_for_rotation_returns_overdue_only(conn):
 
     due = list_due_for_rotation(conn, now="2026-05-19T00:00:00Z", rotation_ttl_days=14)
     assert [r.domain for r in due] == ["old.org"]
+
+
+def test_pool_health_counts_and_freeze_flag(conn):
+    _seed_live_box(conn, "box-1")
+    add_candidate(conn, "a.org", added_at=NOW)
+    attest_verified(conn, "a.org", from_vantage="ru-vps-01", at=NOW)
+    add_candidate(conn, "b.org", added_at=NOW)            # unverified
+    add_candidate(conn, "c.org", added_at=NOW)
+    attest_verified(conn, "c.org", from_vantage="ru-vps-01", at=NOW)
+    assign_to_box(conn, "c.org", box_id="box-1", at=NOW)  # in_use
+
+    h = pool_health(conn, freeze_threshold=2)
+    assert h.candidate_unverified == 1
+    assert h.candidate_verified == 1
+    assert h.in_use == 1
+    assert h.burned == 0
+    assert h.rotation_frozen is True
+
+
+def test_pool_health_not_frozen_when_above_threshold(conn):
+    add_candidate(conn, "a.org", added_at=NOW)
+    attest_verified(conn, "a.org", from_vantage="ru-vps-01", at=NOW)
+    add_candidate(conn, "b.org", added_at=NOW)
+    attest_verified(conn, "b.org", from_vantage="ru-vps-01", at=NOW)
+    h = pool_health(conn, freeze_threshold=2)
+    assert h.candidate_verified == 2
+    assert h.rotation_frozen is False
