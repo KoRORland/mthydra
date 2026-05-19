@@ -257,7 +257,8 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
     """In dryrun mode, _build_destination must point at bucket_override, not cfg.backup.bucket."""
     from mthydra.controller.cli import _build_destination
     from mthydra.controller.config import (
-        BackupConfig, Config, GapMonitorConfig, NodeConfig, ObligationsConfig, RetentionConfig
+        BackupConfig, Config, DescriptorConfig, GapMonitorConfig,
+        NodeConfig, ObligationsConfig, RetentionConfig,
     )
 
     cfg = Config(
@@ -274,6 +275,7 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
             poll_interval_minutes=30, alarm_threshold_hours=48, recipient_email="op@example.org"
         ),
         obligations=ObligationsConfig(),
+        descriptor=DescriptorConfig(rotation_interval_hours=1, validity_window_hours=24),
     )
 
     dest_prod = _build_destination(cfg, "secret", mode="production", bucket_override="override-bucket")
