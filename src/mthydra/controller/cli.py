@@ -183,6 +183,13 @@ def build_parser() -> argparse.ArgumentParser:
     dmp.add_argument("--db-path", default=DEFAULT_DB)
     dmp.add_argument("--config", default="/etc/mthydra/controller.toml")
 
+    # ----- spec F subcommands -----
+
+    ar = sub.add_parser("authority-rotate",
+                         help="rotate credential_authority — insert new generation, retire current")
+    ar.add_argument("--db-path", default=DEFAULT_DB)
+    ar.add_argument("--config", default="/etc/mthydra/controller.toml")
+
     # serve — long-running daemon stub (spec F will expand this)
     srv_p = sub.add_parser(
         "serve",
@@ -425,6 +432,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "cover-pool-stats":
         return _cmd_cover_pool_stats(args)
+
+    if args.cmd == "authority-rotate":
+        return _cmd_authority_rotate(args)
 
     return 1
 
@@ -1054,6 +1064,45 @@ def _cmd_cover_due(args) -> int:
                 print("stale candidate_verified (will downgrade on next sweep):")
                 for r in stale:
                     print(f"  {r['domain']}  last_verified_at={r['last_verified_at']}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_authority_rotate(args) -> int:
+    import json as _json
+
+    from mthydra.controller.bootstrap import _placeholder_keypair_pem
+    from mthydra.controller.state.audit import log_event
+    from mthydra.controller.state.authority import (
+        current_authority, insert_authority, retire_authority,
+    )
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.node_state import current_node_state
+
+    conn = connect(args.db_path)
+    try:
+        ns = current_node_state(conn)
+        if ns.role != "active":
+            print("authority-rotate: refused — active-only command", file=sys.stderr)
+            return 2
+        try:
+            current = current_authority(conn)
+        except LookupError:
+            print("authority-rotate: no active credential_authority found", file=sys.stderr)
+            return 2
+        new_gen = current.generation + 1
+        now = _now()
+        priv, pub = _placeholder_keypair_pem()
+        insert_authority(conn, generation=new_gen, privkey_pem=priv,
+                         pubkey_pem=pub, created_at=now)
+        retire_authority(conn, current.generation, at=now)
+        log_event(conn, ts=now, actor="operator", action="authority_rotated",
+                  target=str(new_gen),
+                  details_json=_json.dumps({"new_generation": new_gen,
+                                             "retired_generation": current.generation}))
+        print(f"authority-rotate: new generation {new_gen} active; "
+              f"generation {current.generation} retired")
         return 0
     finally:
         conn.close()

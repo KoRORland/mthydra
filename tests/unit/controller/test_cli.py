@@ -767,6 +767,40 @@ def test_cover_pool_stats_json(tmp_path, age_recipient, capsys):
     assert "rotation_frozen" in payload
 
 
+# ===== Task 10: authority-rotate =====
+
+def test_authority_rotate_adds_new_generation(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["authority-rotate", "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    from mthydra.controller.state.authority import list_authorities
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    auths = list_authorities(conn)
+    assert len(auths) == 2
+    assert sum(1 for a in auths if a.retired_at is None) == 1
+
+
+def test_authority_rotate_refuses_on_standby(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--role", "standby", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["authority-rotate", "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 2
+    err = capsys.readouterr().err.lower()
+    assert "active" in err or "standby" in err
+
+
 def test_serve_arms_cover_pool_sweeps_in_offline_mode(tmp_path, age_recipient, monkeypatch):
     """Smoke: serve with --mode offline arms the sweeps as no-ops and returns 0 quickly."""
     import signal
