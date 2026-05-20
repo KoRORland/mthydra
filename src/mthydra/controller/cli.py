@@ -71,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PROVIDER=CREDENTIAL",
         help="provider credential (repeatable)",
     )
+    init_p.add_argument(
+        "--role",
+        choices=["active", "standby"],
+        default="active",
+        help="initialise as active (default) or standby (skeleton DB)",
+    )
 
     # startup-check
     sc_p = sub.add_parser("startup-check", help="run §10 self-checks and exit 0 on success")
@@ -258,12 +264,14 @@ def run(argv: list[str]) -> int:
                     "t5_pool_revalidation": 168,
                     "t6_reshuffle": 168,
                     "descriptor_signing_key_rotation": 8760,
-                    "cover_pool_reverify_pass_proven": 60 * 24,   # reverify_after_days * 2 = 60 days
-                    "cover_pool_replenishment_proven": 90 * 24,   # 90 days
-                },
+                    "cover_pool_reverify_pass_proven": 60 * 24,
+                    "cover_pool_replenishment_proven": 90 * 24,
+                    "eu_standby_drill_proven": 30 * 24,
+                } if args.role == "active" else {},
                 now=_now(),
+                role=args.role,
             )
-            print(f"initialized {args.db_path}")
+            print(f"initialized {args.db_path} (role={args.role})")
             return 0
         except BootstrapError as e:
             print(f"bootstrap error: {e}", file=sys.stderr)

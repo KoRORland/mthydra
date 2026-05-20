@@ -37,25 +37,30 @@ def init_state(
     provider_credentials: dict[str, str],
     obligation_timer_hours: dict[str, int],
     now: str,
+    role: str = "active",
 ) -> None:
-    """Create a fresh state.sqlite at db_path with all required seed rows.
+    """Create a fresh state.sqlite at db_path.
+
+    role='active' (default): seeds credential_authority + descriptor_signing_key
+        + provider credentials + obligation_clocks + node_state='active'.
+    role='standby': seeds only schema + B2 provider credential + node_state='standby'.
+        Refuses if 'b2' not in provider_credentials.
 
     Refuses if db_path already exists (operator must explicitly remove first).
     Validates the age recipient before writing anything.
-
-    Steps (spec A §10.1):
-    1. Refuse if db_path exists.
-    2. Validate age_recipient.
-    3. Create schema.
-    4. Insert credential_authority generation=1 (placeholder keypair).
-    5. Insert descriptor_signing_key generation=1 (placeholder keypair).
-    6. Insert provider_api_credentials rows.
-    7. Initialize obligation_clocks rows.
 
     Note: the synthetic do_backup step (§10.1 step 7) is the CLI's responsibility,
     not init_state's, so that init_state remains easily testable without a live
     S3 endpoint.
     """
+    if role not in ("active", "standby"):
+        raise BootstrapError(f"unknown role {role!r}")
+
+    if role == "standby" and "b2" not in provider_credentials:
+        raise BootstrapError(
+            "standby role requires a 'b2' provider credential (for heartbeat publishing)"
+        )
+
     db_path = Path(db_path)
     if db_path.exists():
         raise BootstrapError(
@@ -69,27 +74,36 @@ def init_state(
     conn = connect(db_path)
     try:
         apply_schema(conn)
-
-        priv, pub = _placeholder_keypair_pem()
-        insert_authority(conn, generation=1, privkey_pem=priv, pubkey_pem=pub, created_at=now)
-
-        # Spec B: generate a real Ed25519 keypair for the descriptor signing key.
-        dpriv, dpub = generate_keypair()
-        insert_signing_key(conn, generation=1, privkey=dpriv, pubkey=dpub, created_at=now)
-
-        for provider, cred in provider_credentials.items():
-            set_provider_credential(conn, provider=provider, credential=cred, at=now)
-
-        for obligation_id, hours in obligation_timer_hours.items():
-            next_due = _add_hours(now, hours) if hours > 0 else now
-            set_obligation(
-                conn,
-                obligation_id=obligation_id,
-                last_proven_at=now,
-                proven_by="bootstrap",
-                next_due_at=next_due,
-                details=None,
+        # apply_schema seeds node_state='active' by default; override for standby.
+        if role == "standby":
+            conn.execute("UPDATE node_state SET role='standby' WHERE rowid=1")
+            conn.commit()
+            set_provider_credential(
+                conn, provider="b2",
+                credential=provider_credentials["b2"], at=now,
             )
+            # Standby seeds no authority, no keys, no obligations from its own DB.
+        else:
+            priv, pub = _placeholder_keypair_pem()
+            insert_authority(conn, generation=1, privkey_pem=priv, pubkey_pem=pub, created_at=now)
+
+            # Spec B: generate a real Ed25519 keypair for the descriptor signing key.
+            dpriv, dpub = generate_keypair()
+            insert_signing_key(conn, generation=1, privkey=dpriv, pubkey=dpub, created_at=now)
+
+            for provider, cred in provider_credentials.items():
+                set_provider_credential(conn, provider=provider, credential=cred, at=now)
+
+            for obligation_id, hours in obligation_timer_hours.items():
+                next_due = _add_hours(now, hours) if hours > 0 else now
+                set_obligation(
+                    conn,
+                    obligation_id=obligation_id,
+                    last_proven_at=now,
+                    proven_by="bootstrap",
+                    next_due_at=next_due,
+                    details=None,
+                )
     finally:
         conn.close()
 

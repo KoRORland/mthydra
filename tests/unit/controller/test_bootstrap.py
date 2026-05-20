@@ -149,3 +149,62 @@ def test_init_seeds_cover_pool_obligations(tmp_path):
     ids = {o.obligation_id for o in list_obligations(conn)}
     assert "cover_pool_reverify_pass_proven" in ids
     assert "cover_pool_replenishment_proven" in ids
+
+
+def test_init_state_standby_creates_skeleton(tmp_path):
+    """Standby init seeds only schema + B2 credential + node_state; no authority, no keys."""
+    db = tmp_path / "state.sqlite"
+    init_state(
+        db_path=db,
+        age_recipient=FAKE_RECIPIENT,
+        provider_credentials={"b2": "id:secret"},
+        obligation_timer_hours={},
+        now="2026-05-20T00:00:00Z",
+        role="standby",
+    )
+    from mthydra.controller.state.authority import list_authorities
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.node_state import current_node_state
+    conn = connect(db)
+    assert list_authorities(conn) == []
+    cnt = conn.execute("SELECT COUNT(*) FROM descriptor_signing_key").fetchone()[0]
+    assert cnt == 0
+    ns = current_node_state(conn)
+    assert ns.role == "standby"
+    creds = conn.execute("SELECT provider FROM provider_api_credentials").fetchall()
+    assert creds == [("b2",)]
+
+
+def test_init_state_active_default_role(tmp_path):
+    """Active init (no --role) seeds full state and node_state='active'."""
+    db = tmp_path / "state.sqlite"
+    init_state(
+        db_path=db,
+        age_recipient=FAKE_RECIPIENT,
+        provider_credentials={"b2": "id:secret"},
+        obligation_timer_hours={"backup_restore_dryrun": 720},
+        now="2026-05-20T00:00:00Z",
+        role="active",
+    )
+    from mthydra.controller.state.authority import list_authorities
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.node_state import current_node_state
+    conn = connect(db)
+    assert len(list_authorities(conn)) == 1
+    ns = current_node_state(conn)
+    assert ns.role == "active"
+
+
+def test_init_state_standby_refuses_no_b2_credential(tmp_path):
+    """Standby requires a B2 credential; init without one raises."""
+    from mthydra.controller.bootstrap import BootstrapError
+    db = tmp_path / "state.sqlite"
+    with pytest.raises(BootstrapError, match="b2"):
+        init_state(
+            db_path=db,
+            age_recipient=FAKE_RECIPIENT,
+            provider_credentials={"aws": "id:secret"},
+            obligation_timer_hours={},
+            now="2026-05-20T00:00:00Z",
+            role="standby",
+        )
