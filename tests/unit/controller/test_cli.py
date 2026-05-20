@@ -290,7 +290,7 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
     from mthydra.controller.cli import _build_destination
     from mthydra.controller.config import (
         BackupConfig, Config, CoverPoolConfig, DescriptorConfig, GapMonitorConfig,
-        NodeConfig, ObligationsConfig, RetentionConfig,
+        NodeConfig, ObligationsConfig, RetentionConfig, StandbyConfig,
     )
 
     cfg = Config(
@@ -315,6 +315,12 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
             reverify_sweep_interval_seconds=3600,
             rotation_sweep_interval_seconds=3600,
             replenishment_interval_days=90,
+        ),
+        standby=StandbyConfig(
+            node_id="",
+            heartbeat_interval_seconds=60,
+            heartbeat_poll_interval_seconds=300,
+            staleness_alert_seconds=600,
         ),
     )
 

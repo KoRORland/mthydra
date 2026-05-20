@@ -62,6 +62,14 @@ class CoverPoolConfig:
 
 
 @dataclass(frozen=True)
+class StandbyConfig:
+    node_id: str
+    heartbeat_interval_seconds: int
+    heartbeat_poll_interval_seconds: int
+    staleness_alert_seconds: int
+
+
+@dataclass(frozen=True)
 class Config:
     node: NodeConfig
     backup: BackupConfig
@@ -69,6 +77,7 @@ class Config:
     obligations: ObligationsConfig
     descriptor: DescriptorConfig
     cover_pool: CoverPoolConfig
+    standby: StandbyConfig
 
 
 _VALID_ROLES = {"active", "standby"}
@@ -116,6 +125,25 @@ def _load_cover_pool(data: dict) -> CoverPoolConfig:
         replenishment_interval_days=_require_positive(
             "cover_pool.replenishment_interval_days",
             sec.get("replenishment_interval_days", 90),
+        ),
+    )
+
+
+def _load_standby(data: dict) -> StandbyConfig:
+    sec = data.get("standby", {})
+    return StandbyConfig(
+        node_id=str(sec.get("node_id", "")),
+        heartbeat_interval_seconds=_require_positive(
+            "standby.heartbeat_interval_seconds",
+            sec.get("heartbeat_interval_seconds", 60),
+        ),
+        heartbeat_poll_interval_seconds=_parse_interval_seconds(
+            "standby.heartbeat_poll_interval",
+            sec.get("heartbeat_poll_interval", 300),
+        ),
+        staleness_alert_seconds=_require_positive(
+            "standby.staleness_alert_seconds",
+            sec.get("staleness_alert_seconds", 600),
         ),
     )
 
@@ -173,4 +201,5 @@ def load_config(path: Path | str) -> Config:
             validity_window_hours=int(desc.get("validity_window_hours", 24)),
         ),
         cover_pool=_load_cover_pool(raw),
+        standby=_load_standby(raw),
     )

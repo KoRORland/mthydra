@@ -46,3 +46,9 @@ freeze_threshold        = 2
 reverify_sweep_interval = "1h"
 rotation_sweep_interval = "1h"
 replenishment_interval_days = 90
+
+[standby]
+node_id                      = ""        # set on standby hosts only; eu-standby-<region>-<n>
+heartbeat_interval_seconds   = 60
+heartbeat_poll_interval      = "5m"
+staleness_alert_seconds      = 600
