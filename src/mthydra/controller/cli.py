@@ -270,6 +270,15 @@ def build_parser() -> argparse.ArgumentParser:
     enl.add_argument("--db-path", default=DEFAULT_DB)
     enl.add_argument("--json", action="store_true")
 
+    # ----- spec F: standby-drill-proven -----
+
+    sdp = sub.add_parser("standby-drill-proven",
+                          help="operator attests an end-to-end T2 §7 drill against a standby")
+    sdp.add_argument("--node-id", required=True)
+    sdp.add_argument("--case", choices=["A", "B"], required=True)
+    sdp.add_argument("--notes", default=None)
+    sdp.add_argument("--db-path", default=DEFAULT_DB)
+
     return p
 
 
@@ -480,6 +489,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "eu-node-list":
         return _cmd_eu_node_list(args)
+
+    if args.cmd == "standby-drill-proven":
+        return _cmd_standby_drill_proven(args)
 
     return 1
 
@@ -1321,3 +1333,42 @@ def _cmd_eu_node_list(args) -> int:
         conn.close()
 
 
+def _cmd_standby_drill_proven(args) -> int:
+    import json as _json
+
+    from mthydra.controller.state.audit import log_event
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import prove, set_obligation
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "standby-drill-proven")
+        if rc is not None:
+            return rc
+        now = _now()
+        case = args.case
+        try:
+            prove(conn, f"t2_dryrun_case{case}",
+                  proven_by="operator", at=now,
+                  next_due_at=_add_hours_iso(now, 30 * 24),
+                  details=args.notes)
+        except KeyError:
+            set_obligation(conn,
+                           obligation_id=f"t2_dryrun_case{case}",
+                           last_proven_at=now,
+                           proven_by="operator",
+                           next_due_at=_add_hours_iso(now, 30 * 24),
+                           details=args.notes)
+        set_obligation(conn,
+                       obligation_id=f"eu_standby_drill_proven::{args.node_id}",
+                       last_proven_at=now,
+                       proven_by="operator",
+                       next_due_at=_add_hours_iso(now, 30 * 24),
+                       details=args.notes)
+        log_event(conn, ts=now, actor="operator", action="eu_standby_drill_proven",
+                  target=args.node_id,
+                  details_json=_json.dumps({"case": case, "notes": args.notes}))
+        print(f"standby-drill-proven: case {case} attested for {args.node_id}")
+        return 0
+    finally:
+        conn.close()

@@ -931,3 +931,66 @@ def test_serve_arms_cover_pool_sweeps_in_offline_mode(tmp_path, age_recipient, m
     ])
     assert rc == 0
 
+
+# ===== Task 13: standby-drill-proven =====
+
+def test_standby_drill_proven_case_a_proves_both_obligations(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    run(["eu-node-add", "eu-standby-de-1", "--hostname", "h",
+         "--provider", "hetzner", "--region", "de", "--db-path", str(db)])
+
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import list_obligations, set_obligation
+    conn = connect(db)
+    set_obligation(conn, "t2_dryrun_caseA",
+                   last_proven_at="2025-01-01T00:00:00Z",
+                   proven_by="bootstrap",
+                   next_due_at="2025-02-01T00:00:00Z")
+    conn.close()
+
+    rc = run(["standby-drill-proven", "--node-id", "eu-standby-de-1",
+              "--case", "A", "--notes", "test drill",
+              "--db-path", str(db)])
+    assert rc == 0
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    assert obs["t2_dryrun_caseA"].last_proven_at > "2025-01-01T00:00:00Z"
+    assert "eu_standby_drill_proven::eu-standby-de-1" in obs
+    conn.close()
+
+
+def test_standby_drill_proven_case_b_proves_caseB(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    run(["eu-node-add", "eu-standby-de-1", "--hostname", "h",
+         "--provider", "hetzner", "--region", "de", "--db-path", str(db)])
+
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import list_obligations, set_obligation
+    conn = connect(db)
+    # pin to a known-old timestamp so the drill's "now" is guaranteed newer
+    set_obligation(conn, "t2_dryrun_caseB",
+                   last_proven_at="2025-01-01T00:00:00Z",
+                   proven_by="bootstrap",
+                   next_due_at="2025-02-01T00:00:00Z")
+    pre = next((o for o in list_obligations(conn) if o.obligation_id == "t2_dryrun_caseB"), None)
+    pre_at = pre.last_proven_at if pre else None
+    conn.close()
+
+    run(["standby-drill-proven", "--node-id", "eu-standby-de-1",
+         "--case", "B", "--db-path", str(db)])
+
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    assert "t2_dryrun_caseB" in obs
+    if pre_at is not None:
+        assert obs["t2_dryrun_caseB"].last_proven_at > pre_at
+    conn.close()
+
