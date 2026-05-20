@@ -983,6 +983,11 @@ def _cmd_cover_rotate(args) -> int:
         except ValueError as e:
             print(f"cover-rotate: {e}", file=sys.stderr)
             return 2
+        conn.execute(
+            "DELETE FROM obligation_clocks WHERE obligation_id=?",
+            (f"cover_pool_rotation_pending::{args.domain}",),
+        )
+        conn.commit()
         print(f"cover-rotate: {args.domain} -> burned (reason={args.reason})")
         return 0
     finally:
