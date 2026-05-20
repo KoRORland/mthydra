@@ -81,3 +81,46 @@ class S3Destination:
             if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey"):
                 return False
             raise
+
+    @staticmethod
+    def _heartbeat_key(node_id: str) -> str:
+        return f"standby/{node_id}/heartbeat.json"
+
+    def put_heartbeat(self, *, node_id: str, payload: bytes) -> None:
+        """Upload a standby heartbeat object.
+
+        Goes into the same bucket (Object Lock COMPLIANCE required); the
+        accumulated versions are accepted residual (spec F §11).
+        """
+        retain_until = datetime.now(timezone.utc) + timedelta(days=self.object_lock_days)
+        self._client.put_object(
+            Bucket=self.bucket,
+            Key=self._heartbeat_key(node_id),
+            Body=payload,
+            ContentType="application/json",
+            ObjectLockMode="COMPLIANCE",
+            ObjectLockRetainUntilDate=retain_until,
+        )
+
+    def get_heartbeat(self, *, node_id: str) -> tuple[bytes, str]:
+        """Returns (payload, etag). Raises ClientError on absence."""
+        obj = self._client.get_object(
+            Bucket=self.bucket, Key=self._heartbeat_key(node_id)
+        )
+        return obj["Body"].read(), obj["ETag"]
+
+    def head_heartbeat(self, *, node_id: str) -> dict[str, Any] | None:
+        """Returns {'etag', 'last_modified_iso', 'size_bytes'} or None if absent."""
+        try:
+            obj = self._client.head_object(
+                Bucket=self.bucket, Key=self._heartbeat_key(node_id)
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey"):
+                return None
+            raise
+        return {
+            "etag": obj["ETag"],
+            "last_modified_iso": obj["LastModified"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "size_bytes": int(obj["ContentLength"]),
+        }

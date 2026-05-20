@@ -92,3 +92,33 @@ def test_put_blob_uses_compliance_retention(s3_env, tmp_path):
     dest.put_blob(generation=1, blob_path=blob)
     meta = s3_env.head_object(Bucket=BUCKET, Key="gen-0000000001.age")
     assert meta.get("ObjectLockMode") == "COMPLIANCE"
+
+
+def _make_dest(s3_env):
+    dest = S3Destination(None, BUCKET, "x", "y", "us-east-1", object_lock_days=30)
+    dest._client = s3_env
+    return dest
+
+
+def test_put_and_get_heartbeat_roundtrip(s3_env):
+    dest = _make_dest(s3_env)
+    payload = b'{"node_id":"eu-standby-de-1","ts":"2026-05-20T00:00:00Z"}'
+    dest.put_heartbeat(node_id="eu-standby-de-1", payload=payload)
+    body, etag = dest.get_heartbeat(node_id="eu-standby-de-1")
+    assert body == payload
+    assert etag
+
+
+def test_head_heartbeat_returns_none_when_absent(s3_env):
+    dest = _make_dest(s3_env)
+    result = dest.head_heartbeat(node_id="eu-no-such-node")
+    assert result is None
+
+
+def test_head_heartbeat_returns_etag_and_modified(s3_env):
+    dest = _make_dest(s3_env)
+    dest.put_heartbeat(node_id="eu-standby-de-1", payload=b'{"x":1}')
+    info = dest.head_heartbeat(node_id="eu-standby-de-1")
+    assert info is not None
+    assert "etag" in info
+    assert "last_modified_iso" in info
