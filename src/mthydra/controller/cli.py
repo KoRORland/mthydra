@@ -804,6 +804,10 @@ def _cmd_serve(args) -> int:
     # Enable audit-log file mirror (spec §4.7)
     from mthydra.controller.state.audit import set_audit_mirror
     from mthydra.descriptor.scheduler import DescriptorRotator
+    from mthydra.controller.state.cover_pool_scheduler import (
+        CoverPoolReverifySweep,
+        CoverPoolRotationSweep,
+    )
 
     set_audit_mirror("/var/lib/mthydra/logs/audit.log")
 
@@ -813,11 +817,26 @@ def _cmd_serve(args) -> int:
         validity_window_seconds=cfg.descriptor.validity_window_hours * 3600,
         mode=args.mode,
     )
+    reverify_sweep = CoverPoolReverifySweep(
+        db_path=args.db_path,
+        reverify_after_days=cfg.cover_pool.reverify_after_days,
+        sweep_interval_seconds=cfg.cover_pool.reverify_sweep_interval_seconds,
+        mode=args.mode,
+    )
+    rotation_sweep = CoverPoolRotationSweep(
+        db_path=args.db_path,
+        rotation_ttl_days=cfg.cover_pool.rotation_ttl_days,
+        freeze_threshold=cfg.cover_pool.freeze_threshold,
+        sweep_interval_seconds=cfg.cover_pool.rotation_sweep_interval_seconds,
+        mode=args.mode,
+    )
 
     if args.mode != "offline":
         orch.arm()
         rotator.arm()
-        print("serve: backup orchestrator + descriptor rotator armed", flush=True)
+        reverify_sweep.arm()
+        rotation_sweep.arm()
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -828,11 +847,14 @@ def _cmd_serve(args) -> int:
     finally:
         orch.disarm()
         rotator.disarm()
+        reverify_sweep.disarm()
+        rotation_sweep.disarm()
         print("serve: stopped", flush=True)
     return 0
 
 
 def _install_signal_handler():
+    import signal
     import threading
 
     stop_event = threading.Event()

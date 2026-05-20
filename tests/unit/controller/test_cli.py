@@ -759,3 +759,54 @@ def test_cover_pool_stats_json(tmp_path, age_recipient, capsys):
     assert payload["candidate_verified"] == 0
     assert payload["in_use"] == 0
     assert "rotation_frozen" in payload
+
+
+def test_serve_arms_cover_pool_sweeps_in_offline_mode(tmp_path, age_recipient, monkeypatch):
+    """Smoke: serve with --mode offline arms the sweeps as no-ops and returns 0 quickly."""
+    import signal
+    import pathlib
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    # Write a recipient file at the location _cmd_serve reads from
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(age_recipient + "\n")
+    monkeypatch.setattr("mthydra.controller.cli.DEFAULT_RECIPIENT_FILE", str(recipient_file))
+
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+
+    # _cmd_serve tries to mkdir /var/lib/mthydra/tmp which requires root.
+    # Redirect that hardcoded path to tmp_path.
+    _real_mkdir = pathlib.Path.mkdir
+    _serve_tmp = tmp_path / "serve_tmp"
+
+    def _patched_mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        if str(self) == "/var/lib/mthydra/tmp":
+            _serve_tmp.mkdir(parents=True, exist_ok=True)
+            return
+        _real_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", _patched_mkdir)
+
+    # Cause stop_event to fire on the first iteration so the daemon exits.
+    # _cmd_serve does `stop_event.wait(timeout=60)` after arming — we patch
+    # threading.Event.wait to return True (event "set") immediately.
+    import threading as _t
+    def _fast_wait(self, timeout=None):
+        self.set()
+        return True
+    monkeypatch.setattr(_t.Event, "wait", _fast_wait)
+
+    rc = run([
+        "--mode", "offline",
+        "--bucket-override", "off-bucket",
+        "serve",
+        "--db-path", str(db),
+        "--config", str(cfg_path),
+    ])
+    assert rc == 0
