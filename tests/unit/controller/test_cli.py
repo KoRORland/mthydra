@@ -114,7 +114,7 @@ def test_backup_now_performs_real_backup(tmp_path):
     r = _sp.run(["age-keygen", "-o", str(keyfile)], capture_output=True, text=True, check=True)
     recipient = next(
         line.removeprefix("# public key: ").strip()
-        for line in r.stderr.splitlines()
+        for line in keyfile.read_text().splitlines()
         if line.startswith("# public key: ")
     )
     recipient_file = tmp_path / "age-recipient.txt"

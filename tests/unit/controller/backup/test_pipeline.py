@@ -31,7 +31,7 @@ def keypair(tmp_path):
     )
     recipient = next(
         line.removeprefix("# public key: ").strip()
-        for line in r.stderr.splitlines()
+        for line in keyfile.read_text().splitlines()
         if line.startswith("# public key: ")
     )
     return keyfile, recipient

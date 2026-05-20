@@ -14,7 +14,7 @@ def keypair(tmp_path):
     result = subprocess.run(["age-keygen", "-o", str(keyfile)], capture_output=True, text=True, check=True)
     # `age-keygen` prints the recipient (public key) to stderr in the form `# public key: age1...`
     recipient = ""
-    for line in result.stderr.splitlines():
+    for line in keyfile.read_text().splitlines():
         if line.startswith("# public key: "):
             recipient = line.removeprefix("# public key: ").strip()
             break
