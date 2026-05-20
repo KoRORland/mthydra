@@ -994,3 +994,45 @@ def test_standby_drill_proven_case_b_proves_caseB(tmp_path, age_recipient):
         assert obs["t2_dryrun_caseB"].last_proven_at > pre_at
     conn.close()
 
+
+# ===== Task 14: role-gated serve =====
+
+def test_serve_standby_arms_publisher_not_orchestrator(tmp_path, age_recipient, monkeypatch):
+    """Standby serve loop: heartbeat publisher armed; backup/descriptor/cover-pool NOT."""
+    import threading as _t
+    from mthydra.controller.cli import run
+
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    # _MIN_TOML has no [standby] section — append it with node_id required for standby serve.
+    cfg_path.write_text(
+        _MIN_TOML
+        + "\n[standby]\n"
+        + "node_id = \"eu-standby-de-1\"\n"
+        + "heartbeat_interval_seconds = 60\n"
+        + "heartbeat_poll_interval = \"5m\"\n"
+        + "staleness_alert_seconds = 600\n"
+    )
+    run(["init", "--role", "standby", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(age_recipient + "\n")
+    monkeypatch.setattr("mthydra.controller.cli.DEFAULT_RECIPIENT_FILE",
+                        str(recipient_file))
+
+    def _fast_wait(self, timeout=None):
+        self.set()
+        return True
+    monkeypatch.setattr(_t.Event, "wait", _fast_wait)
+
+    rc = run([
+        "--mode", "offline",
+        "--bucket-override", "off-bucket",
+        "serve",
+        "--db-path", str(db),
+        "--config", str(cfg_path),
+    ])
+    assert rc == 0
+

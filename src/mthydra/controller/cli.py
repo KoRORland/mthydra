@@ -881,6 +881,19 @@ def _cmd_serve(args) -> int:
     from mthydra.controller.state.tokens import get_provider_credential
 
     cfg = load_config(args.config)
+    mode = args.mode
+
+    from mthydra.controller.state.node_state import current_node_state
+    _ns_conn = connect(args.db_path)
+    try:
+        ns = current_node_state(_ns_conn)
+    finally:
+        _ns_conn.close()
+
+    if ns.role == "standby":
+        return _serve_standby(args, cfg, mode)
+    # else active — continue to existing active-path logic.
+
     recipient_path = DEFAULT_RECIPIENT_FILE
     try:
         recipient = _read_recipient(recipient_path)
@@ -898,7 +911,7 @@ def _cmd_serve(args) -> int:
     finally:
         conn.close()
 
-    dest = _build_destination(cfg, secret, mode=args.mode, bucket_override=args.bucket_override)
+    dest = _build_destination(cfg, secret, mode=mode, bucket_override=args.bucket_override)
     tmp_dir = Path("/var/lib/mthydra/tmp")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -908,13 +921,13 @@ def _cmd_serve(args) -> int:
         recipient=recipient,
         destination=dest,
         clock=_now,
-        mode=args.mode,
+        mode=mode,
     )
     orch = BackupOrchestrator(
         pipeline=pipeline,
         debounce_seconds=cfg.backup.on_change_debounce_seconds,
         floor_interval_seconds=cfg.backup.floor_interval_hours * 3600,
-        mode=args.mode,
+        mode=mode,
     )
 
     # Enable audit-log file mirror (spec §4.7)
@@ -924,6 +937,7 @@ def _cmd_serve(args) -> int:
         CoverPoolReverifySweep,
         CoverPoolRotationSweep,
     )
+    from mthydra.controller.standby.heartbeat import StandbyHeartbeatPoller
 
     set_audit_mirror("/var/lib/mthydra/logs/audit.log")
 
@@ -931,28 +945,36 @@ def _cmd_serve(args) -> int:
         db_path=args.db_path,
         rotation_interval_seconds=cfg.descriptor.rotation_interval_hours * 3600,
         validity_window_seconds=cfg.descriptor.validity_window_hours * 3600,
-        mode=args.mode,
+        mode=mode,
     )
     reverify_sweep = CoverPoolReverifySweep(
         db_path=args.db_path,
         reverify_after_days=cfg.cover_pool.reverify_after_days,
         sweep_interval_seconds=cfg.cover_pool.reverify_sweep_interval_seconds,
-        mode=args.mode,
+        mode=mode,
     )
     rotation_sweep = CoverPoolRotationSweep(
         db_path=args.db_path,
         rotation_ttl_days=cfg.cover_pool.rotation_ttl_days,
         freeze_threshold=cfg.cover_pool.freeze_threshold,
         sweep_interval_seconds=cfg.cover_pool.rotation_sweep_interval_seconds,
-        mode=args.mode,
+        mode=mode,
+    )
+    poller = StandbyHeartbeatPoller(
+        db_path=args.db_path,
+        b2_destination=dest,
+        poll_interval_seconds=cfg.standby.heartbeat_poll_interval_seconds,
+        staleness_alert_seconds=cfg.standby.staleness_alert_seconds,
+        mode=mode,
     )
 
-    if args.mode != "offline":
+    if mode != "offline":
         orch.arm()
         rotator.arm()
         reverify_sweep.arm()
         rotation_sweep.arm()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps armed", flush=True)
+        poller.arm()
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -965,7 +987,60 @@ def _cmd_serve(args) -> int:
         rotator.disarm()
         reverify_sweep.disarm()
         rotation_sweep.disarm()
+        poller.disarm()
         print("serve: stopped", flush=True)
+    return 0
+
+
+def _serve_standby(args, cfg, mode: str) -> int:
+    """Spec F standby serve loop: heartbeat publisher only, no mutating schedulers."""
+    from mthydra.controller.backup.s3_dest import S3Destination  # noqa: F401 (kept for symmetry)
+    from mthydra.controller.standby.heartbeat import StandbyHeartbeatPublisher
+    from mthydra.controller.state.audit import set_audit_mirror
+    from mthydra.controller.state.tokens import get_provider_credential
+
+    if not cfg.standby.node_id:
+        print(
+            "serve: refused — standby role requires [standby].node_id in controller.toml",
+            file=sys.stderr,
+        )
+        return 2
+
+    set_audit_mirror("/var/lib/mthydra/logs/audit.log")
+
+    conn = connect(args.db_path)
+    try:
+        try:
+            secret = get_provider_credential(conn, "b2")
+        except KeyError:
+            print(
+                "serve: b2 provider credential not in DB; standby cannot publish heartbeat",
+                file=sys.stderr,
+            )
+            return 7
+    finally:
+        conn.close()
+
+    dest = _build_destination(cfg, secret, mode=mode, bucket_override=args.bucket_override)
+    publisher = StandbyHeartbeatPublisher(
+        node_id=cfg.standby.node_id,
+        b2_destination=dest,
+        interval_seconds=cfg.standby.heartbeat_interval_seconds,
+        mode=mode,
+    )
+    if mode != "offline":
+        publisher.arm()
+        print(f"serve: standby heartbeat armed (node_id={cfg.standby.node_id})", flush=True)
+    else:
+        print("serve: standby in offline mode — heartbeat not armed", flush=True)
+
+    stop_event = _install_signal_handler()
+    try:
+        while not stop_event.is_set():
+            stop_event.wait(timeout=60)
+    finally:
+        publisher.disarm()
+        print("serve: standby stopped", flush=True)
     return 0
 
 
