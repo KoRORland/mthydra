@@ -185,6 +185,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ----- spec F subcommands -----
 
+    pa = sub.add_parser("promote-active",
+                         help="promote this standby to active via T2 §7 atomic state replacement")
+    pa.add_argument("--backup-blob", required=True)
+    pa.add_argument("--age-identity", required=True)
+    pa.add_argument("--case", choices=["A", "B"], required=True)
+    pa.add_argument("--db-path", default=DEFAULT_DB)
+    pa.add_argument("--config", default="/etc/mthydra/controller.toml")
+    pa.add_argument("--yes", action="store_true",
+                     help="skip the interactive confirmation prompt")
+
     ar = sub.add_parser("authority-rotate",
                          help="rotate credential_authority — insert new generation, retire current")
     ar.add_argument("--db-path", default=DEFAULT_DB)
@@ -435,6 +445,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "authority-rotate":
         return _cmd_authority_rotate(args)
+
+    if args.cmd == "promote-active":
+        return _cmd_promote_active(args)
 
     return 1
 
@@ -746,6 +759,47 @@ def _cmd_descriptor_migrate_placeholder(args) -> int:
         return 4
     finally:
         conn.close()
+
+
+def _cmd_promote_active(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.promote import PromotionError, promote_active
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"promote-active: config error: {e}", file=sys.stderr)
+        return 2
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("promote-active: refusing — pass --yes or run on a TTY", file=sys.stderr)
+            return 2
+        confirm = input("Type 'PROMOTE' to proceed: ")
+        if confirm != "PROMOTE":
+            print("promote-active: aborted", file=sys.stderr)
+            return 2
+
+    node_id = cfg.standby.node_id or "unknown"
+
+    try:
+        checklist = promote_active(
+            db_path=args.db_path,
+            backup_blob=args.backup_blob,
+            age_identity=args.age_identity,
+            case=args.case,
+            node_id=node_id,
+            now=_now(),
+        )
+    except PromotionError as e:
+        print(f"promote-active: {e}", file=sys.stderr)
+        return 2
+
+    print(f"promote-active: node {node_id} is now ACTIVE "
+          f"(case {args.case}, ready to start systemd unit)")
+    if checklist is not None:
+        print(checklist)
+    return 0
 
 
 def _build_destination(cfg, secret: str, mode: str, bucket_override: str | None):
