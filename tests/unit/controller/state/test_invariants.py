@@ -199,3 +199,60 @@ def test_check_20_rejects_verified_without_vantage(tmp_db_path):
     conn.commit()
     with pytest.raises(InvariantViolation, match="check 20"):
         check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+# ---------------------------------------------------------------------------
+# Spec F invariant checks (#21–#23)
+# ---------------------------------------------------------------------------
+
+def test_check_21_rejects_missing_node_state(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute("DELETE FROM node_state")
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 21"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_22_active_requires_authority(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    # _seeded() inserts authority+key; node_state default 'active'. Retire authority.
+    conn.execute("UPDATE credential_authority SET retired_at=?", (NOW,))
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 22"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_23_standby_must_be_skeleton(tmp_db_path):
+    """A standby with a credential_authority row is structurally invalid."""
+    conn = _seeded(tmp_db_path)  # has authority + key
+    conn.execute("UPDATE node_state SET role='standby' WHERE rowid=1")
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 23"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_23_standby_with_only_b2_credential_passes(tmp_db_path):
+    """The skeleton-DB invariant has one carve-out: B2 provider credential."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.tokens import set_provider_credential
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    conn.execute("UPDATE node_state SET role='standby' WHERE rowid=1")
+    conn.commit()
+    set_provider_credential(conn, provider="b2", credential="id:secret", at=NOW)
+    # Must NOT raise.
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_23_standby_with_non_b2_credential_fails(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.tokens import set_provider_credential
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    conn.execute("UPDATE node_state SET role='standby' WHERE rowid=1")
+    conn.commit()
+    set_provider_credential(conn, provider="aws", credential="id:secret", at=NOW)
+    with pytest.raises(InvariantViolation, match="check 23"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)

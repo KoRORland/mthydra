@@ -48,22 +48,30 @@ def check_all(
             f"cover_domain_pool / burned_domains overlap: {overlap} row(s)"
         )
 
-    active_authorities = _scalar(
-        conn, "SELECT COUNT(*) FROM credential_authority WHERE retired_at IS NULL"
-    )
-    if active_authorities != 1:
-        raise InvariantViolation(
-            f"credential_authority must have exactly 1 active row, found {active_authorities}"
-        )
+    # Read role early so authority/signing-key checks are scoped to active nodes.
+    # (Check 21 later will enforce the singleton invariant formally.)
+    _early_role_row = conn.execute("SELECT role FROM node_state WHERE rowid=1").fetchone()
+    _early_role = _early_role_row[0] if _early_role_row else "active"
 
-    # Allow 1 or 2 active signing keys (spec B B-D7: current + outgoing during rotation)
-    active_signing = _scalar(
-        conn, "SELECT COUNT(*) FROM descriptor_signing_key WHERE retired_at IS NULL"
-    )
-    if active_signing < 1:
-        raise InvariantViolation(
-            f"descriptor_signing_key must have at least 1 active row, found {active_signing}"
+    if _early_role == "active":
+        active_authorities = _scalar(
+            conn, "SELECT COUNT(*) FROM credential_authority WHERE retired_at IS NULL"
         )
+        if active_authorities != 1:
+            raise InvariantViolation(
+                f"check 22: credential_authority must have exactly 1 active row, "
+                f"found {active_authorities}"
+            )
+
+        # Allow 1 or 2 active signing keys (spec B B-D7: current + outgoing during rotation)
+        active_signing = _scalar(
+            conn, "SELECT COUNT(*) FROM descriptor_signing_key WHERE retired_at IS NULL"
+        )
+        if active_signing < 1:
+            raise InvariantViolation(
+                f"check 22: descriptor_signing_key must have at least 1 active row, "
+                f"found {active_signing}"
+            )
 
     impossible = _scalar(
         conn,
@@ -188,3 +196,57 @@ def check_all(
             f"check 20: cover_domain_pool.domain={row[0]!r} state={row[1]!r} "
             "missing last_verified_at or verified_from_vantage"
         )
+
+    # --- spec F checks (#21–#23) ---
+
+    # Check 21: node_state singleton exists
+    n = _scalar(conn, "SELECT COUNT(*) FROM node_state")
+    if n != 1:
+        raise InvariantViolation(f"check 21: node_state must have exactly 1 row, found {n}")
+
+    role_row = conn.execute("SELECT role FROM node_state WHERE rowid=1").fetchone()
+    role = role_row[0]
+
+    # Check 22: active role requires non-retired authority + signing key
+    if role == "active":
+        a = _scalar(
+            conn,
+            "SELECT COUNT(*) FROM credential_authority WHERE retired_at IS NULL",
+        )
+        k = _scalar(
+            conn,
+            "SELECT COUNT(*) FROM descriptor_signing_key WHERE retired_at IS NULL",
+        )
+        if a < 1 or k < 1:
+            raise InvariantViolation(
+                f"check 22: active node requires authority + signing key "
+                f"(authority={a}, signing_key={k})"
+            )
+
+    # Check 23: standby is skeleton (no live state, except B2 provider credential)
+    if role == "standby":
+        forbidden_tables = (
+            "credential_authority",
+            "descriptor_signing_key",
+            "descriptor_history",
+            "publishing_tokens",
+            "cover_domain_pool",
+            "burned_domains",
+            "eu_exit_set",
+        )
+        for tbl in forbidden_tables:
+            cnt = _scalar(conn, f"SELECT COUNT(*) FROM {tbl}")
+            if cnt > 0:
+                raise InvariantViolation(
+                    f"check 23: standby DB must be skeleton; {tbl} has {cnt} row(s)"
+                )
+        # provider_api_credentials: B2 only carve-out
+        non_b2 = _scalar(
+            conn,
+            "SELECT COUNT(*) FROM provider_api_credentials WHERE provider != 'b2'",
+        )
+        if non_b2 > 0:
+            raise InvariantViolation(
+                f"check 23: standby may hold only B2 provider credentials; "
+                f"found {non_b2} non-B2 row(s)"
+            )
