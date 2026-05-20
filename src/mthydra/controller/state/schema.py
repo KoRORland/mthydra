@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -193,6 +193,33 @@ _STATEMENTS: list[str] = [
     # --- spec C additions: structural enforcement of T5 burned-set rule ---
     _TRIGGER_COVER_POOL_REJECT_BURNED,
     _TRIGGER_BURNED_DOMAINS_NO_DELETE,
+    # --- spec F additions: EU node setup (active / standby) ---
+    """
+    CREATE TABLE IF NOT EXISTS node_state (
+      role                        TEXT NOT NULL CHECK (role IN ('active','standby')),
+      promoted_at                 TEXT,
+      previous_role               TEXT,
+      promotion_case              TEXT CHECK (promotion_case IN ('A','B')),
+      promotion_backup_generation INTEGER,
+      CHECK (rowid = 1)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS eu_nodes (
+      node_id                TEXT PRIMARY KEY,
+      hostname               TEXT NOT NULL,
+      provider               TEXT NOT NULL,
+      region                 TEXT NOT NULL,
+      public_ip              TEXT,
+      role                   TEXT NOT NULL CHECK (role IN ('active','standby','retired')),
+      added_at               TEXT NOT NULL,
+      promoted_at            TEXT,
+      retired_at             TEXT,
+      last_heartbeat_at      TEXT,
+      last_heartbeat_b2_etag TEXT,
+      notes                  TEXT
+    )
+    """,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -251,6 +278,45 @@ def migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """Idempotent v3 → v4 migration: add node_state + eu_nodes; seed node_state='active'."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS node_state (
+          role                        TEXT NOT NULL CHECK (role IN ('active','standby')),
+          promoted_at                 TEXT,
+          previous_role               TEXT,
+          promotion_case              TEXT CHECK (promotion_case IN ('A','B')),
+          promotion_backup_generation INTEGER,
+          CHECK (rowid = 1)
+        );
+        CREATE TABLE IF NOT EXISTS eu_nodes (
+          node_id                TEXT PRIMARY KEY,
+          hostname               TEXT NOT NULL,
+          provider               TEXT NOT NULL,
+          region                 TEXT NOT NULL,
+          public_ip              TEXT,
+          role                   TEXT NOT NULL CHECK (role IN ('active','standby','retired')),
+          added_at               TEXT NOT NULL,
+          promoted_at            TEXT,
+          retired_at             TEXT,
+          last_heartbeat_at      TEXT,
+          last_heartbeat_b2_etag TEXT,
+          notes                  TEXT
+        );
+        """
+    )
+    # Seed singleton if absent. Pre-spec-F deployments are implicitly 'active'.
+    existing = conn.execute("SELECT COUNT(*) FROM node_state").fetchone()[0]
+    if existing == 0:
+        conn.execute("INSERT INTO node_state (rowid, role) VALUES (1, 'active')")
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (4, _now()),
+    )
+    conn.commit()
+
+
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing; insert or migrate schema_version row."""
     for stmt in _STATEMENTS:
@@ -267,10 +333,17 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             "INSERT INTO schema_version (rowid, version, applied_at) VALUES (1, ?, ?)",
             (SCHEMA_VERSION, _now()),
         )
+        # Spec F: fresh-install also seeds node_state as 'active' by default;
+        # bootstrap may overwrite to 'standby' if --role standby is passed.
+        n = conn.execute("SELECT COUNT(*) FROM node_state").fetchone()[0]
+        if n == 0:
+            conn.execute("INSERT INTO node_state (rowid, role) VALUES (1, 'active')")
     else:
         current = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
         if current < 2:
             migrate_v1_to_v2(conn)
         if current < 3:
             migrate_v2_to_v3(conn)
+        if current < 4:
+            migrate_v3_to_v4(conn)
     conn.commit()

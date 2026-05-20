@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema, migrate_v1_to_v2
 
 
@@ -18,11 +20,11 @@ def test_apply_schema_is_idempotent(tmp_db_path):
     assert count == 1
 
 
-def test_fresh_schema_is_v3(tmp_db_path):
+def test_fresh_schema_is_v4(tmp_db_path):
     conn = sqlite3.connect(tmp_db_path)
     apply_schema(conn)
     version = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
-    assert version == 3
+    assert version == 4
 
 
 def test_fresh_schema_has_eu_exit_set(tmp_db_path):
@@ -73,14 +75,9 @@ def test_migration_from_v1_preserves_data(tmp_db_path):
     assert "eu_exit_set" in tables
 
 
-def test_schema_version_is_3(tmp_db_path):
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
-    assert SCHEMA_VERSION == 3
-    conn = connect(tmp_db_path)
-    apply_schema(conn)
-    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 3
+def test_schema_version_is_3_removed(tmp_db_path):
+    # Superseded by test_schema_version_is_4 — kept as a no-op to preserve numbering.
+    pass
 
 
 def test_cover_pool_has_entered_in_use_at(tmp_db_path):
@@ -142,3 +139,62 @@ def test_v2_to_v3_migration_adds_column_and_triggers(tmp_db_path):
         assert "burned_domains" in str(e)
     else:
         raise AssertionError("expected IntegrityError")
+
+
+def test_schema_version_is_4(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+    assert SCHEMA_VERSION == 4
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 4
+
+
+def test_node_state_table_present_and_seeded_active(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    rows = conn.execute("SELECT role FROM node_state").fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "active"
+
+
+def test_node_state_singleton_rejects_second_row(tmp_db_path):
+    import sqlite3
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO node_state (rowid, role) VALUES (2, 'standby')")
+        conn.commit()
+
+
+def test_eu_nodes_table_present(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(eu_nodes)").fetchall()]
+    assert {"node_id", "hostname", "provider", "region", "public_ip",
+            "role", "added_at", "promoted_at", "retired_at",
+            "last_heartbeat_at", "last_heartbeat_b2_etag", "notes"} == set(cols)
+
+
+def test_v3_to_v4_migration_seeds_node_state_active(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import migrate_v3_to_v4
+    conn = connect(tmp_db_path)
+    # Manually construct a v3 DB shell.
+    conn.executescript(
+        "CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL, CHECK (rowid=1));"
+        "INSERT INTO schema_version (rowid, version, applied_at) VALUES (1, 3, '2026-05-20T00:00:00Z');"
+    )
+    conn.commit()
+    migrate_v3_to_v4(conn)
+    v = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    assert v == 4
+    role = conn.execute("SELECT role FROM node_state WHERE rowid=1").fetchone()[0]
+    assert role == "active"
