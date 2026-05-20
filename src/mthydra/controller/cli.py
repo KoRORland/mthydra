@@ -247,6 +247,29 @@ def build_parser() -> argparse.ArgumentParser:
     cps.add_argument("--config", default="/etc/mthydra/controller.toml")
     cps.add_argument("--json", action="store_true")
 
+    # ----- spec F: eu-node inventory subcommands -----
+
+    ena = sub.add_parser("eu-node-add",
+                          help="add an EU node to the inventory (default role=standby)")
+    ena.add_argument("node_id")
+    ena.add_argument("--hostname", required=True)
+    ena.add_argument("--provider", required=True)
+    ena.add_argument("--region", required=True)
+    ena.add_argument("--public-ip", default=None)
+    ena.add_argument("--role", choices=["active", "standby"], default="standby")
+    ena.add_argument("--notes", default=None)
+    ena.add_argument("--db-path", default=DEFAULT_DB)
+
+    enr = sub.add_parser("eu-node-retire",
+                          help="retire an EU node (role -> retired)")
+    enr.add_argument("node_id")
+    enr.add_argument("--db-path", default=DEFAULT_DB)
+
+    enl = sub.add_parser("eu-node-list", help="list eu_nodes inventory")
+    enl.add_argument("--state", choices=["active", "standby", "retired"], default=None)
+    enl.add_argument("--db-path", default=DEFAULT_DB)
+    enl.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -448,6 +471,15 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "promote-active":
         return _cmd_promote_active(args)
+
+    if args.cmd == "eu-node-add":
+        return _cmd_eu_node_add(args)
+
+    if args.cmd == "eu-node-retire":
+        return _cmd_eu_node_retire(args)
+
+    if args.cmd == "eu-node-list":
+        return _cmd_eu_node_list(args)
 
     return 1
 
@@ -1132,14 +1164,12 @@ def _cmd_authority_rotate(args) -> int:
         current_authority, insert_authority, retire_authority,
     )
     from mthydra.controller.state.db import connect
-    from mthydra.controller.state.node_state import current_node_state
 
     conn = connect(args.db_path)
     try:
-        ns = current_node_state(conn)
-        if ns.role != "active":
-            print("authority-rotate: refused — active-only command", file=sys.stderr)
-            return 2
+        rc = _require_active_role(conn, "authority-rotate")
+        if rc is not None:
+            return rc
         try:
             current = current_authority(conn)
         except LookupError:
@@ -1193,3 +1223,101 @@ def _cmd_cover_pool_stats(args) -> int:
         return 0
     finally:
         conn.close()
+
+
+# ----- spec F: eu-node inventory + standby-drill handlers -----
+
+
+def _require_active_role(conn, cmd_name: str) -> int | None:
+    """Returns exit code 2 if standby; None if active (continue)."""
+    from mthydra.controller.state.node_state import current_node_state
+    ns = current_node_state(conn)
+    if ns.role != "active":
+        print(f"{cmd_name}: refused — active-only command", file=sys.stderr)
+        return 2
+    return None
+
+
+def _cmd_eu_node_add(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import add_eu_node
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "eu-node-add")
+        if rc is not None:
+            return rc
+        try:
+            add_eu_node(
+                conn,
+                node_id=args.node_id,
+                hostname=args.hostname,
+                provider=args.provider,
+                region=args.region,
+                public_ip=args.public_ip,
+                role=args.role,
+                added_at=_now(),
+                notes=args.notes,
+            )
+        except ValueError as e:
+            print(f"eu-node-add: {e}", file=sys.stderr)
+            return 2
+        print(f"eu-node-add: {args.node_id} added (role={args.role})")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_eu_node_retire(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import retire_eu_node
+    from mthydra.controller.state.node_state import current_node_state
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "eu-node-retire")
+        if rc is not None:
+            return rc
+        ns = current_node_state(conn)
+        try:
+            cfg = load_config("/etc/mthydra/controller.toml")
+            if cfg.standby.node_id == args.node_id and ns.role == "active":
+                print(f"eu-node-retire: refusing to retire local active node "
+                      f"{args.node_id}; promote a standby first", file=sys.stderr)
+                return 2
+        except (ConfigError, FileNotFoundError):
+            pass
+        try:
+            retire_eu_node(conn, args.node_id, at=_now())
+        except ValueError as e:
+            print(f"eu-node-retire: {e}", file=sys.stderr)
+            return 2
+        print(f"eu-node-retire: {args.node_id} retired")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_eu_node_list(args) -> int:
+    import json as _json
+    from dataclasses import asdict
+
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import list_eu_nodes
+
+    conn = connect(args.db_path)
+    try:
+        nodes = list_eu_nodes(conn, role=args.state)
+        if args.json:
+            print(_json.dumps([asdict(n) for n in nodes], indent=2))
+        else:
+            print(f"{'node_id':30} {'role':10} {'hostname':30} last_heartbeat_at")
+            for n in nodes:
+                print(f"{n.node_id:30} {n.role:10} {n.hostname:30} "
+                      f"{n.last_heartbeat_at or '-'}")
+        return 0
+    finally:
+        conn.close()
+
+

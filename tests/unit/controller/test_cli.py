@@ -801,6 +801,86 @@ def test_authority_rotate_refuses_on_standby(tmp_path, age_recipient, capsys):
     assert "active" in err or "standby" in err
 
 
+def test_eu_node_add_default_standby(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["eu-node-add", "eu-standby-de-1",
+              "--hostname", "standby.example",
+              "--provider", "hetzner",
+              "--region", "de",
+              "--db-path", str(db)])
+    assert rc == 0
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import get_eu_node
+    conn = connect(db)
+    n = get_eu_node(conn, "eu-standby-de-1")
+    assert n.role == "standby"
+
+
+def test_eu_node_add_refuses_second_active(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    run(["eu-node-add", "eu-active-1", "--hostname", "h",
+         "--provider", "aws", "--region", "fr",
+         "--role", "active", "--db-path", str(db)])
+    rc = run(["eu-node-add", "eu-active-2", "--hostname", "h",
+              "--provider", "aws", "--region", "fr",
+              "--role", "active", "--db-path", str(db)])
+    assert rc == 2
+    assert "only one active" in capsys.readouterr().err
+
+
+def test_eu_node_retire_happy(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    run(["eu-node-add", "eu-standby-de-1", "--hostname", "h",
+         "--provider", "hetzner", "--region", "de", "--db-path", str(db)])
+    rc = run(["eu-node-retire", "eu-standby-de-1", "--db-path", str(db)])
+    assert rc == 0
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import get_eu_node
+    conn = connect(db)
+    n = get_eu_node(conn, "eu-standby-de-1")
+    assert n.role == "retired"
+
+
+def test_eu_node_list_json(tmp_path, age_recipient, capsys):
+    import json
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    run(["eu-node-add", "eu-standby-de-1", "--hostname", "h",
+         "--provider", "hetzner", "--region", "de", "--db-path", str(db)])
+    capsys.readouterr()
+    rc = run(["eu-node-list", "--db-path", str(db), "--json"])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert any(r["node_id"] == "eu-standby-de-1" for r in data)
+
+
+def test_eu_node_add_refused_on_standby(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--role", "standby", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["eu-node-add", "eu-anything", "--hostname", "h",
+              "--provider", "p", "--region", "r", "--db-path", str(db)])
+    assert rc == 2
+    assert "active" in capsys.readouterr().err.lower()
+
+
 def test_serve_arms_cover_pool_sweeps_in_offline_mode(tmp_path, age_recipient, monkeypatch):
     """Smoke: serve with --mode offline arms the sweeps as no-ops and returns 0 quickly."""
     import signal
@@ -850,3 +930,4 @@ def test_serve_arms_cover_pool_sweeps_in_offline_mode(tmp_path, age_recipient, m
         "--config", str(cfg_path),
     ])
     assert rc == 0
+
