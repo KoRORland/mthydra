@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mthydra.controller.bootstrap import BootstrapError, init_state
+from mthydra.controller.image.builder import BuildError, build_image
+from mthydra.controller.image.upstream_tracker import UpstreamReleaseTracker
 from mthydra.controller.restore.adopt import AdoptError, adopt_restored_state
 from mthydra.controller.restore.decrypt import DecryptError, decrypt_blob
 from mthydra.controller.restore.summary import summarize_db
@@ -270,6 +272,45 @@ def build_parser() -> argparse.ArgumentParser:
     enl.add_argument("--db-path", default=DEFAULT_DB)
     enl.add_argument("--json", action="store_true")
 
+    # ----- spec D subcommands -----
+    ib = sub.add_parser("image-build",
+                         help="download upstream release, verify checksum, upload to B2, register candidate")
+    ib.add_argument("--release", required=True)
+    ib.add_argument("--asset", default=None,
+                     help="override asset filename (defaults to cfg.image.upstream_release_asset)")
+    ib.add_argument("--notes", default=None)
+    ib.add_argument("--db-path", default=DEFAULT_DB)
+    ib.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    il = sub.add_parser("image-list", help="list ru_images catalog")
+    il.add_argument("--state", choices=["candidate", "promoted", "retired"], default=None)
+    il.add_argument("--db-path", default=DEFAULT_DB)
+    il.add_argument("--config", default="/etc/mthydra/controller.toml")
+    il.add_argument("--json", action="store_true")
+
+    ip = sub.add_parser("image-promote",
+                         help="atomic candidate -> promoted; prior promoted -> retired")
+    ip.add_argument("image_version")
+    ip.add_argument("--evidence", required=True,
+                     help="evidence text (placeholder for D2 validation gate)")
+    ip.add_argument("--db-path", default=DEFAULT_DB)
+
+    ir = sub.add_parser("image-retire", help="mark a ru_images row as retired")
+    ir.add_argument("image_version")
+    ir.add_argument("--reason", required=True)
+    ir.add_argument("--db-path", default=DEFAULT_DB)
+
+    ic = sub.add_parser("image-current",
+                         help="print the currently-promoted image_version (read-only)")
+    ic.add_argument("--db-path", default=DEFAULT_DB)
+    ic.add_argument("--config", default="/etc/mthydra/controller.toml")
+    ic.add_argument("--json", action="store_true")
+
+    uc = sub.add_parser("upstream-check",
+                         help="force an immediate UpstreamReleaseTracker poll")
+    uc.add_argument("--db-path", default=DEFAULT_DB)
+    uc.add_argument("--config", default="/etc/mthydra/controller.toml")
+
     # ----- spec F: standby-drill-proven -----
 
     sdp = sub.add_parser("standby-drill-proven",
@@ -316,6 +357,7 @@ def run(argv: list[str]) -> int:
                     "cover_pool_reverify_pass_proven": 60 * 24,
                     "cover_pool_replenishment_proven": 90 * 24,
                     "eu_standby_drill_proven": 30 * 24,
+                    "t4_image_promoted":  30 * 24,
                 } if args.role == "active" else {},
                 now=_now(),
                 role=args.role,
@@ -492,6 +534,19 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "standby-drill-proven":
         return _cmd_standby_drill_proven(args)
+
+    if args.cmd == "image-build":
+        return _cmd_image_build(args)
+    if args.cmd == "image-list":
+        return _cmd_image_list(args)
+    if args.cmd == "image-promote":
+        return _cmd_image_promote(args)
+    if args.cmd == "image-retire":
+        return _cmd_image_retire(args)
+    if args.cmd == "image-current":
+        return _cmd_image_current(args)
+    if args.cmd == "upstream-check":
+        return _cmd_upstream_check(args)
 
     return 1
 
@@ -1447,3 +1502,206 @@ def _cmd_standby_drill_proven(args) -> int:
         return 0
     finally:
         conn.close()
+
+
+# ----- spec D handlers -----
+
+
+def _cmd_image_build(args) -> int:
+    from pathlib import Path
+
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.tokens import get_provider_credential
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"image-build: config error: {e}", file=sys.stderr)
+        return 2
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "image-build")
+        if rc is not None:
+            return rc
+        try:
+            secret = get_provider_credential(conn, "b2")
+        except KeyError:
+            print("image-build: b2 provider credential not in DB", file=sys.stderr)
+            return 7
+        dest = _build_destination(cfg, secret, mode="production",
+                                   bucket_override=args.bucket_override)
+        asset = args.asset or cfg.image.upstream_release_asset
+        try:
+            iv = build_image(
+                conn=conn,
+                b2_destination=dest,
+                upstream_repo=cfg.image.upstream_repo,
+                upstream_release=args.release,
+                asset_filename=asset,
+                github_api_url=cfg.image.github_api_url,
+                tmp_dir=Path(cfg.image.build_tmp_dir),
+                now=_now(),
+            )
+        except BuildError as e:
+            msg = str(e).lower()
+            if "sha256 mismatch" in msg:
+                code = 3
+            elif "github" in msg or "release" in msg or "asset" in msg or "checksum" in msg:
+                code = 4
+            elif "b2" in msg:
+                code = 5
+            else:
+                code = 2
+            print(f"image-build: {e}", file=sys.stderr)
+            return code
+        print(f"image-build: candidate {iv} registered (release={args.release})")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_image_list(args) -> int:
+    import json as _json
+    from dataclasses import asdict
+
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import list_images
+    from mthydra.controller.state.tokens import get_provider_credential
+
+    b2 = None
+    try:
+        cfg = load_config(args.config)
+        conn = connect(args.db_path)
+        try:
+            secret = get_provider_credential(conn, "b2")
+            b2 = _build_destination(cfg, secret, mode="production",
+                                     bucket_override=args.bucket_override)
+        finally:
+            conn.close()
+    except (ConfigError, KeyError, FileNotFoundError):
+        pass
+
+    conn = connect(args.db_path)
+    try:
+        images = list_images(conn, state=args.state)
+        rows = []
+        for im in images:
+            d = asdict(im)
+            if b2 is not None:
+                try:
+                    d["b2_present"] = b2.head_image(image_version=im.image_version) is not None
+                except Exception:
+                    d["b2_present"] = None
+            else:
+                d["b2_present"] = None
+            rows.append(d)
+        if args.json:
+            print(_json.dumps(rows, indent=2))
+        else:
+            print(f"{'state':10} {'image_version':16} {'upstream_release':20} built_at")
+            for r in rows:
+                print(f"{r['state']:10} {r['image_version'][:16]:16} "
+                      f"{r['upstream_release']:20} {r['built_at']}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_image_promote(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import promote
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "image-promote")
+        if rc is not None:
+            return rc
+        try:
+            promote(conn, args.image_version, at=_now(), evidence=args.evidence)
+        except (ValueError, LookupError) as e:
+            print(f"image-promote: {e}", file=sys.stderr)
+            return 2
+        print(f"image-promote: {args.image_version} -> promoted")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_image_retire(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import current_promoted, get_image, retire
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "image-retire")
+        if rc is not None:
+            return rc
+        try:
+            target = get_image(conn, args.image_version)
+        except LookupError as e:
+            print(f"image-retire: {e}", file=sys.stderr)
+            return 2
+        was_promoted = target.state == "promoted"
+        try:
+            retire(conn, args.image_version, at=_now(), reason=args.reason)
+        except ValueError as e:
+            print(f"image-retire: {e}", file=sys.stderr)
+            return 2
+        msg = f"image-retire: {args.image_version} -> retired"
+        if was_promoted and current_promoted(conn) is None:
+            msg += "  (WARNING: no promoted image; fleet has no default — promote a candidate)"
+        print(msg)
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_image_current(args) -> int:
+    """Read-only; works on both active and standby."""
+    import json as _json
+    from dataclasses import asdict
+
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import current_promoted
+
+    conn = connect(args.db_path)
+    try:
+        n = current_promoted(conn)
+        if args.json:
+            print(_json.dumps(asdict(n) if n is not None else None, indent=2))
+        else:
+            if n is None:
+                print("image-current: none promoted")
+            else:
+                print(f"image-current: {n.image_version} "
+                      f"(release={n.upstream_release}, promoted_at={n.promoted_at})")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_upstream_check(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"upstream-check: config error: {e}", file=sys.stderr)
+        return 2
+
+    tracker = UpstreamReleaseTracker(
+        db_path=args.db_path,
+        upstream_repo=cfg.image.upstream_repo,
+        github_api_url=cfg.image.github_api_url,
+        poll_interval_seconds=cfg.image.upstream_check_interval_seconds,
+        mode="offline",
+    )
+    latest = tracker.run_once()
+    if latest is None:
+        print("upstream-check: GitHub poll failed (see logs)", file=sys.stderr)
+        return 4
+    print(f"upstream-check: latest upstream tag = {latest}")
+    return 0

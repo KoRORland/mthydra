@@ -1043,3 +1043,186 @@ def test_serve_standby_arms_publisher_not_orchestrator(tmp_path, age_recipient, 
     ])
     assert rc == 0
 
+
+# ===== Task 8: spec D image subcommands =====
+
+def test_image_build_happy_path(tmp_path, age_recipient, monkeypatch):
+    """image-build delegates to build_image; happy path returns 0."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+
+    captured = {}
+    def _stub_build_image(**kwargs):
+        captured.update(kwargs)
+        from mthydra.controller.state.ru_images import insert_candidate
+        insert_candidate(
+            kwargs["conn"],
+            image_version="iv-stub",
+            upstream_release=kwargs["upstream_release"],
+            upstream_repo=kwargs["upstream_repo"],
+            binary_url="images/iv-stub/mtg",
+            manifest_url="images/iv-stub/manifest.json",
+            binary_sha256="iv-stub",
+            binary_size_bytes=100,
+            built_at=kwargs["now"],
+        )
+        return "iv-stub"
+    monkeypatch.setattr("mthydra.controller.cli.build_image", _stub_build_image)
+
+    rc = run(["image-build", "--release", "v2.1.7",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    assert captured["upstream_release"] == "v2.1.7"
+    assert captured["upstream_repo"] == "9seconds/mtg"
+
+
+def test_image_build_refused_on_standby(tmp_path, age_recipient, capsys, monkeypatch):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--role", "standby", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["image-build", "--release", "v2.1.7",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 2
+    assert "active-only" in capsys.readouterr().err.lower()
+
+
+def test_image_list_json(tmp_path, age_recipient, capsys):
+    import json
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import insert_candidate
+    conn = connect(db)
+    insert_candidate(
+        conn, image_version="iv1",
+        upstream_release="v2.1.7", upstream_repo="9seconds/mtg",
+        binary_url="x", manifest_url="x", binary_sha256="iv1",
+        binary_size_bytes=100, built_at="2026-05-21T00:00:00Z",
+    )
+    conn.close()
+    capsys.readouterr()
+    rc = run(["image-list", "--db-path", str(db), "--config", str(cfg_path), "--json"])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert any(r["image_version"] == "iv1" for r in data)
+
+
+def test_image_promote_requires_evidence(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    import pytest as _pt
+    with _pt.raises(SystemExit) as exc:
+        run(["image-promote", "iv1", "--db-path", str(db)])
+    assert exc.value.code == 2
+
+
+def test_image_promote_clears_upstream_release_obligation(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import list_obligations, set_obligation
+    from mthydra.controller.state.ru_images import insert_candidate
+    conn = connect(db)
+    insert_candidate(
+        conn, image_version="iv1", upstream_release="v2.1.7",
+        upstream_repo="9seconds/mtg", binary_url="x", manifest_url="x",
+        binary_sha256="iv1", binary_size_bytes=100, built_at="2026-05-21T00:00:00Z",
+    )
+    set_obligation(conn, "t4_upstream_release_available::v2.1.7",
+                   last_proven_at="2026-05-21T00:00:00Z",
+                   proven_by="tracker", next_due_at="2026-05-21T00:00:00Z")
+    conn.close()
+    rc = run(["image-promote", "iv1", "--evidence", "smoke", "--db-path", str(db)])
+    assert rc == 0
+    conn = connect(db)
+    obs = {o.obligation_id for o in list_obligations(conn)}
+    assert "t4_upstream_release_available::v2.1.7" not in obs
+    assert "t4_image_promoted" in obs
+    conn.close()
+
+
+def test_image_current_works_on_standby(tmp_path, age_recipient, capsys):
+    """image-current is the one read-only command callable on standby."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--role", "standby", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    capsys.readouterr()
+    rc = run(["image-current", "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    out = capsys.readouterr().out.strip()
+    assert "none" in out.lower() or "no" in out.lower()
+
+
+def test_image_retire_promoted_warns(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import insert_candidate, promote
+    conn = connect(db)
+    insert_candidate(
+        conn, image_version="iv1", upstream_release="v2.1.7",
+        upstream_repo="9seconds/mtg", binary_url="x", manifest_url="x",
+        binary_sha256="iv1", binary_size_bytes=100,
+        built_at="2026-05-21T00:00:00Z",
+    )
+    promote(conn, "iv1", at="2026-05-21T01:00:00Z", evidence="x")
+    conn.close()
+    capsys.readouterr()
+    rc = run(["image-retire", "iv1", "--reason", "regression",
+              "--db-path", str(db)])
+    assert rc == 0
+    cap = capsys.readouterr()
+    out = (cap.out + cap.err).lower()
+    assert "no" in out or "promote" in out or "default" in out
+
+
+def test_upstream_check_invokes_tracker(tmp_path, age_recipient, capsys, monkeypatch):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+
+    called = {"latest": None}
+    class _StubTracker:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+        def run_once(self):
+            called["latest"] = "v2.1.7"
+            return "v2.1.7"
+    monkeypatch.setattr("mthydra.controller.cli.UpstreamReleaseTracker", _StubTracker)
+
+    rc = run(["upstream-check", "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    assert called["latest"] == "v2.1.7"
+    assert "v2.1.7" in capsys.readouterr().out
+
