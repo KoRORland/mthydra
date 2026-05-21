@@ -21,10 +21,8 @@ def test_apply_schema_is_idempotent(tmp_db_path):
 
 
 def test_fresh_schema_is_v4(tmp_db_path):
-    conn = sqlite3.connect(tmp_db_path)
-    apply_schema(conn)
-    version = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
-    assert version == 4
+    # Superseded by test_schema_version_is_5 — kept as a no-op to preserve numbering.
+    pass
 
 
 def test_fresh_schema_has_eu_exit_set(tmp_db_path):
@@ -142,13 +140,8 @@ def test_v2_to_v3_migration_adds_column_and_triggers(tmp_db_path):
 
 
 def test_schema_version_is_4(tmp_db_path):
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
-    assert SCHEMA_VERSION == 4
-    conn = connect(tmp_db_path)
-    apply_schema(conn)
-    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 4
+    # Superseded by test_schema_version_is_5 — kept as a no-op to preserve numbering.
+    pass
 
 
 def test_node_state_table_present_and_seeded_active(tmp_db_path):
@@ -198,3 +191,54 @@ def test_v3_to_v4_migration_seeds_node_state_active(tmp_db_path):
     assert v == 4
     role = conn.execute("SELECT role FROM node_state WHERE rowid=1").fetchone()[0]
     assert role == "active"
+
+
+def test_schema_version_is_5(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+    assert SCHEMA_VERSION == 5
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 5
+
+
+def test_ru_images_table_present(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(ru_images)").fetchall()]
+    assert {"image_version", "upstream_release", "upstream_repo",
+            "binary_url", "manifest_url", "binary_sha256",
+            "binary_size_bytes", "state", "built_at",
+            "promoted_at", "retired_at", "notes"} == set(cols)
+
+
+def test_ru_images_state_index_present(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    idxs = {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='ru_images'"
+        ).fetchall()
+    }
+    assert "ix_ru_images_state" in idxs
+
+
+def test_v4_to_v5_migration_adds_table(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import migrate_v4_to_v5
+    conn = connect(tmp_db_path)
+    conn.executescript(
+        "CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL, CHECK (rowid=1));"
+        "INSERT INTO schema_version (rowid, version, applied_at) VALUES (1, 4, '2026-05-21T00:00:00Z');"
+    )
+    conn.commit()
+    migrate_v4_to_v5(conn)
+    v = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    assert v == 5
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(ru_images)").fetchall()]
+    assert "image_version" in cols

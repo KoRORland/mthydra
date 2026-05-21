@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -220,6 +220,26 @@ _STATEMENTS: list[str] = [
       notes                  TEXT
     )
     """,
+    # --- spec D additions: RU image catalog ---
+    """
+    CREATE TABLE IF NOT EXISTS ru_images (
+      image_version       TEXT    PRIMARY KEY,
+      upstream_release    TEXT    NOT NULL,
+      upstream_repo       TEXT    NOT NULL,
+      binary_url          TEXT    NOT NULL,
+      manifest_url        TEXT    NOT NULL,
+      binary_sha256       TEXT    NOT NULL,
+      binary_size_bytes   INTEGER NOT NULL,
+      state               TEXT    NOT NULL CHECK (state IN ('candidate','promoted','retired')),
+      built_at            TEXT    NOT NULL,
+      promoted_at         TEXT,
+      retired_at          TEXT,
+      notes               TEXT
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ru_images_state ON ru_images(state)
+    """,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -317,6 +337,34 @@ def migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    """Idempotent v4 → v5 migration: add ru_images table + state index."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ru_images (
+          image_version       TEXT    PRIMARY KEY,
+          upstream_release    TEXT    NOT NULL,
+          upstream_repo       TEXT    NOT NULL,
+          binary_url          TEXT    NOT NULL,
+          manifest_url        TEXT    NOT NULL,
+          binary_sha256       TEXT    NOT NULL,
+          binary_size_bytes   INTEGER NOT NULL,
+          state               TEXT    NOT NULL CHECK (state IN ('candidate','promoted','retired')),
+          built_at            TEXT    NOT NULL,
+          promoted_at         TEXT,
+          retired_at          TEXT,
+          notes               TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_ru_images_state ON ru_images(state);
+        """
+    )
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (5, _now()),
+    )
+    conn.commit()
+
+
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing; insert or migrate schema_version row."""
     for stmt in _STATEMENTS:
@@ -346,4 +394,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v2_to_v3(conn)
         if current < 4:
             migrate_v3_to_v4(conn)
+        if current < 5:
+            migrate_v4_to_v5(conn)
     conn.commit()
