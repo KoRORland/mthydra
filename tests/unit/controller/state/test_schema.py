@@ -20,10 +20,6 @@ def test_apply_schema_is_idempotent(tmp_db_path):
     assert count == 1
 
 
-def test_fresh_schema_is_v4(tmp_db_path):
-    # Superseded by test_schema_version_is_5 — kept as a no-op to preserve numbering.
-    pass
-
 
 def test_fresh_schema_has_eu_exit_set(tmp_db_path):
     conn = sqlite3.connect(tmp_db_path)
@@ -138,10 +134,6 @@ def test_v2_to_v3_migration_adds_column_and_triggers(tmp_db_path):
     else:
         raise AssertionError("expected IntegrityError")
 
-
-def test_schema_version_is_4(tmp_db_path):
-    # Superseded by test_schema_version_is_5 — kept as a no-op to preserve numbering.
-    pass
 
 
 def test_node_state_table_present_and_seeded_active(tmp_db_path):
