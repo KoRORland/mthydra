@@ -1229,12 +1229,9 @@ def test_upstream_check_invokes_tracker(tmp_path, age_recipient, capsys, monkeyp
 
 # ===== Task 3 (Spec G): authority-migrate-placeholder + authority-rotate real Ed25519 =====
 
-def test_authority_migrate_placeholder_replaces_placeholder(tmp_path, age_recipient):
-    """authority-migrate-placeholder is a no-op when bootstrap already created real Ed25519.
-
-    Since spec G bootstrap generates real keys directly, migrate-placeholder succeeds
-    idempotently — the authority key is already real Ed25519.
-    """
+def test_authority_migrate_placeholder_noop_when_already_real(tmp_path, age_recipient):
+    """Spec G's bootstrap mints real Ed25519 directly, so migrate is a no-op
+    on freshly-init'd DBs. Exercising the idempotent path."""
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     cfg_path = tmp_path / "controller.toml"
@@ -1247,7 +1244,6 @@ def test_authority_migrate_placeholder_replaces_placeholder(tmp_path, age_recipi
     from mthydra.controller.state.db import connect
     conn = connect(db)
     before = current_authority(conn)
-    # Spec G: bootstrap now generates real Ed25519, not a placeholder.
     assert before.privkey_pem.startswith("-----BEGIN PRIVATE KEY-----")
     conn.close()
 
@@ -1259,6 +1255,42 @@ def test_authority_migrate_placeholder_replaces_placeholder(tmp_path, age_recipi
     after = current_authority(conn)
     assert after.generation == before.generation
     assert after.privkey_pem.startswith("-----BEGIN PRIVATE KEY-----")
+
+
+def test_authority_migrate_placeholder_replaces_placeholder(tmp_path, age_recipient):
+    """Migration path: simulate a pre-spec-G DB by forcing a PRIV-BOOTSTRAP- row,
+    then run the migration and confirm it converts to real Ed25519."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+
+    # Simulate a pre-spec-G deployment by overwriting the authority with a placeholder.
+    from mthydra.controller.state.authority import current_authority
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "UPDATE credential_authority SET privkey_pem='PRIV-BOOTSTRAP-x', "
+        "pubkey_pem='PUB-BOOTSTRAP-x' WHERE retired_at IS NULL"
+    )
+    conn.commit()
+    before = current_authority(conn)
+    assert before.privkey_pem.startswith("PRIV-BOOTSTRAP-")
+    conn.close()
+
+    rc = run(["authority-migrate-placeholder",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+
+    conn = connect(db)
+    after = current_authority(conn)
+    assert after.generation == before.generation  # in-place
+    assert after.privkey_pem.startswith("-----BEGIN PRIVATE KEY-----")
+    assert after.pubkey_pem.startswith("-----BEGIN PUBLIC KEY-----")
+    conn.close()
     assert after.pubkey_pem.startswith("-----BEGIN PUBLIC KEY-----")
     conn.close()
 
