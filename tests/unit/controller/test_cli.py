@@ -1226,3 +1226,54 @@ def test_upstream_check_invokes_tracker(tmp_path, age_recipient, capsys, monkeyp
     assert called["latest"] == "v2.1.7"
     assert "v2.1.7" in capsys.readouterr().out
 
+
+def test_serve_arms_upstream_tracker(tmp_path, age_recipient, monkeypatch):
+    """Active serve constructs and arms an UpstreamReleaseTracker alongside the
+    cover-pool sweeps + heartbeat poller."""
+    import pathlib
+    import threading as _t
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(age_recipient + "\n")
+    monkeypatch.setattr("mthydra.controller.cli.DEFAULT_RECIPIENT_FILE",
+                         str(recipient_file))
+
+    armed = {"tracker": 0}
+    class _StubTracker:
+        def __init__(self, **kwargs): pass
+        def arm(self): armed["tracker"] += 1
+        def disarm(self): pass
+        def run_once(self): return None
+    monkeypatch.setattr("mthydra.controller.cli.UpstreamReleaseTracker", _StubTracker)
+
+    # Redirect hardcoded /var/lib/mthydra/tmp to tmp_path (requires root otherwise).
+    _real_mkdir = pathlib.Path.mkdir
+    _serve_tmp = tmp_path / "serve_tmp"
+
+    def _patched_mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        if str(self) == "/var/lib/mthydra/tmp":
+            _serve_tmp.mkdir(parents=True, exist_ok=True)
+            return
+        _real_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", _patched_mkdir)
+
+    def _fast_wait(self, timeout=None):
+        self.set()
+        return True
+    monkeypatch.setattr(_t.Event, "wait", _fast_wait)
+
+    rc = run([
+        "serve",
+        "--db-path", str(db),
+        "--config", str(cfg_path),
+    ])
+    assert rc == 0
+    assert armed["tracker"] == 1
+

@@ -1022,6 +1022,13 @@ def _cmd_serve(args) -> int:
         staleness_alert_seconds=cfg.standby.staleness_alert_seconds,
         mode=mode,
     )
+    tracker = UpstreamReleaseTracker(
+        db_path=args.db_path,
+        upstream_repo=cfg.image.upstream_repo,
+        github_api_url=cfg.image.github_api_url,
+        poll_interval_seconds=cfg.image.upstream_check_interval_seconds,
+        mode=mode,
+    )
 
     if mode != "offline":
         orch.arm()
@@ -1029,7 +1036,8 @@ def _cmd_serve(args) -> int:
         reverify_sweep.arm()
         rotation_sweep.arm()
         poller.arm()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller armed", flush=True)
+        tracker.arm()
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -1043,6 +1051,7 @@ def _cmd_serve(args) -> int:
         reverify_sweep.disarm()
         rotation_sweep.disarm()
         poller.disarm()
+        tracker.disarm()
         print("serve: stopped", flush=True)
     return 0
 
