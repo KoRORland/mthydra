@@ -5,6 +5,7 @@ from mthydra.controller.state.db import connect
 from mthydra.controller.state.descriptor import insert_signing_key
 from mthydra.controller.state.invariants import InvariantViolation, check_all
 from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+from mthydra.descriptor.authority import generate_authority_keypair
 from mthydra.descriptor.keys import generate_keypair
 
 NOW = "2026-05-19T00:00:00Z"
@@ -13,7 +14,8 @@ NOW = "2026-05-19T00:00:00Z"
 def _seeded(tmp_db_path):
     conn = connect(tmp_db_path)
     apply_schema(conn)
-    insert_authority(conn, 1, "P", "K", "2026-05-18T00:00:00Z")
+    _priv, _pub = generate_authority_keypair()
+    insert_authority(conn, 1, _priv, _pub, "2026-05-18T00:00:00Z")
     priv, pub = generate_keypair()  # spec B: real keys
     insert_signing_key(conn, 1, priv, pub, "2026-05-18T00:00:00Z")
     return conn
@@ -317,3 +319,67 @@ def test_check_25_rejects_candidate_with_promoted_at(tmp_db_path):
     conn.commit()
     with pytest.raises(InvariantViolation, match="check 25"):
         check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+# ---------------------------------------------------------------------------
+# Spec G invariant checks (#26–#28)
+# ---------------------------------------------------------------------------
+
+def test_check_26_rejects_placeholder_authority_in_production(tmp_db_path):
+    """Forcing a PRIV-BOOTSTRAP- privkey must trip #26 in production mode."""
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "UPDATE credential_authority SET privkey_pem='PRIV-BOOTSTRAP-test' "
+        "WHERE retired_at IS NULL"
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 26"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION,
+                  mode="production", now_iso=NOW)
+
+
+def test_check_26_allows_placeholder_in_offline(tmp_db_path):
+    """Same placeholder must NOT raise in offline mode."""
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "UPDATE credential_authority SET privkey_pem='PRIV-BOOTSTRAP-test' "
+        "WHERE retired_at IS NULL"
+    )
+    conn.commit()
+    check_all(conn, expected_schema_version=SCHEMA_VERSION,
+              mode="offline", now_iso=NOW)
+
+
+def test_check_26_allows_real_ed25519(tmp_db_path):
+    """Real Ed25519 authority passes in production."""
+    conn = _seeded(tmp_db_path)
+    # _seeded already mints real Ed25519, so check_all must pass.
+    check_all(conn, expected_schema_version=SCHEMA_VERSION,
+              mode="production", now_iso=NOW)
+
+
+def test_check_27_rejects_live_box_without_credential(tmp_db_path):
+    """A live ru_boxes row with no matching active onward_credentials row is invalid."""
+    conn = _seeded(tmp_db_path)
+    from mthydra.controller.state.ru_boxes import insert_box, mark_live
+    insert_box(conn, "boxX", "aws", "eu-1", "10.0.0.1", "sni-x.invalid",
+               "img-v1", NOW)
+    mark_live(conn, "boxX", public_ip="10.0.0.1", at=NOW)
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 27"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_28_passes_on_clean_db(tmp_db_path):
+    """#28 is defence-in-depth on the UNIQUE constraint; passes on a clean DB
+    where UNIQUE already prevents collisions."""
+    conn = _seeded(tmp_db_path)
+    # Insert two boxes with distinct sni values; UNIQUE permits this.
+    from mthydra.controller.state.ru_boxes import insert_box
+    insert_box(conn, "b1", "aws", "eu", "10.0.0.1", "a.invalid", "img", NOW)
+    insert_box(conn, "b2", "aws", "eu", "10.0.0.2", "b.invalid", "img", NOW)
+    # Add credentials for both so #27 passes.
+    from mthydra.controller.state.credentials import issue_credential
+    issue_credential(conn, "b1", b"\x00" * 10, NOW, authority_generation=1)
+    issue_credential(conn, "b2", b"\x00" * 10, NOW, authority_generation=1)
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)

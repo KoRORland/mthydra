@@ -1230,7 +1230,11 @@ def test_upstream_check_invokes_tracker(tmp_path, age_recipient, capsys, monkeyp
 # ===== Task 3 (Spec G): authority-migrate-placeholder + authority-rotate real Ed25519 =====
 
 def test_authority_migrate_placeholder_replaces_placeholder(tmp_path, age_recipient):
-    """authority-migrate-placeholder converts PRIV-BOOTSTRAP-... to real Ed25519."""
+    """authority-migrate-placeholder is a no-op when bootstrap already created real Ed25519.
+
+    Since spec G bootstrap generates real keys directly, migrate-placeholder succeeds
+    idempotently — the authority key is already real Ed25519.
+    """
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     cfg_path = tmp_path / "controller.toml"
@@ -1243,7 +1247,8 @@ def test_authority_migrate_placeholder_replaces_placeholder(tmp_path, age_recipi
     from mthydra.controller.state.db import connect
     conn = connect(db)
     before = current_authority(conn)
-    assert before.privkey_pem.startswith("PRIV-BOOTSTRAP-")
+    # Spec G: bootstrap now generates real Ed25519, not a placeholder.
+    assert before.privkey_pem.startswith("-----BEGIN PRIVATE KEY-----")
     conn.close()
 
     rc = run(["authority-migrate-placeholder",

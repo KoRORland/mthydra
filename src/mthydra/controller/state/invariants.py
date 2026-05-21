@@ -273,3 +273,44 @@ def check_all(
             f"check 25: ru_image {bad[0]!r} state={bad[1]!r} has inconsistent "
             f"timestamps (promoted_at={bad[2]!r}, retired_at={bad[3]!r})"
         )
+
+    # --- spec G checks (#26–#28) ---
+
+    # Check 26: authority is real Ed25519 (production mode only)
+    if mode not in ("offline", "dryrun"):
+        placeholder = _scalar(
+            conn,
+            "SELECT COUNT(*) FROM credential_authority "
+            "WHERE retired_at IS NULL AND privkey_pem LIKE 'PRIV-BOOTSTRAP-%'",
+        )
+        if placeholder > 0:
+            raise InvariantViolation(
+                f"check 26: {placeholder} non-retired credential_authority row(s) "
+                f"still use PRIV-BOOTSTRAP- placeholder; "
+                f"run: mthydra-controller authority-migrate-placeholder"
+            )
+
+    # Check 27: every live/provisioning box has an active onward credential
+    orphan = conn.execute(
+        "SELECT rb.box_id FROM ru_boxes rb "
+        "LEFT JOIN onward_credentials oc ON oc.box_id = rb.box_id "
+        "                                  AND oc.revoked_at IS NULL "
+        "WHERE rb.state IN ('provisioning','live') AND oc.cred_id IS NULL "
+        "LIMIT 1"
+    ).fetchone()
+    if orphan is not None:
+        raise InvariantViolation(
+            f"check 27: ru_boxes.box_id={orphan[0]!r} is live/provisioning "
+            f"but has no active onward_credentials row"
+        )
+
+    # Check 28: no two non-terminated boxes share an SNI (defence-in-depth on UNIQUE)
+    dup = conn.execute(
+        "SELECT sni, COUNT(*) FROM ru_boxes "
+        "WHERE state != 'terminated' "
+        "GROUP BY sni HAVING COUNT(*) > 1 LIMIT 1"
+    ).fetchone()
+    if dup is not None:
+        raise InvariantViolation(
+            f"check 28: SNI {dup[0]!r} shared by {dup[1]} non-terminated boxes"
+        )

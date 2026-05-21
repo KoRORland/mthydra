@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -13,17 +12,12 @@ from mthydra.controller.state.descriptor import insert_signing_key
 from mthydra.controller.state.obligations import set_obligation
 from mthydra.controller.state.schema import apply_schema
 from mthydra.controller.state.tokens import set_provider_credential
+from mthydra.descriptor.authority import generate_authority_keypair
 from mthydra.descriptor.keys import generate_keypair
 
 
 class BootstrapError(RuntimeError):
     pass
-
-
-def _placeholder_keypair_pem() -> tuple[str, str]:
-    """Placeholder key pair for credential_authority (spec C will replace with real key)."""
-    nonce = secrets.token_hex(16)
-    return (f"PRIV-BOOTSTRAP-{nonce}", f"PUB-BOOTSTRAP-{nonce}")
 
 
 def _add_hours(iso: str, hours: int) -> str:
@@ -84,7 +78,8 @@ def init_state(
             )
             # Standby seeds no authority, no keys, no obligations from its own DB.
         else:
-            priv, pub = _placeholder_keypair_pem()
+            # Spec G: generate a real Ed25519 keypair for credential_authority at bootstrap.
+            priv, pub = generate_authority_keypair()
             insert_authority(conn, generation=1, privkey_pem=priv, pubkey_pem=pub, created_at=now)
 
             # Spec B: generate a real Ed25519 keypair for the descriptor signing key.
