@@ -170,3 +170,23 @@ class S3Destination:
             "last_modified_iso": obj["LastModified"].strftime("%Y-%m-%dT%H:%M:%SZ"),
             "size_bytes": int(obj["ContentLength"]),
         }
+
+    def presigned_image_url(
+        self, *, image_version: str, ttl_seconds: int = 3600,
+    ) -> tuple[str, str]:
+        """Generate a short-lived signed GET URL for the image binary.
+
+        Returns (url, expires_at_iso). Uses boto3.generate_presigned_url.
+        """
+        url = self._client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": self.bucket,
+                "Key": self._image_binary_key(image_version),
+            },
+            ExpiresIn=ttl_seconds,
+        )
+        expires_at_iso = (
+            datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return url, expires_at_iso

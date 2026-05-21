@@ -143,3 +143,16 @@ def test_head_image_returns_none_when_absent(s3_env):
     dest = _make_dest(s3_env)
     info = dest.head_image(image_version="not-there")
     assert info is None
+
+
+def test_presigned_image_url_returns_signed_url_and_expiry(s3_env, tmp_path):
+    """presigned_image_url returns (url, expires_at_iso) for the image binary."""
+    dest = _make_dest(s3_env)
+    bp = tmp_path / "mtg"
+    bp.write_bytes(b"\x7fELF" + b"\x00" * 100)
+    dest.put_image(image_version="ivX", binary_path=bp, manifest=b'{"x":1}')
+    url, expires_at = dest.presigned_image_url(image_version="ivX", ttl_seconds=3600)
+    assert url.startswith("https://") or url.startswith("http://")
+    assert "ivX" in url
+    assert "Signature" in url  # X-Amz-Signature or just Signature, depending on signer
+    assert expires_at  # ISO-8601 string
