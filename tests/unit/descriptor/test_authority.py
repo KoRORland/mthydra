@@ -98,3 +98,30 @@ def test_verify_rejects_wrong_schema_version():
     blob = struct.pack(">H", len(payload)) + payload + sig
     with pytest.raises(VerifyError, match="schema"):
         verify_onward_credential(blob, pub_pem)
+
+
+def test_authority_module_has_no_controller_imports():
+    """RU-embeddability: spec F2 copies this module verbatim. Zero
+    mthydra.controller.* imports means it can run on the RU box without
+    the controller package present."""
+    import ast
+    import pathlib
+
+    src = pathlib.Path(
+        "src/mthydra/descriptor/authority.py"
+    ).read_text()
+    tree = ast.parse(src)
+    bad: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            if mod.startswith("mthydra.controller"):
+                bad.append(f"line {node.lineno}: from {mod}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("mthydra.controller"):
+                    bad.append(f"line {node.lineno}: import {alias.name}")
+    assert not bad, (
+        "authority.py must not import from mthydra.controller.*:\n  "
+        + "\n  ".join(bad)
+    )
