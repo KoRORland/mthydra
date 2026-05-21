@@ -122,3 +122,24 @@ def test_head_heartbeat_returns_etag_and_modified(s3_env):
     assert info is not None
     assert "etag" in info
     assert "last_modified_iso" in info
+
+
+def test_put_image_uploads_binary_and_manifest(s3_env, tmp_path):
+    """put_image uploads both binary and manifest under content-addressed prefix."""
+    dest = _make_dest(s3_env)
+    binary_path = tmp_path / "mtg"
+    binary_path.write_bytes(b"\x7fELF" + b"\x00" * 100)
+    manifest = b'{"image_version":"abc","schema":"mthydra.ru_image.v1"}'
+
+    dest.put_image(image_version="abc123", binary_path=binary_path, manifest=manifest)
+
+    info = dest.head_image(image_version="abc123")
+    assert info is not None
+    assert "etag" in info
+    assert info["size_bytes"] == binary_path.stat().st_size
+
+
+def test_head_image_returns_none_when_absent(s3_env):
+    dest = _make_dest(s3_env)
+    info = dest.head_image(image_version="not-there")
+    assert info is None

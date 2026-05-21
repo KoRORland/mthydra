@@ -124,3 +124,49 @@ class S3Destination:
             "last_modified_iso": obj["LastModified"].strftime("%Y-%m-%dT%H:%M:%SZ"),
             "size_bytes": int(obj["ContentLength"]),
         }
+
+    @staticmethod
+    def _image_binary_key(image_version: str) -> str:
+        return f"images/{image_version}/mtg"
+
+    @staticmethod
+    def _image_manifest_key(image_version: str) -> str:
+        return f"images/{image_version}/manifest.json"
+
+    def put_image(
+        self, *, image_version: str, binary_path: Path, manifest: bytes,
+    ) -> None:
+        """Upload binary + manifest to B2, both under Object Lock COMPLIANCE."""
+        retain_until = datetime.now(timezone.utc) + timedelta(days=self.object_lock_days)
+        with open(binary_path, "rb") as fh:
+            self._client.put_object(
+                Bucket=self.bucket,
+                Key=self._image_binary_key(image_version),
+                Body=fh,
+                ObjectLockMode="COMPLIANCE",
+                ObjectLockRetainUntilDate=retain_until,
+            )
+        self._client.put_object(
+            Bucket=self.bucket,
+            Key=self._image_manifest_key(image_version),
+            Body=manifest,
+            ContentType="application/json",
+            ObjectLockMode="COMPLIANCE",
+            ObjectLockRetainUntilDate=retain_until,
+        )
+
+    def head_image(self, *, image_version: str) -> dict[str, Any] | None:
+        """Returns binary head info or None if absent."""
+        try:
+            obj = self._client.head_object(
+                Bucket=self.bucket, Key=self._image_binary_key(image_version)
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey"):
+                return None
+            raise
+        return {
+            "etag": obj["ETag"],
+            "last_modified_iso": obj["LastModified"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "size_bytes": int(obj["ContentLength"]),
+        }
