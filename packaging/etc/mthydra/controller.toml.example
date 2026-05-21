@@ -52,3 +52,10 @@ node_id                      = ""        # set on standby hosts only; eu-standby
 heartbeat_interval_seconds   = 60
 heartbeat_poll_interval      = "5m"
 staleness_alert_seconds      = 600
+
+[image]
+upstream_repo           = "9seconds/mtg"
+upstream_release_asset  = "mtg-linux-amd64"
+upstream_check_interval = "168h"
+github_api_url          = "https://api.github.com"
+build_tmp_dir           = "/var/lib/mthydra/tmp"

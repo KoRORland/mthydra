@@ -290,7 +290,7 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
     from mthydra.controller.cli import _build_destination
     from mthydra.controller.config import (
         BackupConfig, Config, CoverPoolConfig, DescriptorConfig, GapMonitorConfig,
-        NodeConfig, ObligationsConfig, RetentionConfig, StandbyConfig,
+        ImageConfig, NodeConfig, ObligationsConfig, RetentionConfig, StandbyConfig,
     )
 
     cfg = Config(
@@ -321,6 +321,13 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
             heartbeat_interval_seconds=60,
             heartbeat_poll_interval_seconds=300,
             staleness_alert_seconds=600,
+        ),
+        image=ImageConfig(
+            upstream_repo="9seconds/mtg",
+            upstream_release_asset="mtg-linux-amd64",
+            upstream_check_interval_seconds=168 * 3600,
+            github_api_url="https://api.github.com",
+            build_tmp_dir="/var/lib/mthydra/tmp",
         ),
     )
 

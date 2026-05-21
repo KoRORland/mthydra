@@ -193,3 +193,60 @@ def test_load_config_standby_section_defaults(tmp_path):
     assert cfg.standby.heartbeat_interval_seconds == 60
     assert cfg.standby.heartbeat_poll_interval_seconds == 300
     assert cfg.standby.staleness_alert_seconds == 600
+
+
+def test_load_image_config(tmp_path):
+    from mthydra.controller.config import load_config
+
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(
+        "[node]\nrole='active'\nhostname='h'\n"
+        "[backup]\nfloor_interval_hours=24\non_change_debounce_seconds=30\n"
+        "endpoint='https://example'\nbucket='b'\naccess_key_id='k'\n"
+        "[backup.retention]\nkeep_daily=30\nkeep_monthly=12\nobject_lock_days=365\n"
+        "[gap_monitor]\npoll_interval_minutes=30\nalarm_threshold_hours=48\n"
+        "recipient_email='op@example.org'\n"
+        "[descriptor]\nrotation_interval_hours=1\nvalidity_window_hours=24\n"
+        "[obligations]\n[obligations.timers_hours]\n"
+        "[cover_pool]\nrotation_ttl_days=14\nreverify_after_days=30\n"
+        "freeze_threshold=2\nreverify_sweep_interval='1h'\n"
+        "rotation_sweep_interval='1h'\nreplenishment_interval_days=90\n"
+        "[image]\n"
+        "upstream_repo = '9seconds/mtg'\n"
+        "upstream_release_asset = 'mtg-linux-amd64'\n"
+        "upstream_check_interval = '168h'\n"
+        "github_api_url = 'https://api.github.com'\n"
+        "build_tmp_dir = '/var/lib/mthydra/tmp'\n"
+    )
+    cfg = load_config(cfg_path)
+    assert cfg.image.upstream_repo == "9seconds/mtg"
+    assert cfg.image.upstream_release_asset == "mtg-linux-amd64"
+    assert cfg.image.upstream_check_interval_seconds == 168 * 3600
+    assert cfg.image.github_api_url == "https://api.github.com"
+    assert cfg.image.build_tmp_dir == "/var/lib/mthydra/tmp"
+
+
+def test_load_image_config_defaults(tmp_path):
+    """Missing [image] section: load with safe defaults."""
+    from mthydra.controller.config import load_config
+
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(
+        "[node]\nrole='active'\nhostname='h'\n"
+        "[backup]\nfloor_interval_hours=24\non_change_debounce_seconds=30\n"
+        "endpoint='https://example'\nbucket='b'\naccess_key_id='k'\n"
+        "[backup.retention]\nkeep_daily=30\nkeep_monthly=12\nobject_lock_days=365\n"
+        "[gap_monitor]\npoll_interval_minutes=30\nalarm_threshold_hours=48\n"
+        "recipient_email='op@example.org'\n"
+        "[descriptor]\nrotation_interval_hours=1\nvalidity_window_hours=24\n"
+        "[obligations]\n[obligations.timers_hours]\n"
+        "[cover_pool]\nrotation_ttl_days=14\nreverify_after_days=30\n"
+        "freeze_threshold=2\nreverify_sweep_interval='1h'\n"
+        "rotation_sweep_interval='1h'\nreplenishment_interval_days=90\n"
+    )
+    cfg = load_config(cfg_path)
+    assert cfg.image.upstream_repo == "9seconds/mtg"
+    assert cfg.image.upstream_release_asset == "mtg-linux-amd64"
+    assert cfg.image.upstream_check_interval_seconds == 168 * 3600
+    assert cfg.image.github_api_url == "https://api.github.com"
+    assert cfg.image.build_tmp_dir == "/var/lib/mthydra/tmp"

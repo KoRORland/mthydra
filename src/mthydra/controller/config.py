@@ -70,6 +70,15 @@ class StandbyConfig:
 
 
 @dataclass(frozen=True)
+class ImageConfig:
+    upstream_repo: str
+    upstream_release_asset: str
+    upstream_check_interval_seconds: int
+    github_api_url: str
+    build_tmp_dir: str
+
+
+@dataclass(frozen=True)
 class Config:
     node: NodeConfig
     backup: BackupConfig
@@ -78,6 +87,7 @@ class Config:
     descriptor: DescriptorConfig
     cover_pool: CoverPoolConfig
     standby: StandbyConfig
+    image: ImageConfig
 
 
 _VALID_ROLES = {"active", "standby"}
@@ -148,6 +158,20 @@ def _load_standby(data: dict) -> StandbyConfig:
     )
 
 
+def _load_image(data: dict) -> ImageConfig:
+    sec = data.get("image", {})
+    return ImageConfig(
+        upstream_repo=str(sec.get("upstream_repo", "9seconds/mtg")),
+        upstream_release_asset=str(sec.get("upstream_release_asset", "mtg-linux-amd64")),
+        upstream_check_interval_seconds=_parse_interval_seconds(
+            "image.upstream_check_interval",
+            sec.get("upstream_check_interval", "168h"),
+        ),
+        github_api_url=str(sec.get("github_api_url", "https://api.github.com")),
+        build_tmp_dir=str(sec.get("build_tmp_dir", "/var/lib/mthydra/tmp")),
+    )
+
+
 def load_config(path: Path | str) -> Config:
     path = Path(path)
     try:
@@ -202,4 +226,5 @@ def load_config(path: Path | str) -> Config:
         ),
         cover_pool=_load_cover_pool(raw),
         standby=_load_standby(raw),
+        image=_load_image(raw),
     )
