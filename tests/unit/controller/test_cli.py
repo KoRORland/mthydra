@@ -1227,6 +1227,86 @@ def test_upstream_check_invokes_tracker(tmp_path, age_recipient, capsys, monkeyp
     assert "v2.1.7" in capsys.readouterr().out
 
 
+# ===== Task 3 (Spec G): authority-migrate-placeholder + authority-rotate real Ed25519 =====
+
+def test_authority_migrate_placeholder_replaces_placeholder(tmp_path, age_recipient):
+    """authority-migrate-placeholder converts PRIV-BOOTSTRAP-... to real Ed25519."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+
+    from mthydra.controller.state.authority import current_authority
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    before = current_authority(conn)
+    assert before.privkey_pem.startswith("PRIV-BOOTSTRAP-")
+    conn.close()
+
+    rc = run(["authority-migrate-placeholder",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+
+    conn = connect(db)
+    after = current_authority(conn)
+    assert after.generation == before.generation
+    assert after.privkey_pem.startswith("-----BEGIN PRIVATE KEY-----")
+    assert after.pubkey_pem.startswith("-----BEGIN PUBLIC KEY-----")
+    conn.close()
+
+
+def test_authority_migrate_placeholder_idempotent(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    run(["authority-migrate-placeholder", "--db-path", str(db), "--config", str(cfg_path)])
+    capsys.readouterr()
+    rc = run(["authority-migrate-placeholder", "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+
+
+def test_authority_migrate_placeholder_refused_on_standby(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--role", "standby", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["authority-migrate-placeholder", "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 2
+    assert "active-only" in capsys.readouterr().err.lower()
+
+
+def test_authority_rotate_uses_real_ed25519(tmp_path, age_recipient):
+    """authority-rotate now uses generate_authority_keypair() — not PRIV-BOOTSTRAP-."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    run(["authority-migrate-placeholder", "--db-path", str(db), "--config", str(cfg_path)])
+    rc = run(["authority-rotate", "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+
+    from mthydra.controller.state.authority import current_authority
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    cur = current_authority(conn)
+    assert cur.generation == 2
+    assert cur.privkey_pem.startswith("-----BEGIN PRIVATE KEY-----")
+    conn.close()
+
+
 def test_serve_arms_upstream_tracker(tmp_path, age_recipient, monkeypatch):
     """Active serve constructs and arms an UpstreamReleaseTracker alongside the
     cover-pool sweeps + heartbeat poller."""

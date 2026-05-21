@@ -202,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
     ar.add_argument("--db-path", default=DEFAULT_DB)
     ar.add_argument("--config", default="/etc/mthydra/controller.toml")
 
+    amp = sub.add_parser("authority-migrate-placeholder",
+                          help="replace PRIV-BOOTSTRAP-* authority rows with real Ed25519")
+    amp.add_argument("--db-path", default=DEFAULT_DB)
+    amp.add_argument("--config", default="/etc/mthydra/controller.toml")
+
     # serve — long-running daemon stub (spec F will expand this)
     srv_p = sub.add_parser(
         "serve",
@@ -519,6 +524,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "authority-rotate":
         return _cmd_authority_rotate(args)
+
+    if args.cmd == "authority-migrate-placeholder":
+        return _cmd_authority_migrate_placeholder(args)
 
     if args.cmd == "promote-active":
         return _cmd_promote_active(args)
@@ -1309,12 +1317,12 @@ def _cmd_cover_due(args) -> int:
 def _cmd_authority_rotate(args) -> int:
     import json as _json
 
-    from mthydra.controller.bootstrap import _placeholder_keypair_pem
     from mthydra.controller.state.audit import log_event
     from mthydra.controller.state.authority import (
         current_authority, insert_authority, retire_authority,
     )
     from mthydra.controller.state.db import connect
+    from mthydra.descriptor.authority import generate_authority_keypair
 
     conn = connect(args.db_path)
     try:
@@ -1328,7 +1336,7 @@ def _cmd_authority_rotate(args) -> int:
             return 2
         new_gen = current.generation + 1
         now = _now()
-        priv, pub = _placeholder_keypair_pem()
+        priv, pub = generate_authority_keypair()
         insert_authority(conn, generation=new_gen, privkey_pem=priv,
                          pubkey_pem=pub, created_at=now)
         retire_authority(conn, current.generation, at=now)
@@ -1338,6 +1346,47 @@ def _cmd_authority_rotate(args) -> int:
                                              "retired_generation": current.generation}))
         print(f"authority-rotate: new generation {new_gen} active; "
               f"generation {current.generation} retired")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_authority_migrate_placeholder(args) -> int:
+    import json as _json
+
+    from mthydra.controller.state.audit import log_event
+    from mthydra.controller.state.db import connect
+    from mthydra.descriptor.authority import generate_authority_keypair
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "authority-migrate-placeholder")
+        if rc is not None:
+            return rc
+        rows = conn.execute(
+            "SELECT generation, privkey_pem FROM credential_authority "
+            "WHERE privkey_pem LIKE 'PRIV-BOOTSTRAP-%'"
+        ).fetchall()
+        if not rows:
+            print("authority-migrate-placeholder: no placeholder rows; nothing to migrate")
+            return 0
+        now = _now()
+        for gen, _old_priv in rows:
+            priv_pem, pub_pem = generate_authority_keypair()
+            conn.execute(
+                "UPDATE credential_authority SET privkey_pem=?, pubkey_pem=? "
+                "WHERE generation=?",
+                (priv_pem, pub_pem, gen),
+            )
+            log_event(
+                conn, ts=now, actor="operator",
+                action="authority_migrated_placeholder",
+                target=str(gen),
+                details_json=_json.dumps({"old_prefix": "PRIV-BOOTSTRAP-"},
+                                          separators=(",", ":")),
+            )
+        conn.commit()
+        print(f"authority-migrate-placeholder: migrated {len(rows)} row(s) to real Ed25519")
         return 0
     finally:
         conn.close()
