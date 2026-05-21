@@ -250,3 +250,26 @@ def check_all(
                 f"check 23: standby may hold only B2 provider credentials; "
                 f"found {non_b2} non-B2 row(s)"
             )
+
+    # --- spec D checks (#24–#25) ---
+
+    # Check 24: at most one promoted image
+    p = _scalar(conn, "SELECT COUNT(*) FROM ru_images WHERE state='promoted'")
+    if p > 1:
+        raise InvariantViolation(
+            f"check 24: at most one promoted ru_image permitted, found {p}"
+        )
+
+    # Check 25: state timestamps consistent
+    bad = conn.execute(
+        "SELECT image_version, state, promoted_at, retired_at FROM ru_images WHERE "
+        "(state='promoted'  AND promoted_at IS NULL) OR "
+        "(state='retired'   AND retired_at  IS NULL) OR "
+        "(state='candidate' AND (promoted_at IS NOT NULL OR retired_at IS NOT NULL)) "
+        "LIMIT 1"
+    ).fetchone()
+    if bad is not None:
+        raise InvariantViolation(
+            f"check 25: ru_image {bad[0]!r} state={bad[1]!r} has inconsistent "
+            f"timestamps (promoted_at={bad[2]!r}, retired_at={bad[3]!r})"
+        )

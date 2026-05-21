@@ -256,3 +256,64 @@ def test_check_23_standby_with_non_b2_credential_fails(tmp_db_path):
     set_provider_credential(conn, provider="aws", credential="id:secret", at=NOW)
     with pytest.raises(InvariantViolation, match="check 23"):
         check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+# ---------------------------------------------------------------------------
+# Spec D invariant checks (#24–#25)
+# ---------------------------------------------------------------------------
+
+def test_check_24_rejects_two_promoted_images(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    for iv in ("iv1", "iv2"):
+        conn.execute(
+            "INSERT INTO ru_images "
+            "(image_version, upstream_release, upstream_repo, binary_url, manifest_url, "
+            " binary_sha256, binary_size_bytes, state, built_at, promoted_at) "
+            "VALUES (?, 'v', 'r', 'b', 'm', ?, 100, 'promoted', ?, ?)",
+            (iv, iv, NOW, NOW),
+        )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 24"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_25_rejects_promoted_without_promoted_at(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO ru_images "
+        "(image_version, upstream_release, upstream_repo, binary_url, manifest_url, "
+        " binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('iv1', 'v', 'r', 'b', 'm', 'iv1', 100, 'promoted', ?)",
+        (NOW,),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 25"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_25_rejects_retired_without_retired_at(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO ru_images "
+        "(image_version, upstream_release, upstream_repo, binary_url, manifest_url, "
+        " binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('iv1', 'v', 'r', 'b', 'm', 'iv1', 100, 'retired', ?)",
+        (NOW,),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 25"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_25_rejects_candidate_with_promoted_at(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO ru_images "
+        "(image_version, upstream_release, upstream_repo, binary_url, manifest_url, "
+        " binary_sha256, binary_size_bytes, state, built_at, promoted_at) "
+        "VALUES ('iv1', 'v', 'r', 'b', 'm', 'iv1', 100, 'candidate', ?, ?)",
+        (NOW, NOW),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 25"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
