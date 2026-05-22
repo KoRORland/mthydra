@@ -15,6 +15,7 @@ from pathlib import Path
 from mthydra.controller.bootstrap import BootstrapError, init_state
 from mthydra.controller.image.builder import BuildError, build_image
 from mthydra.controller.image.upstream_tracker import UpstreamReleaseTracker
+from mthydra.controller.provisioning.seed import ProvisionError, provision_box
 from mthydra.controller.restore.adopt import AdoptError, adopt_restored_state
 from mthydra.controller.restore.decrypt import DecryptError, decrypt_blob
 from mthydra.controller.restore.summary import summarize_db
@@ -325,6 +326,17 @@ def build_parser() -> argparse.ArgumentParser:
     sdp.add_argument("--notes", default=None)
     sdp.add_argument("--db-path", default=DEFAULT_DB)
 
+    # ----- spec G: provisioning -----
+
+    ps = sub.add_parser("provision-seed",
+                         help="atomic provisioning: claim cover domain + image + credential, emit seed")
+    ps.add_argument("--provider", required=True)
+    ps.add_argument("--region", required=True)
+    ps.add_argument("--format", choices=["cloud-init", "json"], default="cloud-init")
+    ps.add_argument("--ttl-seconds", type=int, default=3600)
+    ps.add_argument("--db-path", default=DEFAULT_DB)
+    ps.add_argument("--config", default="/etc/mthydra/controller.toml")
+
     return p
 
 
@@ -555,6 +567,9 @@ def run(argv: list[str]) -> int:
         return _cmd_image_current(args)
     if args.cmd == "upstream-check":
         return _cmd_upstream_check(args)
+
+    if args.cmd == "provision-seed":
+        return _cmd_provision_seed(args)
 
     return 1
 
@@ -1763,3 +1778,52 @@ def _cmd_upstream_check(args) -> int:
         return 4
     print(f"upstream-check: latest upstream tag = {latest}")
     return 0
+
+
+# ----- spec G: provisioning handlers -----
+
+
+def _cmd_provision_seed(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.tokens import get_provider_credential
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"provision-seed: config error: {e}", file=sys.stderr)
+        return 2
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "provision-seed")
+        if rc is not None:
+            return rc
+        try:
+            secret = get_provider_credential(conn, "b2")
+        except KeyError:
+            print("provision-seed: b2 provider credential not in DB", file=sys.stderr)
+            return 7
+        dest = _build_destination(cfg, secret, mode="production",
+                                   bucket_override=args.bucket_override)
+        try:
+            seed = provision_box(
+                conn=conn, b2_destination=dest,
+                provider=args.provider, region=args.region,
+                image_signed_url_ttl_seconds=args.ttl_seconds,
+                now=_now(),
+            )
+        except ProvisionError as e:
+            print(f"provision-seed: {e}", file=sys.stderr)
+            return 3
+        except Exception as e:
+            print(f"provision-seed: B2 URL minting failed: {e}", file=sys.stderr)
+            return 5
+
+        if args.format == "json":
+            print(seed.to_json_pretty().decode("utf-8"))
+        else:
+            print(seed.to_cloud_init().decode("utf-8"))
+        return 0
+    finally:
+        conn.close()

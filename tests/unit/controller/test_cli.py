@@ -1394,3 +1394,124 @@ def test_serve_arms_upstream_tracker(tmp_path, age_recipient, monkeypatch):
     assert rc == 0
     assert armed["tracker"] == 1
 
+
+# ----- spec G: provision-seed -----
+
+
+def _setup_provision_prereqs(db, age_recipient, cfg_path):
+    """Build a DB that's ready for provision-seed: migrate authority,
+    promote image, attest cover-domain, sign descriptor."""
+    from mthydra.controller.cli import run
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import insert_candidate, promote
+    from mthydra.controller.state.cover_pool import add_candidate, attest_verified
+
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    run(["authority-migrate-placeholder", "--db-path", str(db), "--config", str(cfg_path)])
+    conn = connect(db)
+    insert_candidate(
+        conn,
+        image_version="abc123",
+        upstream_release="v2.1.7",
+        upstream_repo="9seconds/mtg",
+        binary_url="images/abc123/mtg",
+        manifest_url="images/abc123/manifest.json",
+        binary_sha256="abc123",
+        binary_size_bytes=10485760,
+        built_at="2026-05-21T00:00:00Z",
+    )
+    promote(conn, "abc123", at="2026-05-21T00:01:00Z", evidence="smoke")
+    add_candidate(conn, "example.cover", added_at="2026-05-21T00:02:00Z")
+    attest_verified(conn, "example.cover", from_vantage="ru-vps-01",
+                     at="2026-05-21T00:03:00Z")
+    conn.close()
+    # Sign a descriptor.
+    run(["descriptor-sign-now", "--db-path", str(db), "--config", str(cfg_path)])
+
+
+def test_provision_seed_cloud_init_default(tmp_path, age_recipient, capsys, monkeypatch):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+
+    # Stub presigned_image_url so we don't need a real B2.
+    from mthydra.controller.backup.s3_dest import S3Destination
+    monkeypatch.setattr(
+        S3Destination, "presigned_image_url",
+        lambda self, *, image_version, ttl_seconds=3600: (
+            f"https://b2.example/{image_version}/mtg?sig=stub",
+            "2026-05-21T01:00:00Z",
+        ),
+    )
+    _setup_provision_prereqs(db, age_recipient, cfg_path)
+    capsys.readouterr()
+    rc = run(["provision-seed",
+              "--provider", "hetzner", "--region", "fsn1",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.startswith("#cloud-config")
+    assert "write_files" in out
+    assert "example.cover" in out
+
+
+def test_provision_seed_json_format(tmp_path, age_recipient, capsys, monkeypatch):
+    import json
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+
+    from mthydra.controller.backup.s3_dest import S3Destination
+    monkeypatch.setattr(
+        S3Destination, "presigned_image_url",
+        lambda self, *, image_version, ttl_seconds=3600: (
+            f"https://b2.example/{image_version}/mtg?sig=stub",
+            "2026-05-21T01:00:00Z",
+        ),
+    )
+    _setup_provision_prereqs(db, age_recipient, cfg_path)
+    capsys.readouterr()
+    rc = run(["provision-seed", "--format", "json",
+              "--provider", "hetzner", "--region", "fsn1",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema"] == "mthydra.ru_seed.v1"
+    assert payload["sni"] == "example.cover"
+    assert payload["transport_role"] == "ru_relay"
+
+
+def test_provision_seed_refused_on_standby(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--role", "standby", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["provision-seed", "--provider", "p", "--region", "r",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 2
+    assert "active-only" in capsys.readouterr().err.lower()
+
+
+def test_provision_seed_refused_no_promoted_image(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    run(["authority-migrate-placeholder", "--db-path", str(db), "--config", str(cfg_path)])
+    # No image promoted, no domain attested, no descriptor signed.
+    rc = run(["provision-seed", "--provider", "p", "--region", "r",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 3
+    err = capsys.readouterr().err.lower()
+    assert "image" in err or "promoted" in err
+
