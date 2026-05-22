@@ -100,6 +100,103 @@ def test_verify_rejects_wrong_schema_version():
         verify_onward_credential(blob, pub_pem)
 
 
+def test_sign_rejects_non_ed25519_key():
+    """sign_onward_credential must refuse RSA / non-Ed25519 PKCS#8 keys."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    rsa_pem = rsa_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    with pytest.raises(ValueError, match="Ed25519"):
+        sign_onward_credential(rsa_pem, box_id="b", issued_at="t", authority_generation=1)
+
+
+def test_verify_rejects_length_mismatch():
+    """Wire format: header N must equal actual payload length."""
+    import struct
+    priv, pub = generate_authority_keypair()
+    blob = sign_onward_credential(priv, box_id="b", issued_at="t", authority_generation=1)
+    # Rewrite header to claim a larger payload than actually present.
+    bogus = struct.pack(">H", 9999) + blob[2:]
+    with pytest.raises(VerifyError, match="length mismatch"):
+        verify_onward_credential(bogus, pub)
+
+
+def test_verify_rejects_malformed_pubkey():
+    priv, _ = generate_authority_keypair()
+    blob = sign_onward_credential(priv, box_id="b", issued_at="t", authority_generation=1)
+    with pytest.raises(VerifyError, match="invalid authority pubkey"):
+        verify_onward_credential(blob, "-----BEGIN PUBLIC KEY-----\ngarbage\n-----END PUBLIC KEY-----\n")
+
+
+def test_verify_rejects_non_ed25519_pubkey():
+    """An RSA SPKI PEM must be rejected as not-Ed25519."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    priv, _ = generate_authority_keypair()
+    blob = sign_onward_credential(priv, box_id="b", issued_at="t", authority_generation=1)
+    rsa_pub_pem = rsa.generate_private_key(
+        public_exponent=65537, key_size=2048
+    ).public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    with pytest.raises(VerifyError, match="not Ed25519"):
+        verify_onward_credential(blob, rsa_pub_pem)
+
+
+def _craft_signed(payload_bytes: bytes) -> tuple[bytes, str]:
+    """Sign arbitrary bytes with a fresh keypair; return (blob, pubkey_pem)."""
+    import struct
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    priv_obj = ed25519.Ed25519PrivateKey.generate()
+    pub_pem = priv_obj.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    sig = priv_obj.sign(payload_bytes)
+    return struct.pack(">H", len(payload_bytes)) + payload_bytes + sig, pub_pem
+
+
+def test_verify_rejects_non_json_payload():
+    """A signature-valid payload that isn't JSON must fail."""
+    blob, pub_pem = _craft_signed(b"not-json-at-all")
+    with pytest.raises(VerifyError, match="not valid JSON"):
+        verify_onward_credential(blob, pub_pem)
+
+
+def test_verify_rejects_missing_field():
+    """Valid JSON + valid signature but missing required field."""
+    import json
+    payload = json.dumps(
+        {"schema": "mthydra.onward_credential.v1", "box_id": "x"},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    blob, pub_pem = _craft_signed(payload)
+    with pytest.raises(VerifyError, match="missing or malformed"):
+        verify_onward_credential(blob, pub_pem)
+
+
+def test_verify_rejects_bad_field_type():
+    """authority_generation that can't be coerced to int must fail."""
+    import json
+    payload = json.dumps(
+        {"schema": "mthydra.onward_credential.v1", "box_id": "x",
+         "issued_at": "t", "authority_generation": "not-an-int"},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    blob, pub_pem = _craft_signed(payload)
+    with pytest.raises(VerifyError, match="missing or malformed"):
+        verify_onward_credential(blob, pub_pem)
+
+
 def test_authority_module_has_no_controller_imports():
     """RU-embeddability: spec F2 copies this module verbatim. Zero
     mthydra.controller.* imports means it can run on the RU box without
