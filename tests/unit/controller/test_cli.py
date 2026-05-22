@@ -1515,3 +1515,122 @@ def test_provision_seed_refused_no_promoted_image(tmp_path, age_recipient, capsy
     err = capsys.readouterr().err.lower()
     assert "image" in err or "promoted" in err
 
+
+# ----- spec G: ru-box-list / ru-box-mark-live / ru-box-terminate -----
+
+
+def test_ru_box_list_empty_default(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    capsys.readouterr()
+    rc = run(["ru-box-list", "--db-path", str(db)])
+    assert rc == 0
+
+
+def test_ru_box_list_json_after_provision(tmp_path, age_recipient, capsys, monkeypatch):
+    import json
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    from mthydra.controller.backup.s3_dest import S3Destination
+    monkeypatch.setattr(
+        S3Destination, "presigned_image_url",
+        lambda self, *, image_version, ttl_seconds=3600: (
+            f"https://b2.example/{image_version}/mtg?sig=stub",
+            "2026-05-21T01:00:00Z",
+        ),
+    )
+    _setup_provision_prereqs(db, age_recipient, cfg_path)
+    run(["provision-seed", "--provider", "hetzner", "--region", "fsn1",
+         "--db-path", str(db), "--config", str(cfg_path)])
+    capsys.readouterr()
+    rc = run(["ru-box-list", "--json", "--db-path", str(db)])
+    assert rc == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert len(rows) == 1
+    assert rows[0]["state"] == "provisioning"
+
+
+def test_ru_box_mark_live_happy_path(tmp_path, age_recipient, capsys, monkeypatch):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    from mthydra.controller.backup.s3_dest import S3Destination
+    monkeypatch.setattr(
+        S3Destination, "presigned_image_url",
+        lambda self, *, image_version, ttl_seconds=3600: (
+            f"https://b2.example/{image_version}/mtg?sig=stub",
+            "2026-05-21T01:00:00Z",
+        ),
+    )
+    _setup_provision_prereqs(db, age_recipient, cfg_path)
+    run(["provision-seed", "--provider", "hetzner", "--region", "fsn1",
+         "--db-path", str(db), "--config", str(cfg_path)])
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    box_id = conn.execute("SELECT box_id FROM ru_boxes LIMIT 1").fetchone()[0]
+    conn.close()
+    rc = run(["ru-box-mark-live", box_id, "--public-ip", "203.0.113.7",
+              "--db-path", str(db)])
+    assert rc == 0
+    conn = connect(db)
+    row = conn.execute("SELECT state, public_ip FROM ru_boxes WHERE box_id=?",
+                        (box_id,)).fetchone()
+    assert row == ("live", "203.0.113.7")
+    conn.close()
+
+
+def test_ru_box_terminate_burns_sni_and_revokes_credentials(tmp_path, age_recipient, monkeypatch):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    from mthydra.controller.backup.s3_dest import S3Destination
+    monkeypatch.setattr(
+        S3Destination, "presigned_image_url",
+        lambda self, *, image_version, ttl_seconds=3600: (
+            f"https://b2.example/{image_version}/mtg?sig=stub",
+            "2026-05-21T01:00:00Z",
+        ),
+    )
+    _setup_provision_prereqs(db, age_recipient, cfg_path)
+    run(["provision-seed", "--provider", "hetzner", "--region", "fsn1",
+         "--db-path", str(db), "--config", str(cfg_path)])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.burned import is_burned
+    conn = connect(db)
+    box_id, sni = conn.execute("SELECT box_id, sni FROM ru_boxes LIMIT 1").fetchone()
+    conn.close()
+    rc = run(["ru-box-terminate", box_id, "--reason", "test",
+              "--db-path", str(db)])
+    assert rc == 0
+    conn = connect(db)
+    state = conn.execute(
+        "SELECT state FROM ru_boxes WHERE box_id=?", (box_id,)
+    ).fetchone()[0]
+    assert state == "terminated"
+    assert is_burned(conn, sni)
+    revoked = conn.execute(
+        "SELECT COUNT(*) FROM onward_credentials WHERE box_id=? AND revoked_at IS NULL",
+        (box_id,),
+    ).fetchone()[0]
+    assert revoked == 0
+    conn.close()
+
+
+def test_bootstrap_seeds_provision_drill_obligation(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    conn = connect(db)
+    obs = {o.obligation_id for o in list_obligations(conn)}
+    assert "g_provision_drill_proven" in obs
+    conn.close()
+

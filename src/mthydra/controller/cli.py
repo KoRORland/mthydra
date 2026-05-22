@@ -328,6 +328,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ----- spec G: provisioning -----
 
+    rbl = sub.add_parser("ru-box-list", help="list ru_boxes inventory")
+    rbl.add_argument("--state", choices=["provisioning", "live", "terminated"], default=None)
+    rbl.add_argument("--db-path", default=DEFAULT_DB)
+    rbl.add_argument("--json", action="store_true")
+
+    rbml = sub.add_parser("ru-box-mark-live", help="state: provisioning -> live")
+    rbml.add_argument("box_id")
+    rbml.add_argument("--public-ip", required=True)
+    rbml.add_argument("--db-path", default=DEFAULT_DB)
+
+    rbt = sub.add_parser("ru-box-terminate",
+                          help="terminate a box (revokes credentials, burns SNI)")
+    rbt.add_argument("box_id")
+    rbt.add_argument("--reason", required=True)
+    rbt.add_argument("--db-path", default=DEFAULT_DB)
+
     ps = sub.add_parser("provision-seed",
                          help="atomic provisioning: claim cover domain + image + credential, emit seed")
     ps.add_argument("--provider", required=True)
@@ -375,6 +391,7 @@ def run(argv: list[str]) -> int:
                     "cover_pool_replenishment_proven": 90 * 24,
                     "eu_standby_drill_proven": 30 * 24,
                     "t4_image_promoted":  30 * 24,
+                    "g_provision_drill_proven":  90 * 24,
                 } if args.role == "active" else {},
                 now=_now(),
                 role=args.role,
@@ -570,6 +587,13 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "provision-seed":
         return _cmd_provision_seed(args)
+
+    if args.cmd == "ru-box-list":
+        return _cmd_ru_box_list(args)
+    if args.cmd == "ru-box-mark-live":
+        return _cmd_ru_box_mark_live(args)
+    if args.cmd == "ru-box-terminate":
+        return _cmd_ru_box_terminate(args)
 
     return 1
 
@@ -1824,6 +1848,120 @@ def _cmd_provision_seed(args) -> int:
             print(seed.to_json_pretty().decode("utf-8"))
         else:
             print(seed.to_cloud_init().decode("utf-8"))
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_ru_box_list(args) -> int:
+    import json as _json
+    from dataclasses import asdict
+    from mthydra.controller.state.db import connect
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "ru-box-list")
+        if rc is not None:
+            return rc
+        if args.state is None:
+            rows = conn.execute(
+                "SELECT box_id, provider, region, public_ip, sni, shard_id, state, "
+                "image_version, created_at, went_live_at, terminated_at, termination_reason "
+                "FROM ru_boxes ORDER BY created_at DESC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT box_id, provider, region, public_ip, sni, shard_id, state, "
+                "image_version, created_at, went_live_at, terminated_at, termination_reason "
+                "FROM ru_boxes WHERE state=? ORDER BY created_at DESC", (args.state,)
+            ).fetchall()
+        cols = ("box_id", "provider", "region", "public_ip", "sni", "shard_id",
+                "state", "image_version", "created_at", "went_live_at",
+                "terminated_at", "termination_reason")
+        out = [dict(zip(cols, r)) for r in rows]
+        if args.json:
+            print(_json.dumps(out, indent=2))
+        else:
+            print(f"{'state':14} {'box_id':38} {'sni':40} created_at")
+            for r in out:
+                print(f"{r['state']:14} {r['box_id']:38} {r['sni']:40} "
+                      f"{r['created_at']}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_ru_box_mark_live(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import mark_live
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "ru-box-mark-live")
+        if rc is not None:
+            return rc
+        row = conn.execute(
+            "SELECT 1 FROM ru_boxes WHERE box_id=?", (args.box_id,)
+        ).fetchone()
+        if row is None:
+            print(f"ru-box-mark-live: box {args.box_id!r} not found", file=sys.stderr)
+            return 2
+        try:
+            mark_live(conn, args.box_id, public_ip=args.public_ip, at=_now())
+        except ValueError as e:
+            print(f"ru-box-mark-live: {e}", file=sys.stderr)
+            return 2
+        from mthydra.controller.state.audit import log_event
+        log_event(
+            conn, ts=_now(), actor="operator", action="ru_box_live",
+            target=args.box_id, details_json=None,
+        )
+        print(f"ru-box-mark-live: {args.box_id} -> live (public_ip={args.public_ip})")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_ru_box_terminate(args) -> int:
+    import json as _json
+
+    from mthydra.controller.state.audit import log_event
+    from mthydra.controller.state.burned import mark_burned
+    from mthydra.controller.state.credentials import active_for_box, revoke_credential
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import mark_terminated
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "ru-box-terminate")
+        if rc is not None:
+            return rc
+        row = conn.execute(
+            "SELECT sni, state FROM ru_boxes WHERE box_id=?", (args.box_id,)
+        ).fetchone()
+        if row is None:
+            print(f"ru-box-terminate: box {args.box_id!r} not found", file=sys.stderr)
+            return 2
+        sni, prior_state = row
+        if prior_state == "terminated":
+            print(f"ru-box-terminate: box {args.box_id!r} already terminated",
+                  file=sys.stderr)
+            return 2
+        now = _now()
+        # Note: cannot use BEGIN/COMMIT explicitly because the helpers call
+        # conn.commit() internally. Run the steps in order; each is atomic
+        # at the row level, and any failure leaves a clean partial state.
+        for c in active_for_box(conn, args.box_id):
+            revoke_credential(conn, c.cred_id, at=now)
+        mark_burned(conn, sni, args.reason, args.box_id, now, None)
+        mark_terminated(conn, args.box_id, reason=args.reason, at=now)
+        log_event(
+            conn, ts=now, actor="operator", action="ru_box_terminated",
+            target=args.box_id,
+            details_json=_json.dumps({"reason": args.reason, "prior_state": prior_state},
+                                     separators=(",", ":")),
+        )
+        print(f"ru-box-terminate: {args.box_id} -> terminated; sni {sni!r} burned")
         return 0
     finally:
         conn.close()
