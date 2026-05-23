@@ -356,6 +356,32 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--agent-source-sha256", required=True)
     ps.add_argument("--descriptor-refresh-url", required=True)
 
+    des = sub.add_parser("data-exit-status",
+                          help="show sing-box wheel status for an EU node")
+    des.add_argument("--node-id", required=True)
+    des.add_argument("--db-path", default=DEFAULT_DB)
+    des.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    der = sub.add_parser("data-exit-rewrite",
+                          help="force a wheel tick: regenerate sing-box config now")
+    der.add_argument("--node-id", required=True)
+    der.add_argument("--db-path", default=DEFAULT_DB)
+    der.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    decs = sub.add_parser("data-exit-config-show",
+                           help="print the rendered sing-box.json to stdout")
+    decs.add_argument("--node-id", required=True)
+    decs.add_argument("--db-path", default=DEFAULT_DB)
+    decs.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    derk = sub.add_parser("data-exit-reality-keygen",
+                           help="generate the initial Reality keypair for an EU node")
+    derk.add_argument("--node-id", required=True)
+    derk.add_argument("--evidence", required=True,
+                       help="operator-attested rationale (logged to audit)")
+    derk.add_argument("--db-path", default=DEFAULT_DB)
+    derk.add_argument("--config", default="/etc/mthydra/controller.toml")
+
     return p
 
 
@@ -597,6 +623,15 @@ def run(argv: list[str]) -> int:
         return _cmd_ru_box_mark_live(args)
     if args.cmd == "ru-box-terminate":
         return _cmd_ru_box_terminate(args)
+
+    if args.cmd == "data-exit-status":
+        return _cmd_data_exit_status(args)
+    if args.cmd == "data-exit-rewrite":
+        return _cmd_data_exit_rewrite(args)
+    if args.cmd == "data-exit-config-show":
+        return _cmd_data_exit_config_show(args)
+    if args.cmd == "data-exit-reality-keygen":
+        return _cmd_data_exit_reality_keygen(args)
 
     return 1
 
@@ -1978,6 +2013,181 @@ def _cmd_ru_box_terminate(args) -> int:
                                      separators=(",", ":")),
         )
         print(f"ru-box-terminate: {args.box_id} -> terminated; sni {sni!r} burned")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_data_exit_status(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import get_node
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"data-exit-status: {e}", file=sys.stderr)
+        return 2
+    if cfg.data_exit is None:
+        print("data-exit-status: [data_exit] section missing", file=sys.stderr)
+        return 2
+    conn = connect(args.db_path)
+    try:
+        node = get_node(conn, args.node_id)
+        if node is None:
+            print(f"data-exit-status: node {args.node_id!r} not found",
+                  file=sys.stderr)
+            return 2
+        n_active = conn.execute(
+            "SELECT COUNT(*) FROM ru_boxes rb JOIN onward_credentials oc "
+            "ON oc.box_id = rb.box_id WHERE rb.state='live' "
+            "AND rb.reality_uuid IS NOT NULL AND oc.revoked_at IS NULL"
+        ).fetchone()[0]
+        n_exit_rows = conn.execute(
+            "SELECT COUNT(*) FROM eu_exit_set WHERE retired_at IS NULL"
+        ).fetchone()[0]
+        path = Path(cfg.data_exit.config_path)
+        if path.exists():
+            mtime_ts = os.path.getmtime(path)
+            mtime = datetime.fromtimestamp(mtime_ts, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+        else:
+            mtime = "(file not present)"
+        print(f"node_id:            {args.node_id}")
+        print(f"data_exit_state:    {node['data_exit_state']}")
+        print(f"data_exit_started:  {node['data_exit_started_at']}")
+        print(f"cover_sni:          {node['cover_sni']}")
+        print(f"reality_pubkey:     {(node['reality_pubkey'] or '')[:32]}...")
+        print(f"config_path:        {cfg.data_exit.config_path}")
+        print(f"config_mtime:       {mtime}")
+        print(f"users_allowlist:    {n_active}")
+        print(f"eu_exit_set_rows:   {n_exit_rows}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_data_exit_rewrite(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.data_exit.wheel import DataExitWheel
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"data-exit-rewrite: {e}", file=sys.stderr)
+        return 2
+    if cfg.data_exit is None:
+        print("data-exit-rewrite: [data_exit] section missing", file=sys.stderr)
+        return 2
+    wheel = DataExitWheel(
+        db_path=args.db_path, cfg=cfg.data_exit, node_id=args.node_id,
+        mode="offline",  # do not start the scheduler; tick once.
+    )
+    try:
+        wheel.tick()
+    except Exception as e:
+        print(f"data-exit-rewrite: tick failed: {e}", file=sys.stderr)
+        return 5
+    print(f"data-exit-rewrite: {args.node_id} config regenerated")
+    return 0
+
+
+def _cmd_data_exit_config_show(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.data_exit.config_writer import render_sing_box_config
+    from mthydra.controller.state.db import connect
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"data-exit-config-show: {e}", file=sys.stderr)
+        return 2
+    if cfg.data_exit is None:
+        print("data-exit-config-show: [data_exit] section missing", file=sys.stderr)
+        return 2
+    try:
+        reality_pk = Path(cfg.data_exit.reality_key_path).read_text().strip()
+    except FileNotFoundError:
+        print("data-exit-config-show: reality key not present at "
+              f"{cfg.data_exit.reality_key_path}", file=sys.stderr)
+        return 4
+    conn = connect(args.db_path)
+    try:
+        cover_sni = cfg.data_exit.cover_sni_for(args.node_id)
+        content = render_sing_box_config(
+            conn, cfg.data_exit, node_id=args.node_id,
+            cover_sni=cover_sni, reality_private_key=reality_pk,
+        )
+        print(content.decode("utf-8"))
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_data_exit_reality_keygen(args) -> int:
+    import subprocess
+
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.audit import log_event
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import (
+        get_node, set_data_exit_identity,
+    )
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"data-exit-reality-keygen: {e}", file=sys.stderr)
+        return 2
+    if cfg.data_exit is None:
+        print("data-exit-reality-keygen: [data_exit] section missing",
+              file=sys.stderr)
+        return 2
+    conn = connect(args.db_path)
+    try:
+        node = get_node(conn, args.node_id)
+        if node is None:
+            print(f"data-exit-reality-keygen: node {args.node_id!r} not found",
+                  file=sys.stderr)
+            return 2
+        if node["reality_pubkey"]:
+            print("data-exit-reality-keygen: already has reality_pubkey; "
+                  "rotation deferred to a future spec", file=sys.stderr)
+            return 3
+        result = subprocess.run(
+            ["sing-box", "generate", "reality-keypair"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(f"data-exit-reality-keygen: sing-box failed: {result.stderr}",
+                  file=sys.stderr)
+            return 5
+        priv = None
+        pub = None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("PrivateKey:"):
+                priv = line.split(":", 1)[1].strip()
+            elif line.startswith("PublicKey:"):
+                pub = line.split(":", 1)[1].strip()
+        if priv is None or pub is None:
+            print("data-exit-reality-keygen: could not parse keypair output",
+                  file=sys.stderr)
+            return 5
+        Path(cfg.data_exit.reality_key_path).parent.mkdir(
+            parents=True, exist_ok=True)
+        Path(cfg.data_exit.reality_key_path).write_text(priv + "\n")
+        Path(cfg.data_exit.reality_key_path).chmod(0o600)
+        cover_sni = cfg.data_exit.cover_sni_for(args.node_id)
+        set_data_exit_identity(
+            conn, args.node_id, cover_sni=cover_sni, reality_pubkey=pub,
+        )
+        log_event(
+            conn, ts=_now(), actor="operator", action="data_exit_reality_keygen",
+            target=args.node_id, details_json=f'{{"evidence":{args.evidence!r}}}',
+        )
+        print(f"data-exit-reality-keygen: {args.node_id} key generated "
+              f"(pubkey={pub[:32]}...)")
         return 0
     finally:
         conn.close()

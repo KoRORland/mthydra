@@ -1,4 +1,5 @@
 """Tests for the controller CLI (spec A phase 6)."""
+import json
 import shutil
 import subprocess
 
@@ -1656,4 +1657,217 @@ def test_bootstrap_seeds_provision_drill_obligation(tmp_path, age_recipient):
     obs = {o.obligation_id for o in list_obligations(conn)}
     assert "g_provision_drill_proven" in obs
     conn.close()
+
+
+# -----------------------------------------------------------------------------
+# Task 10 (Spec E): data-exit CLI subcommands
+# -----------------------------------------------------------------------------
+
+_TOML_WITH_DATA_EXIT = """\
+[node]
+role = "active"
+hostname = "h"
+[backup]
+floor_interval_hours = 24
+on_change_debounce_seconds = 30
+endpoint = "https://example"
+bucket = "b"
+access_key_id = "k"
+[backup.retention]
+keep_daily = 30
+keep_monthly = 12
+object_lock_days = 365
+[gap_monitor]
+poll_interval_minutes = 30
+alarm_threshold_hours = 48
+recipient_email = "op@example.org"
+[descriptor]
+rotation_interval_hours = 1
+validity_window_hours = 24
+[obligations]
+[obligations.timers_hours]
+[cover_pool]
+rotation_ttl_days = 14
+reverify_after_days = 30
+freeze_threshold = 2
+reverify_sweep_interval = "1h"
+rotation_sweep_interval = "1h"
+replenishment_interval_days = 90
+[data_exit]
+listen_port = 443
+sing_box_socket = "/run/sb.sock"
+config_path = "{config_path}"
+reality_key_path = "{reality_key_path}"
+[data_exit.telegram_dcs]
+v4 = ["149.154.160.0/20"]
+v6 = []
+[data_exit.cover_sni]
+default = "c.example"
+"""
+
+
+def _setup_eu_node_with_identity(db, cfg_path_str, age_recipient, node_id="eu1"):
+    """Helper: init DB + add eu_node with cover_sni + reality_pubkey."""
+    from mthydra.controller.cli import run
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import (
+        add_eu_node, set_data_exit_identity,
+    )
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    conn = connect(db)
+    add_eu_node(conn, node_id=node_id, hostname=f"{node_id}.example",
+                provider="p", region="r", role="active",
+                added_at="2026-05-23T00:00:00Z")
+    conn.execute("UPDATE eu_nodes SET public_ip='203.0.113.5' "
+                 "WHERE node_id=?", (node_id,))
+    set_data_exit_identity(conn, node_id, cover_sni="c.example",
+                            reality_pubkey="PUB")
+    conn.commit()
+    conn.close()
+
+
+def test_data_exit_config_show_emits_json(tmp_path, age_recipient, capsys, monkeypatch):
+    """`data-exit-config-show` prints the rendered sing-box.json."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_TOML_WITH_DATA_EXIT.format(
+        config_path=str(tmp_path / "sb.json"),
+        reality_key_path=str(tmp_path / "r.key"),
+    ))
+    (tmp_path / "r.key").write_text("KEY")
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import (
+        add_eu_node, set_data_exit_identity,
+    )
+    conn = connect(db)
+    add_eu_node(conn, node_id="eu1", hostname="eu1.example",
+                provider="p", region="r", role="active",
+                added_at="2026-05-23T00:00:00Z")
+    conn.execute("UPDATE eu_nodes SET public_ip='1.2.3.4'")
+    set_data_exit_identity(conn, "eu1", cover_sni="c.example",
+                            reality_pubkey="PUB")
+    conn.commit()
+    conn.close()
+    capsys.readouterr()
+    rc = run(["data-exit-config-show", "--node-id", "eu1",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert payload["inbounds"][0]["tls"]["server_name"] == "c.example"
+
+
+def test_data_exit_rewrite_writes_file_and_audits(tmp_path, age_recipient, capsys):
+    """`data-exit-rewrite` forces a wheel tick now."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_TOML_WITH_DATA_EXIT.format(
+        config_path=str(tmp_path / "sb.json"),
+        reality_key_path=str(tmp_path / "r.key"),
+    ))
+    (tmp_path / "r.key").write_text("PRIVKEY")
+    _setup_eu_node_with_identity(db, str(cfg_path), age_recipient)
+    capsys.readouterr()
+    rc = run(["data-exit-rewrite", "--node-id", "eu1",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    assert (tmp_path / "sb.json").exists()
+    out = capsys.readouterr().out
+    assert "config regenerated" in out
+
+
+def test_data_exit_status_shows_config_summary(tmp_path, age_recipient, capsys):
+    """`data-exit-status` prints node_id, last config write time, allowlist size."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_TOML_WITH_DATA_EXIT.format(
+        config_path=str(tmp_path / "sb.json"),
+        reality_key_path=str(tmp_path / "r.key"),
+    ))
+    (tmp_path / "r.key").write_text("PRIVKEY")
+    _setup_eu_node_with_identity(db, str(cfg_path), age_recipient)
+    capsys.readouterr()
+    rc = run(["data-exit-status", "--node-id", "eu1",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "node_id:" in out
+    assert "eu1" in out
+    assert "cover_sni:" in out
+    assert "c.example" in out
+    assert "users_allowlist:" in out
+
+
+def test_data_exit_reality_keygen_creates_keypair(tmp_path, age_recipient, monkeypatch):
+    """`data-exit-reality-keygen` writes private + pubkey to disk + DB."""
+    from mthydra.controller.cli import run
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import add_eu_node
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    key_path = tmp_path / "r.key"
+    cfg_path.write_text(_TOML_WITH_DATA_EXIT.format(
+        config_path=str(tmp_path / "sb.json"),
+        reality_key_path=str(key_path),
+    ))
+    # Stub `sing-box generate reality-keypair` output.
+    import subprocess
+    real_run = subprocess.run
+    def fake_run(cmd, **kw):
+        if cmd[:3] == ["sing-box", "generate", "reality-keypair"]:
+            return type("R", (), {
+                "returncode": 0,
+                "stdout": "PrivateKey: TEST_PRIV\nPublicKey: TEST_PUB\n",
+                "stderr": "",
+            })()
+        return real_run(cmd, **kw)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    conn = connect(db)
+    add_eu_node(conn, node_id="eu1", hostname="eu1.example",
+                provider="p", region="r", role="active",
+                added_at="2026-05-23T00:00:00Z")
+    conn.commit()
+    conn.close()
+
+    rc = run(["data-exit-reality-keygen", "--node-id", "eu1",
+              "--evidence", "initial-setup",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    assert key_path.read_text().strip() == "TEST_PRIV"
+    conn = connect(db)
+    pub = conn.execute(
+        "SELECT reality_pubkey FROM eu_nodes WHERE node_id='eu1'"
+    ).fetchone()[0]
+    assert pub == "TEST_PUB"
+    conn.close()
+
+
+def test_data_exit_reality_keygen_refuses_if_already_present(tmp_path, age_recipient, capsys):
+    """Pre-existing reality_pubkey on the node row causes refusal."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_TOML_WITH_DATA_EXIT.format(
+        config_path=str(tmp_path / "sb.json"),
+        reality_key_path=str(tmp_path / "r.key"),
+    ))
+    _setup_eu_node_with_identity(db, str(cfg_path), age_recipient)
+    rc = run(["data-exit-reality-keygen", "--node-id", "eu1",
+              "--evidence", "test",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "already has reality_pubkey" in err
 
