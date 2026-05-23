@@ -59,3 +59,33 @@ upstream_release_asset  = "mtg-linux-amd64"
 upstream_check_interval = "168h"
 github_api_url          = "https://api.github.com"
 build_tmp_dir           = "/var/lib/mthydra/tmp"
+
+[data_exit]
+listen_port = 443
+sing_box_socket = "/run/mthydra/sing-box.sock"
+config_path = "/etc/mthydra/sing-box.json"
+reality_key_path = "/etc/mthydra/reality.key"
+
+[data_exit.telegram_dcs]
+# Hardcoded list of Telegram MTProto DC subnets. Update when Telegram changes
+# its IP plan. Operator-maintained.
+v4 = [
+  "149.154.160.0/20",
+  "91.108.4.0/22",
+  "91.108.8.0/22",
+  "91.108.16.0/22",
+  "91.108.56.0/22",
+  "95.161.64.0/20",
+]
+v6 = [
+  "2001:b28:f23d::/48",
+  "2001:b28:f23f::/48",
+  "2001:67c:4e8::/48",
+]
+
+[data_exit.cover_sni]
+# `default` is the cover SNI presented if no per-node key matches.
+# The cover SNI must be a real, reachable HTTPS host; Reality dials it on
+# probe fall-through. Pick a domain that looks credible as Western-Internet
+# traffic. Override per host by adding `<node_id> = "host.specific.example"`.
+default = "www.example-cover-domain.invalid"

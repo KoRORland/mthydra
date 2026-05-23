@@ -79,6 +79,21 @@ class ImageConfig:
 
 
 @dataclass(frozen=True)
+class DataExitConfig:
+    listen_port: int
+    sing_box_socket: str
+    config_path: str
+    reality_key_path: str
+    telegram_dcs_v4: tuple[str, ...]
+    telegram_dcs_v6: tuple[str, ...]
+    cover_sni_default: str
+    cover_sni_per_node: dict[str, str] = field(default_factory=dict)
+
+    def cover_sni_for(self, node_id: str) -> str:
+        return self.cover_sni_per_node.get(node_id, self.cover_sni_default)
+
+
+@dataclass(frozen=True)
 class Config:
     node: NodeConfig
     backup: BackupConfig
@@ -88,6 +103,7 @@ class Config:
     cover_pool: CoverPoolConfig
     standby: StandbyConfig
     image: ImageConfig
+    data_exit: DataExitConfig | None = None
 
 
 _VALID_ROLES = {"active", "standby"}
@@ -156,6 +172,31 @@ def _load_standby(data: dict) -> StandbyConfig:
             sec.get("staleness_alert_seconds", 600),
         ),
     )
+
+
+def _load_data_exit(data: dict) -> DataExitConfig | None:
+    de_raw = data.get("data_exit")
+    if de_raw is None:
+        return None
+    dcs = de_raw.get("telegram_dcs", {})
+    cs = de_raw.get("cover_sni", {})
+    cover_sni_default = cs.get("default")
+    if cover_sni_default is None:
+        raise ConfigError("[data_exit.cover_sni] requires a 'default' key")
+    cover_sni_per_node = {k: v for k, v in cs.items() if k != "default"}
+    try:
+        return DataExitConfig(
+            listen_port=int(de_raw.get("listen_port", 443)),
+            sing_box_socket=str(de_raw["sing_box_socket"]),
+            config_path=str(de_raw["config_path"]),
+            reality_key_path=str(de_raw["reality_key_path"]),
+            telegram_dcs_v4=tuple(str(x) for x in dcs.get("v4", [])),
+            telegram_dcs_v6=tuple(str(x) for x in dcs.get("v6", [])),
+            cover_sni_default=str(cover_sni_default),
+            cover_sni_per_node={str(k): str(v) for k, v in cover_sni_per_node.items()},
+        )
+    except KeyError as e:
+        raise ConfigError(f"[data_exit] missing required key: {e}") from e
 
 
 def _load_image(data: dict) -> ImageConfig:
@@ -227,4 +268,5 @@ def load_config(path: Path | str) -> Config:
         cover_pool=_load_cover_pool(raw),
         standby=_load_standby(raw),
         image=_load_image(raw),
+        data_exit=_load_data_exit(raw),
     )

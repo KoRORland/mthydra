@@ -226,6 +226,82 @@ def test_load_image_config(tmp_path):
     assert cfg.image.build_tmp_dir == "/var/lib/mthydra/tmp"
 
 
+_MIN_BASE_TOML = (
+    "[node]\nrole='active'\nhostname='h'\n"
+    "[backup]\nfloor_interval_hours=24\non_change_debounce_seconds=30\n"
+    "endpoint='https://example'\nbucket='b'\naccess_key_id='k'\n"
+    "[backup.retention]\nkeep_daily=30\nkeep_monthly=12\nobject_lock_days=365\n"
+    "[gap_monitor]\npoll_interval_minutes=30\nalarm_threshold_hours=48\n"
+    "recipient_email='op@example.org'\n"
+    "[descriptor]\nrotation_interval_hours=1\nvalidity_window_hours=24\n"
+    "[obligations]\n[obligations.timers_hours]\n"
+    "[cover_pool]\nrotation_ttl_days=14\nreverify_after_days=30\n"
+    "freeze_threshold=2\nreverify_sweep_interval='1h'\n"
+    "rotation_sweep_interval='1h'\nreplenishment_interval_days=90\n"
+)
+
+
+def test_load_config_data_exit_full(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[data_exit]
+listen_port = 443
+sing_box_socket = "/run/sb.sock"
+config_path = "/etc/sb.json"
+reality_key_path = "/etc/r.key"
+
+[data_exit.telegram_dcs]
+v4 = ["149.154.160.0/20", "91.108.4.0/22"]
+v6 = ["2001:b28:f23d::/48"]
+
+[data_exit.cover_sni]
+default = "default.example"
+eu1 = "specific.example"
+"""
+    )
+    cfg = load_config(p)
+    assert cfg.data_exit is not None
+    assert cfg.data_exit.listen_port == 443
+    assert cfg.data_exit.sing_box_socket == "/run/sb.sock"
+    assert cfg.data_exit.config_path == "/etc/sb.json"
+    assert cfg.data_exit.reality_key_path == "/etc/r.key"
+    assert cfg.data_exit.telegram_dcs_v4 == ("149.154.160.0/20", "91.108.4.0/22")
+    assert cfg.data_exit.telegram_dcs_v6 == ("2001:b28:f23d::/48",)
+    assert cfg.data_exit.cover_sni_default == "default.example"
+    assert cfg.data_exit.cover_sni_per_node == {"eu1": "specific.example"}
+
+
+def test_load_config_data_exit_optional(tmp_path):
+    """Pre-E configs without [data_exit] still parse."""
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(_MIN_BASE_TOML)
+    cfg = load_config(p)
+    assert cfg.data_exit is None
+
+
+def test_data_exit_cover_sni_resolves_per_node():
+    from mthydra.controller.config import DataExitConfig
+
+    c = DataExitConfig(
+        listen_port=443,
+        sing_box_socket="/run/sb.sock",
+        config_path="/etc/sb.json",
+        reality_key_path="/etc/r.key",
+        telegram_dcs_v4=(),
+        telegram_dcs_v6=(),
+        cover_sni_default="d.example",
+        cover_sni_per_node={"eu1": "specific.example"},
+    )
+    assert c.cover_sni_for("eu1") == "specific.example"
+    assert c.cover_sni_for("eu2") == "d.example"
+
+
 def test_load_image_config_defaults(tmp_path):
     """Missing [image] section: load with safe defaults."""
     from mthydra.controller.config import load_config
