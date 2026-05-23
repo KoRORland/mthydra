@@ -216,6 +216,78 @@ def test_generation_2_with_null_prev_hash_fails():
 
 
 # ---------------------------------------------------------------------------
+# Spec E Task 5: verifier accepts both v1 and v2 schema labels
+# ---------------------------------------------------------------------------
+
+def test_verifier_accepts_v1_descriptor():
+    """RU-side rolling deployment: v1 blobs must still verify."""
+    from mthydra.descriptor.payload import SCHEMA_V1
+    priv, pub = generate_keypair()
+    p = DescriptorPayload(
+        generation=1,
+        signing_key_gen=1,
+        issued_at=ISSUED,
+        valid_until=VALID_UNTIL,
+        eu_exit_set=(EUExit("fp1", "eu1.example.org:443", 1),),
+        previous_generation_hash=None,
+        next_signing_pubkey=None,
+        schema=SCHEMA_V1,
+    )
+    blob, sig = _sign(priv, p)
+    result = verify_descriptor(blob, sig, [TrustedKey(1, pub)], NOW)
+    assert result.schema == SCHEMA_V1
+    assert result.generation == 1
+
+
+def test_verifier_accepts_v2_descriptor_with_per_exit_fields():
+    """v2 carries cover_sni + reality_pubkey per exit."""
+    from mthydra.descriptor.payload import SCHEMA_V2
+    priv, pub = generate_keypair()
+    p = DescriptorPayload(
+        generation=1,
+        signing_key_gen=1,
+        issued_at=ISSUED,
+        valid_until=VALID_UNTIL,
+        eu_exit_set=(
+            EUExit("fp1", "eu1.example.org:443", 1,
+                   cover_sni="cover.example", reality_pubkey="PUBKEY"),
+        ),
+        previous_generation_hash=None,
+        next_signing_pubkey=None,
+        schema=SCHEMA_V2,
+    )
+    blob, sig = _sign(priv, p)
+    result = verify_descriptor(blob, sig, [TrustedKey(1, pub)], NOW)
+    assert result.schema == SCHEMA_V2
+    assert result.eu_exit_set[0].cover_sni == "cover.example"
+    assert result.eu_exit_set[0].reality_pubkey == "PUBKEY"
+
+
+def test_v1_descriptor_with_cover_sni_field_rejected():
+    """v1 must not carry the new per-exit fields (would be silently ignored otherwise)."""
+    import json as _json
+    from mthydra.descriptor.payload import SCHEMA_V1
+    priv, pub = generate_keypair()
+    p = DescriptorPayload(
+        generation=1,
+        signing_key_gen=1,
+        issued_at=ISSUED,
+        valid_until=VALID_UNTIL,
+        eu_exit_set=(EUExit("fp1", "eu1.example.org:443", 1),),
+        previous_generation_hash=None,
+        next_signing_pubkey=None,
+        schema=SCHEMA_V1,
+    )
+    blob = canonical_bytes(p)
+    obj = _json.loads(blob)
+    obj["eu_exit_set"][0]["cover_sni"] = "leaked"
+    bad = _json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    bad_sig = ed_sign(priv, bad)
+    with pytest.raises(VerifyError, match="unknown"):
+        verify_descriptor(bad, bad_sig, [TrustedKey(1, pub)], NOW)
+
+
+# ---------------------------------------------------------------------------
 # Chain tests
 # ---------------------------------------------------------------------------
 

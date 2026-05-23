@@ -5,6 +5,8 @@ import pytest
 
 from mthydra.descriptor.payload import (
     SCHEMA,
+    SCHEMA_V1,
+    SCHEMA_V2,
     DescriptorPayload,
     EUExit,
     canonical_bytes,
@@ -104,6 +106,58 @@ def test_empty_eu_exit_set_round_trips():
         next_signing_pubkey=None,
     )
     assert DescriptorPayload.from_canonical_bytes(canonical_bytes(p)) == p
+
+
+def test_default_schema_is_v2():
+    assert SCHEMA == SCHEMA_V2
+    assert _GEN1.schema == SCHEMA_V2
+
+
+def test_v2_per_exit_includes_cover_sni_and_reality_pubkey_keys():
+    blob = canonical_bytes(_GEN1)
+    obj = json.loads(blob)
+    keys = set(obj["eu_exit_set"][0].keys())
+    assert {"cover_sni", "reality_pubkey"} <= keys
+
+
+def test_v2_round_trips_with_per_exit_fields():
+    p = DescriptorPayload(
+        generation=1,
+        signing_key_gen=1,
+        issued_at="2026-05-19T00:00:00Z",
+        valid_until="2026-05-19T01:00:00Z",
+        eu_exit_set=(
+            EUExit("fp1", "eu1.example.org:443", 1,
+                   cover_sni="cov.example", reality_pubkey="PK"),
+        ),
+        previous_generation_hash=None,
+        next_signing_pubkey=None,
+        schema=SCHEMA_V2,
+    )
+    p2 = DescriptorPayload.from_canonical_bytes(canonical_bytes(p))
+    assert p2 == p
+    assert p2.eu_exit_set[0].cover_sni == "cov.example"
+    assert p2.eu_exit_set[0].reality_pubkey == "PK"
+
+
+def test_v1_round_trips_without_per_exit_fields():
+    p = DescriptorPayload(
+        generation=1,
+        signing_key_gen=1,
+        issued_at="2026-05-19T00:00:00Z",
+        valid_until="2026-05-19T01:00:00Z",
+        eu_exit_set=(EUExit("fp1", "eu1.example.org:443", 1),),
+        previous_generation_hash=None,
+        next_signing_pubkey=None,
+        schema=SCHEMA_V1,
+    )
+    blob = canonical_bytes(p)
+    obj = json.loads(blob)
+    assert obj["schema"] == SCHEMA_V1
+    assert "cover_sni" not in obj["eu_exit_set"][0]
+    assert "reality_pubkey" not in obj["eu_exit_set"][0]
+    p2 = DescriptorPayload.from_canonical_bytes(blob)
+    assert p2 == p
 
 
 def test_unknown_eu_exit_field_raises():

@@ -62,7 +62,16 @@ def sign_new_descriptor(
         prev_hash = payload_hash(prev[1])
 
     exits_raw = list_active(conn)
-    exits = tuple(EUExit(e.fingerprint, e.endpoint, e.weight) for e in exits_raw)
+    exits = tuple(
+        EUExit(
+            fingerprint=e.fingerprint,
+            endpoint=e.endpoint,
+            weight=e.weight,
+            cover_sni=e.cover_sni,
+            reality_pubkey=e.reality_pubkey,
+        )
+        for e in exits_raw
+    )
     gen = next_descriptor_generation(conn)
 
     payload = DescriptorPayload(

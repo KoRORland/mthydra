@@ -97,6 +97,59 @@ def test_sign_stores_in_db(tmp_path):
     assert len(sig) == 64
 
 
+def test_sign_emits_v2_schema_label(tmp_path):
+    """Spec E Task 5: new descriptors carry the v2 schema label."""
+    import json as _json
+    conn, _ = _seeded_db(tmp_path)
+    _, blob, _ = sign_new_descriptor(
+        conn, now_iso="2026-05-19T00:00:00Z", valid_until_iso="2026-05-19T01:00:00Z"
+    )
+    obj = _json.loads(blob.decode("utf-8"))
+    assert obj["schema"] == "mthydra.descriptor.v2"
+
+
+def test_descriptor_v2_includes_per_exit_cover_sni_and_reality_pubkey(tmp_path):
+    """Spec E Task 5: v2 per-exit dict carries cover_sni + reality_pubkey."""
+    import json as _json
+    conn, _ = _seeded_db(tmp_path)
+    add_exit(
+        conn,
+        "fp1",
+        "1.2.3.4:443",
+        1,
+        "2026-05-23T00:00:00Z",
+        cover_sni="cover1.example",
+        reality_pubkey="PUBKEY1",
+    )
+    sign_new_descriptor(
+        conn, now_iso="2026-05-23T00:01:00Z", valid_until_iso="2026-05-24T00:00:00Z"
+    )
+    row = conn.execute(
+        "SELECT payload FROM descriptor_history ORDER BY generation DESC LIMIT 1"
+    ).fetchone()
+    payload = _json.loads(row[0])
+    assert payload["schema"] == "mthydra.descriptor.v2"
+    assert len(payload["eu_exit_set"]) == 1
+    assert payload["eu_exit_set"][0]["cover_sni"] == "cover1.example"
+    assert payload["eu_exit_set"][0]["reality_pubkey"] == "PUBKEY1"
+
+
+def test_descriptor_v2_per_exit_fields_nullable_when_unset(tmp_path):
+    """add_exit without cover_sni/reality_pubkey → fields present but null."""
+    import json as _json
+    conn, _ = _seeded_db(tmp_path)
+    add_exit(conn, "fp1", "1.2.3.4:443", 1, "2026-05-23T00:00:00Z")
+    sign_new_descriptor(
+        conn, now_iso="2026-05-23T00:01:00Z", valid_until_iso="2026-05-24T00:00:00Z"
+    )
+    row = conn.execute(
+        "SELECT payload FROM descriptor_history ORDER BY generation DESC LIMIT 1"
+    ).fetchone()
+    payload = _json.loads(row[0])
+    assert payload["eu_exit_set"][0]["cover_sni"] is None
+    assert payload["eu_exit_set"][0]["reality_pubkey"] is None
+
+
 def test_sign_no_active_key_raises(tmp_path):
     db = tmp_path / "state.sqlite"
     conn = connect(db)
