@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -103,8 +103,13 @@ _STATEMENTS: list[str] = [
       went_live_at       TEXT,
       terminated_at      TEXT,
       termination_reason TEXT,
+      reality_uuid       TEXT,
       FOREIGN KEY (shard_id) REFERENCES shards(shard_id)
     )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ru_boxes_reality_uuid
+      ON ru_boxes(reality_uuid) WHERE reality_uuid IS NOT NULL
     """,
     """
     CREATE TABLE IF NOT EXISTS onward_credentials (
@@ -183,11 +188,13 @@ _STATEMENTS: list[str] = [
     # --- spec B additions ---
     """
     CREATE TABLE IF NOT EXISTS eu_exit_set (
-      fingerprint  TEXT PRIMARY KEY,
-      endpoint     TEXT NOT NULL,
-      weight       INTEGER NOT NULL DEFAULT 1,
-      added_at     TEXT NOT NULL,
-      retired_at   TEXT
+      fingerprint    TEXT PRIMARY KEY,
+      endpoint       TEXT NOT NULL,
+      weight         INTEGER NOT NULL DEFAULT 1,
+      added_at       TEXT NOT NULL,
+      retired_at     TEXT,
+      cover_sni      TEXT,
+      reality_pubkey TEXT
     )
     """,
     # --- spec C additions: structural enforcement of T5 burned-set rule ---
@@ -217,7 +224,11 @@ _STATEMENTS: list[str] = [
       retired_at             TEXT,
       last_heartbeat_at      TEXT,
       last_heartbeat_b2_etag TEXT,
-      notes                  TEXT
+      notes                  TEXT,
+      cover_sni              TEXT,
+      reality_pubkey         TEXT,
+      data_exit_state        TEXT CHECK (data_exit_state IN ('healthy','degraded','stopped')),
+      data_exit_started_at   TEXT
     )
     """,
     # --- spec D additions: RU image catalog ---
@@ -365,6 +376,44 @@ def migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
+    """Idempotent v5 → v6 migration: add ru_boxes.reality_uuid + partial unique idx;
+    add eu_nodes cover_sni/reality_pubkey/data_exit_state/data_exit_started_at;
+    add eu_exit_set cover_sni/reality_pubkey (folded in from Task 5)."""
+    cols_ru = [r[1] for r in conn.execute("PRAGMA table_info(ru_boxes)").fetchall()]
+    if "reality_uuid" not in cols_ru:
+        conn.execute("ALTER TABLE ru_boxes ADD COLUMN reality_uuid TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ru_boxes_reality_uuid "
+        "ON ru_boxes(reality_uuid) WHERE reality_uuid IS NOT NULL"
+    )
+
+    cols_eu = [r[1] for r in conn.execute("PRAGMA table_info(eu_nodes)").fetchall()]
+    if "cover_sni" not in cols_eu:
+        conn.execute("ALTER TABLE eu_nodes ADD COLUMN cover_sni TEXT")
+    if "reality_pubkey" not in cols_eu:
+        conn.execute("ALTER TABLE eu_nodes ADD COLUMN reality_pubkey TEXT")
+    if "data_exit_state" not in cols_eu:
+        conn.execute(
+            "ALTER TABLE eu_nodes ADD COLUMN data_exit_state TEXT "
+            "CHECK (data_exit_state IN ('healthy','degraded','stopped'))"
+        )
+    if "data_exit_started_at" not in cols_eu:
+        conn.execute("ALTER TABLE eu_nodes ADD COLUMN data_exit_started_at TEXT")
+
+    cols_ex = [r[1] for r in conn.execute("PRAGMA table_info(eu_exit_set)").fetchall()]
+    if "cover_sni" not in cols_ex:
+        conn.execute("ALTER TABLE eu_exit_set ADD COLUMN cover_sni TEXT")
+    if "reality_pubkey" not in cols_ex:
+        conn.execute("ALTER TABLE eu_exit_set ADD COLUMN reality_pubkey TEXT")
+
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (6, _now()),
+    )
+    conn.commit()
+
+
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing; insert or migrate schema_version row."""
     for stmt in _STATEMENTS:
@@ -396,4 +445,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v3_to_v4(conn)
         if current < 5:
             migrate_v4_to_v5(conn)
+        if current < 6:
+            migrate_v5_to_v6(conn)
     conn.commit()

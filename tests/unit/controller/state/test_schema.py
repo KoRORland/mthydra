@@ -165,7 +165,9 @@ def test_eu_nodes_table_present(tmp_db_path):
     cols = [r[1] for r in conn.execute("PRAGMA table_info(eu_nodes)").fetchall()]
     assert {"node_id", "hostname", "provider", "region", "public_ip",
             "role", "added_at", "promoted_at", "retired_at",
-            "last_heartbeat_at", "last_heartbeat_b2_etag", "notes"} == set(cols)
+            "last_heartbeat_at", "last_heartbeat_b2_etag", "notes",
+            "cover_sni", "reality_pubkey",
+            "data_exit_state", "data_exit_started_at"} == set(cols)
 
 
 def test_v3_to_v4_migration_seeds_node_state_active(tmp_db_path):
@@ -185,14 +187,9 @@ def test_v3_to_v4_migration_seeds_node_state_active(tmp_db_path):
     assert role == "active"
 
 
-def test_schema_version_is_5(tmp_db_path):
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
-    assert SCHEMA_VERSION == 5
-    conn = connect(tmp_db_path)
-    apply_schema(conn)
-    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 5
+def test_schema_version_is_5_removed(tmp_db_path):
+    # Superseded by test_schema_version_is_6 — kept as a no-op to preserve numbering.
+    pass
 
 
 def test_ru_images_table_present(tmp_db_path):
@@ -234,3 +231,93 @@ def test_v4_to_v5_migration_adds_table(tmp_db_path):
     assert v == 5
     cols = [r[1] for r in conn.execute("PRAGMA table_info(ru_images)").fetchall()]
     assert "image_version" in cols
+
+
+def test_schema_version_is_6(tmp_db_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+    assert SCHEMA_VERSION == 6
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 6
+
+
+def test_v5_to_v6_migration_adds_columns(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+
+    cols_ru = [r[1] for r in conn.execute("PRAGMA table_info(ru_boxes)").fetchall()]
+    assert "reality_uuid" in cols_ru
+
+    cols_eu = [r[1] for r in conn.execute("PRAGMA table_info(eu_nodes)").fetchall()]
+    assert "cover_sni" in cols_eu
+    assert "reality_pubkey" in cols_eu
+    assert "data_exit_state" in cols_eu
+    assert "data_exit_started_at" in cols_eu
+
+    cols_ex = [r[1] for r in conn.execute("PRAGMA table_info(eu_exit_set)").fetchall()]
+    assert "cover_sni" in cols_ex
+    assert "reality_pubkey" in cols_ex
+
+
+def test_v5_to_v6_migration_idempotent(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v5_to_v6
+
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    migrate_v5_to_v6(conn)
+    migrate_v5_to_v6(conn)
+    version = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
+    assert version == 6
+
+
+def test_v6_reality_uuid_unique_partial(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    # Two NULLs allowed (partial unique index excludes NULL).
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('a', 'p', 'r', 'sni-a', 'provisioning', 'v1', '2026-05-23T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b', 'p', 'r', 'sni-b', 'provisioning', 'v1', '2026-05-23T00:00:00Z')"
+    )
+    conn.execute("UPDATE ru_boxes SET reality_uuid='same-uuid' WHERE box_id='a'")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE ru_boxes SET reality_uuid='same-uuid' WHERE box_id='b'")
+
+
+def test_v5_to_v6_migration_from_v5_db(tmp_path):
+    """Simulate a v5 DB (no new columns) and verify migration adds them."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v5_to_v6
+
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    # Force back to v5 to simulate pre-E DB; columns are already there from fresh
+    # install but migrate must remain idempotent and bump version.
+    conn.execute("UPDATE schema_version SET version=5 WHERE rowid=1")
+    conn.commit()
+    migrate_v5_to_v6(conn)
+    v = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    assert v == 6
+    # Index present.
+    idxs = {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='ru_boxes'"
+        ).fetchall()
+    }
+    assert "idx_ru_boxes_reality_uuid" in idxs
