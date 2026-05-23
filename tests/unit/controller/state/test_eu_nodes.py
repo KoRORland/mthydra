@@ -4,8 +4,8 @@ import pytest
 from mthydra.controller.state.audit import recent_events
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.eu_nodes import (
-    EUNode, add_eu_node, get_eu_node, list_eu_nodes, retire_eu_node,
-    update_heartbeat,
+    EUNode, add_eu_node, get_eu_node, get_node, list_eu_nodes, retire_eu_node,
+    set_data_exit_identity, set_data_exit_state, update_heartbeat,
 )
 from mthydra.controller.state.schema import apply_schema
 
@@ -99,3 +99,64 @@ def test_list_eu_nodes_filters_by_role(conn):
                 role="standby", added_at=NOW)
     standbys = list_eu_nodes(conn, role="standby")
     assert {n.node_id for n in standbys} == {"s1", "s2"}
+
+
+def test_set_data_exit_identity_and_state(conn):
+    add_eu_node(
+        conn, node_id="eu1", hostname="eu1.example", provider="p",
+        region="r", role="active", added_at=NOW,
+    )
+    set_data_exit_identity(
+        conn, "eu1", cover_sni="cover.example", reality_pubkey="PUBKEY",
+    )
+    set_data_exit_state(
+        conn, "eu1", state="healthy", started_at="2026-05-23T00:01:00Z",
+    )
+    row = conn.execute(
+        "SELECT cover_sni, reality_pubkey, data_exit_state, data_exit_started_at "
+        "FROM eu_nodes WHERE node_id='eu1'"
+    ).fetchone()
+    assert row == ("cover.example", "PUBKEY", "healthy", "2026-05-23T00:01:00Z")
+
+
+def test_set_data_exit_identity_unknown_node_raises(conn):
+    with pytest.raises(KeyError):
+        set_data_exit_identity(
+            conn, "missing", cover_sni="c", reality_pubkey="k",
+        )
+
+
+def test_set_data_exit_state_validates_state(conn):
+    add_eu_node(conn, node_id="eu1", hostname="h", provider="p", region="r",
+                role="active", added_at=NOW)
+    with pytest.raises(ValueError, match="invalid data_exit_state"):
+        set_data_exit_state(conn, "eu1", state="bogus")
+
+
+def test_set_data_exit_state_without_started_at_preserves(conn):
+    add_eu_node(conn, node_id="eu1", hostname="h", provider="p", region="r",
+                role="active", added_at=NOW)
+    set_data_exit_state(conn, "eu1", state="healthy", started_at="2026-05-23T00:01:00Z")
+    set_data_exit_state(conn, "eu1", state="degraded")
+    row = conn.execute(
+        "SELECT data_exit_state, data_exit_started_at FROM eu_nodes WHERE node_id='eu1'"
+    ).fetchone()
+    assert row == ("degraded", "2026-05-23T00:01:00Z")
+
+
+def test_get_node_returns_dict_with_v6_cols(conn):
+    add_eu_node(conn, node_id="eu1", hostname="eu1.example", provider="p",
+                region="r", role="active", added_at=NOW)
+    set_data_exit_identity(conn, "eu1", cover_sni="cover", reality_pubkey="pk")
+    set_data_exit_state(conn, "eu1", state="healthy", started_at=NOW)
+    d = get_node(conn, "eu1")
+    assert d is not None
+    assert d["node_id"] == "eu1"
+    assert d["cover_sni"] == "cover"
+    assert d["reality_pubkey"] == "pk"
+    assert d["data_exit_state"] == "healthy"
+    assert d["data_exit_started_at"] == NOW
+
+
+def test_get_node_missing_returns_none(conn):
+    assert get_node(conn, "nope") is None

@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from mthydra.controller.state.db import connect
@@ -7,6 +9,7 @@ from mthydra.controller.state.ru_boxes import (
     list_live,
     mark_live,
     mark_terminated,
+    set_reality_uuid,
 )
 from mthydra.controller.state.schema import apply_schema
 
@@ -54,3 +57,30 @@ def test_sni_uniqueness_enforced(tmp_db_path):
     insert_box(conn, "box-1", "hetzner", "fsn1", None, "example.org", "abc123", "2026-05-18T00:00:00Z")
     with pytest.raises(Exception):
         insert_box(conn, "box-2", "hetzner", "fsn1", None, "example.org", "abc123", "2026-05-18T00:01:00Z")
+
+
+def test_set_reality_uuid_assigns_then_reads_back(tmp_db_path):
+    conn = _conn(tmp_db_path)
+    insert_box(
+        conn, "b1", "p", "r", None, "sni-1", "v1", "2026-05-23T00:00:00Z",
+    )
+    set_reality_uuid(conn, "b1", "9a8b-uuid")
+    row = conn.execute(
+        "SELECT reality_uuid FROM ru_boxes WHERE box_id='b1'"
+    ).fetchone()
+    assert row[0] == "9a8b-uuid"
+
+
+def test_set_reality_uuid_unknown_box_raises(tmp_db_path):
+    conn = _conn(tmp_db_path)
+    with pytest.raises(KeyError):
+        set_reality_uuid(conn, "missing", "u1")
+
+
+def test_set_reality_uuid_unique(tmp_db_path):
+    conn = _conn(tmp_db_path)
+    insert_box(conn, "b1", "p", "r", None, "sni-1", "v1", "2026-05-23T00:00:00Z")
+    insert_box(conn, "b2", "p", "r", None, "sni-2", "v1", "2026-05-23T00:00:00Z")
+    set_reality_uuid(conn, "b1", "same")
+    with pytest.raises(sqlite3.IntegrityError):
+        set_reality_uuid(conn, "b2", "same")

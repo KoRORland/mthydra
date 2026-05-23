@@ -61,6 +61,22 @@ def mark_terminated(conn: sqlite3.Connection, box_id: str, *, reason: str, at: s
     conn.commit()
 
 
+def set_reality_uuid(conn: sqlite3.Connection, box_id: str, uuid: str) -> None:
+    """Set ru_boxes.reality_uuid for a box.
+
+    Raises KeyError if the box does not exist. Raises sqlite3.IntegrityError
+    if the uuid collides with an existing reality_uuid (idx is UNIQUE WHERE
+    reality_uuid IS NOT NULL).
+    """
+    n = conn.execute(
+        "UPDATE ru_boxes SET reality_uuid=? WHERE box_id=?",
+        (uuid, box_id),
+    ).rowcount
+    if n == 0:
+        raise KeyError(f"ru_box {box_id!r} not found")
+    conn.commit()
+
+
 def list_live(conn: sqlite3.Connection) -> list[Box]:
     rows = conn.execute(
         "SELECT box_id, provider, region, public_ip, sni, shard_id, state, image_version, "

@@ -123,6 +123,71 @@ def get_eu_node(conn: sqlite3.Connection, node_id: str) -> EUNode:
     return EUNode(*row)
 
 
+def set_data_exit_identity(
+    conn: sqlite3.Connection,
+    node_id: str,
+    *,
+    cover_sni: str,
+    reality_pubkey: str,
+) -> None:
+    """Set eu_nodes.cover_sni + reality_pubkey. Raises KeyError if node absent."""
+    n = conn.execute(
+        "UPDATE eu_nodes SET cover_sni=?, reality_pubkey=? WHERE node_id=?",
+        (cover_sni, reality_pubkey, node_id),
+    ).rowcount
+    if n == 0:
+        raise KeyError(f"eu_node {node_id!r} not found")
+    conn.commit()
+
+
+def set_data_exit_state(
+    conn: sqlite3.Connection,
+    node_id: str,
+    *,
+    state: str,
+    started_at: str | None = None,
+) -> None:
+    """Set data_exit_state (and optionally started_at). Validates the enum."""
+    if state not in ("healthy", "degraded", "stopped"):
+        raise ValueError(f"invalid data_exit_state: {state!r}")
+    if started_at is None:
+        conn.execute(
+            "UPDATE eu_nodes SET data_exit_state=? WHERE node_id=?",
+            (state, node_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE eu_nodes SET data_exit_state=?, data_exit_started_at=? "
+            "WHERE node_id=?",
+            (state, started_at, node_id),
+        )
+    conn.commit()
+
+
+def get_node(conn: sqlite3.Connection, node_id: str) -> dict | None:
+    """Fetch an eu_node row as a dict including v6 data-exit columns.
+
+    Returns None if the node does not exist.
+    """
+    row = conn.execute(
+        "SELECT node_id, hostname, provider, region, public_ip, role, "
+        "added_at, promoted_at, retired_at, last_heartbeat_at, "
+        "last_heartbeat_b2_etag, notes, cover_sni, reality_pubkey, "
+        "data_exit_state, data_exit_started_at "
+        "FROM eu_nodes WHERE node_id=?",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    cols = (
+        "node_id", "hostname", "provider", "region", "public_ip", "role",
+        "added_at", "promoted_at", "retired_at", "last_heartbeat_at",
+        "last_heartbeat_b2_etag", "notes", "cover_sni", "reality_pubkey",
+        "data_exit_state", "data_exit_started_at",
+    )
+    return dict(zip(cols, row))
+
+
 def list_eu_nodes(
     conn: sqlite3.Connection,
     *,
