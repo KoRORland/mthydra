@@ -352,6 +352,9 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--ttl-seconds", type=int, default=3600)
     ps.add_argument("--db-path", default=DEFAULT_DB)
     ps.add_argument("--config", default="/etc/mthydra/controller.toml")
+    ps.add_argument("--agent-source-url", required=True)
+    ps.add_argument("--agent-source-sha256", required=True)
+    ps.add_argument("--descriptor-refresh-url", required=True)
 
     return p
 
@@ -1818,6 +1821,14 @@ def _cmd_provision_seed(args) -> int:
         print(f"provision-seed: config error: {e}", file=sys.stderr)
         return 2
 
+    if cfg.data_exit is None:
+        print(
+            "provision-seed: [data_exit] section is required in controller.toml "
+            "(telegram_dcs_v4/v6 needed for seed bundle v2)",
+            file=sys.stderr,
+        )
+        return 2
+
     conn = connect(args.db_path)
     try:
         rc = _require_active_role(conn, "provision-seed")
@@ -1836,6 +1847,11 @@ def _cmd_provision_seed(args) -> int:
                 provider=args.provider, region=args.region,
                 image_signed_url_ttl_seconds=args.ttl_seconds,
                 now=_now(),
+                descriptor_refresh_url=args.descriptor_refresh_url,
+                agent_source_url=args.agent_source_url,
+                agent_source_sha256=args.agent_source_sha256,
+                telegram_dcs_v4=cfg.data_exit.telegram_dcs_v4,
+                telegram_dcs_v6=cfg.data_exit.telegram_dcs_v6,
             )
         except ProvisionError as e:
             print(f"provision-seed: {e}", file=sys.stderr)

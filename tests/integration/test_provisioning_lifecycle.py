@@ -126,6 +126,11 @@ def test_provisioning_lifecycle_end_to_end(tmp_path, recipient_fixture):
         provider="hetzner", region="fsn1",
         image_signed_url_ttl_seconds=3600,
         now=NOW,
+        descriptor_refresh_url="https://b2.example/desc",
+        agent_source_url="https://b2.example/agent.tgz",
+        agent_source_sha256="deadbeef" * 8,
+        telegram_dcs_v4=(),
+        telegram_dcs_v6=(),
     )
     conn.close()
 

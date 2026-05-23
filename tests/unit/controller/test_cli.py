@@ -44,7 +44,23 @@ freeze_threshold = 2
 reverify_sweep_interval = "1h"
 rotation_sweep_interval = "1h"
 replenishment_interval_days = 90
+[data_exit]
+listen_port = 443
+sing_box_socket = "/run/mthydra/sing-box.sock"
+config_path = "/etc/mthydra/sing-box.json"
+reality_key_path = "/etc/mthydra/reality.key"
+[data_exit.telegram_dcs]
+v4 = ["149.154.160.0/20"]
+v6 = ["2001:b28:f23d::/48"]
+[data_exit.cover_sni]
+default = "www.example-cover-domain.invalid"
 """
+
+_PROVISION_V2_ARGS = [
+    "--agent-source-url", "https://b2.example/agent/v0.1.0.tar.gz",
+    "--agent-source-sha256", "deadbeef" * 8,
+    "--descriptor-refresh-url", "https://b2.example/descriptors/current",
+]
 
 
 def test_parser_knows_all_subcommands():
@@ -1450,7 +1466,8 @@ def test_provision_seed_cloud_init_default(tmp_path, age_recipient, capsys, monk
     capsys.readouterr()
     rc = run(["provision-seed",
               "--provider", "hetzner", "--region", "fsn1",
-              "--db-path", str(db), "--config", str(cfg_path)])
+              "--db-path", str(db), "--config", str(cfg_path),
+              *_PROVISION_V2_ARGS])
     assert rc == 0
     out = capsys.readouterr().out
     assert out.startswith("#cloud-config")
@@ -1477,10 +1494,11 @@ def test_provision_seed_json_format(tmp_path, age_recipient, capsys, monkeypatch
     capsys.readouterr()
     rc = run(["provision-seed", "--format", "json",
               "--provider", "hetzner", "--region", "fsn1",
-              "--db-path", str(db), "--config", str(cfg_path)])
+              "--db-path", str(db), "--config", str(cfg_path),
+              *_PROVISION_V2_ARGS])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema"] == "mthydra.ru_seed.v1"
+    assert payload["schema"] == "mthydra.ru_seed.v2"
     assert payload["sni"] == "example.cover"
     assert payload["transport_role"] == "ru_relay"
 
@@ -1494,7 +1512,8 @@ def test_provision_seed_refused_on_standby(tmp_path, age_recipient, capsys):
          "--age-recipient", age_recipient,
          "--provider-credential", "b2=id:secret"])
     rc = run(["provision-seed", "--provider", "p", "--region", "r",
-              "--db-path", str(db), "--config", str(cfg_path)])
+              "--db-path", str(db), "--config", str(cfg_path),
+              *_PROVISION_V2_ARGS])
     assert rc == 2
     assert "active-only" in capsys.readouterr().err.lower()
 
@@ -1510,7 +1529,8 @@ def test_provision_seed_refused_no_promoted_image(tmp_path, age_recipient, capsy
     run(["authority-migrate-placeholder", "--db-path", str(db), "--config", str(cfg_path)])
     # No image promoted, no domain attested, no descriptor signed.
     rc = run(["provision-seed", "--provider", "p", "--region", "r",
-              "--db-path", str(db), "--config", str(cfg_path)])
+              "--db-path", str(db), "--config", str(cfg_path),
+              *_PROVISION_V2_ARGS])
     assert rc == 3
     err = capsys.readouterr().err.lower()
     assert "image" in err or "promoted" in err
@@ -1546,7 +1566,8 @@ def test_ru_box_list_json_after_provision(tmp_path, age_recipient, capsys, monke
     )
     _setup_provision_prereqs(db, age_recipient, cfg_path)
     run(["provision-seed", "--provider", "hetzner", "--region", "fsn1",
-         "--db-path", str(db), "--config", str(cfg_path)])
+         "--db-path", str(db), "--config", str(cfg_path),
+         *_PROVISION_V2_ARGS])
     capsys.readouterr()
     rc = run(["ru-box-list", "--json", "--db-path", str(db)])
     assert rc == 0
@@ -1570,7 +1591,8 @@ def test_ru_box_mark_live_happy_path(tmp_path, age_recipient, capsys, monkeypatc
     )
     _setup_provision_prereqs(db, age_recipient, cfg_path)
     run(["provision-seed", "--provider", "hetzner", "--region", "fsn1",
-         "--db-path", str(db), "--config", str(cfg_path)])
+         "--db-path", str(db), "--config", str(cfg_path),
+         *_PROVISION_V2_ARGS])
     from mthydra.controller.state.db import connect
     conn = connect(db)
     box_id = conn.execute("SELECT box_id FROM ru_boxes LIMIT 1").fetchone()[0]
@@ -1600,7 +1622,8 @@ def test_ru_box_terminate_burns_sni_and_revokes_credentials(tmp_path, age_recipi
     )
     _setup_provision_prereqs(db, age_recipient, cfg_path)
     run(["provision-seed", "--provider", "hetzner", "--region", "fsn1",
-         "--db-path", str(db), "--config", str(cfg_path)])
+         "--db-path", str(db), "--config", str(cfg_path),
+         *_PROVISION_V2_ARGS])
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.burned import is_burned
     conn = connect(db)

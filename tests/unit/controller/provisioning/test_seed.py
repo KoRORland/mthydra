@@ -76,6 +76,15 @@ def _b2_mock():
     return b2
 
 
+_V2_KWARGS = dict(
+    descriptor_refresh_url="https://b2.example/descriptors/current",
+    agent_source_url="https://b2.example/agent/v0.1.0.tar.gz",
+    agent_source_sha256="deadbeef" * 8,
+    telegram_dcs_v4=("149.154.160.0/20",),
+    telegram_dcs_v6=("2001:b28:f23d::/48",),
+)
+
+
 def test_provision_box_happy_path(conn):
     _seed_authority(conn)
     _seed_descriptor(conn)
@@ -88,13 +97,14 @@ def test_provision_box_happy_path(conn):
         provider="hetzner", region="fsn1",
         image_signed_url_ttl_seconds=3600,
         now=NOW,
+        **_V2_KWARGS,
     )
     assert isinstance(seed, SeedBundle)
     assert seed.sni == "example.cover"
     assert seed.transport_role == "ru_relay"
-    assert seed.image_version == "abc123"
-    assert "abc123" in seed.image_url
-    assert len(seed.descriptor_trust_anchors_b64) == 1
+    assert seed.image["version"] == "abc123"
+    assert "abc123" in seed.image["url"]
+    assert len(seed.descriptor_trust_anchors) == 1
 
     rows = conn.execute("SELECT box_id, state, sni FROM ru_boxes").fetchall()
     assert len(rows) == 1
@@ -132,6 +142,7 @@ def test_provision_box_refuses_placeholder_authority(conn):
             provider="hetzner", region="fsn1",
             image_signed_url_ttl_seconds=3600,
             now=NOW,
+            **_V2_KWARGS,
         )
 
 
@@ -145,6 +156,7 @@ def test_provision_box_refuses_no_promoted_image(conn):
             provider="hetzner", region="fsn1",
             image_signed_url_ttl_seconds=3600,
             now=NOW,
+            **_V2_KWARGS,
         )
 
 
@@ -158,6 +170,7 @@ def test_provision_box_refuses_no_cover_domain(conn):
             provider="hetzner", region="fsn1",
             image_signed_url_ttl_seconds=3600,
             now=NOW,
+            **_V2_KWARGS,
         )
 
 
@@ -171,6 +184,7 @@ def test_provision_box_refuses_no_descriptor(conn):
             provider="hetzner", region="fsn1",
             image_signed_url_ttl_seconds=3600,
             now=NOW,
+            **_V2_KWARGS,
         )
 
 
@@ -184,9 +198,10 @@ def test_seed_bundle_to_json_round_trips(conn):
         provider="hetzner", region="fsn1",
         image_signed_url_ttl_seconds=3600,
         now=NOW,
+        **_V2_KWARGS,
     )
     payload = json.loads(seed.to_json())
-    assert payload["schema"] == "mthydra.ru_seed.v1"
+    assert payload["schema"] == "mthydra.ru_seed.v2"
     assert payload["sni"] == "example.cover"
     assert "onward_credential" in payload
     assert "initial_descriptor" in payload
@@ -206,9 +221,76 @@ def test_seed_bundle_to_cloud_init_wraps_json(conn):
         provider="hetzner", region="fsn1",
         image_signed_url_ttl_seconds=3600,
         now=NOW,
+        **_V2_KWARGS,
     )
     yaml_text = seed.to_cloud_init().decode("utf-8")
     assert yaml_text.startswith("#cloud-config")
     assert "write_files:" in yaml_text
     assert "/run/mthydra/seed.json" in yaml_text
     assert "example.cover" in yaml_text
+
+
+def _setup_v2_prereqs(conn):
+    _seed_authority(conn)
+    _seed_descriptor(conn)
+    _seed_image(conn)
+    _seed_cover(conn, "example.cover")
+
+
+def test_seed_v2_includes_reality_uuid_and_new_urls(conn):
+    _setup_v2_prereqs(conn)
+    seed = provision_box(
+        conn=conn, b2_destination=_b2_mock(),
+        provider="hetzner", region="fsn1",
+        image_signed_url_ttl_seconds=3600,
+        now=NOW,
+        descriptor_refresh_url="https://b2.example/descriptors/current",
+        agent_source_url="https://b2.example/agent/v0.1.0.tar.gz",
+        agent_source_sha256="deadbeef" * 8,
+        telegram_dcs_v4=("149.154.160.0/20",),
+        telegram_dcs_v6=("2001:b28:f23d::/48",),
+    )
+    payload = json.loads(seed.to_json())
+    assert payload["schema"] == "mthydra.ru_seed.v2"
+    assert "reality_uuid" in payload
+    assert len(payload["reality_uuid"]) == 36  # uuid4 canonical form
+    assert payload["descriptor_refresh_url"] == "https://b2.example/descriptors/current"
+    assert payload["agent_source_url"] == "https://b2.example/agent/v0.1.0.tar.gz"
+    assert payload["agent_source_sha256"] == "deadbeef" * 8
+    assert payload["telegram_dcs"]["v4"] == ["149.154.160.0/20"]
+    assert payload["telegram_dcs"]["v6"] == ["2001:b28:f23d::/48"]
+
+
+def test_seed_v2_writes_reality_uuid_to_db(conn):
+    _setup_v2_prereqs(conn)
+    seed = provision_box(
+        conn=conn, b2_destination=_b2_mock(),
+        provider="p", region="r",
+        image_signed_url_ttl_seconds=3600, now=NOW,
+        descriptor_refresh_url="x", agent_source_url="y",
+        agent_source_sha256="z" * 64, telegram_dcs_v4=(), telegram_dcs_v6=(),
+    )
+    row = conn.execute(
+        "SELECT reality_uuid FROM ru_boxes WHERE box_id=?", (seed.box_id,),
+    ).fetchone()
+    assert row[0] == seed.reality_uuid
+
+
+def test_cloud_init_contains_hardening_bootcmds(conn):
+    _setup_v2_prereqs(conn)
+    seed = provision_box(
+        conn=conn, b2_destination=_b2_mock(),
+        provider="p", region="r",
+        image_signed_url_ttl_seconds=3600, now=NOW,
+        descriptor_refresh_url="x", agent_source_url="y",
+        agent_source_sha256="z" * 64, telegram_dcs_v4=(), telegram_dcs_v6=(),
+    )
+    out = seed.to_cloud_init().decode("utf-8")
+    assert "#cloud-config" in out
+    assert "bootcmd:" in out
+    assert "swapoff -a" in out
+    assert "kernel.core_pattern" in out
+    assert "Storage=volatile" in out
+    assert "mount -t tmpfs tmpfs /var/log" in out
+    assert "runcmd:" in out
+    assert "agent" in out  # generic mention of agent install

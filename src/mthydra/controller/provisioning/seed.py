@@ -30,7 +30,7 @@ class ProvisionError(RuntimeError):
     """Raised by provision_box when prerequisites are missing."""
 
 
-_SEED_SCHEMA = "mthydra.ru_seed.v1"
+_SEED_SCHEMA = "mthydra.ru_seed.v2"
 _TRANSPORT_ROLE = "ru_relay"
 
 
@@ -40,65 +40,85 @@ class SeedBundle:
     box_id: str
     sni: str
     transport_role: str
+    reality_uuid: str
     onward_credential_b64: str
     authority_pubkey_pem: str
-    descriptor_trust_anchors_b64: tuple[str, ...]
+    descriptor_trust_anchors: tuple[str, ...]
     initial_descriptor_b64: str
-    image_version: str
-    image_url: str
-    image_url_expires_at: str
-    image_sha256: str
-    image_size_bytes: int
+    image: dict
+    descriptor_refresh_url: str
+    agent_source_url: str
+    agent_source_sha256: str
+    telegram_dcs: dict  # {"v4": [...], "v6": [...]}
     issued_at: str
     issued_by_authority_generation: int
 
-    def to_dict(self) -> dict:
+    def _payload(self) -> dict:
         return {
             "schema": self.schema,
             "box_id": self.box_id,
             "sni": self.sni,
             "transport_role": self.transport_role,
+            "reality_uuid": self.reality_uuid,
             "onward_credential": self.onward_credential_b64,
             "authority_pubkey_pem": self.authority_pubkey_pem,
-            "descriptor_trust_anchors": list(self.descriptor_trust_anchors_b64),
+            "descriptor_trust_anchors": list(self.descriptor_trust_anchors),
             "initial_descriptor": self.initial_descriptor_b64,
-            "image": {
-                "version": self.image_version,
-                "url": self.image_url,
-                "url_expires_at": self.image_url_expires_at,
-                "sha256": self.image_sha256,
-                "size_bytes": self.image_size_bytes,
-            },
+            "image": self.image,
+            "descriptor_refresh_url": self.descriptor_refresh_url,
+            "agent_source_url": self.agent_source_url,
+            "agent_source_sha256": self.agent_source_sha256,
+            "telegram_dcs": self.telegram_dcs,
             "issued_at": self.issued_at,
             "issued_by_authority_generation": self.issued_by_authority_generation,
         }
 
+    def to_dict(self) -> dict:
+        return self._payload()
+
     def to_json(self) -> bytes:
         """Canonical JSON (sorted keys, no whitespace)."""
         return json.dumps(
-            self.to_dict(), sort_keys=True, separators=(",", ":")
+            self._payload(), sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
 
     def to_json_pretty(self) -> bytes:
-        return json.dumps(self.to_dict(), sort_keys=True, indent=2).encode("utf-8")
+        return json.dumps(self._payload(), sort_keys=True, indent=2).encode("utf-8")
 
     def to_cloud_init(self) -> bytes:
-        """Returns a #cloud-config YAML wrapping the JSON in write_files:."""
-        pretty = self.to_json_pretty().decode("utf-8")
-        indented = "\n".join("      " + line for line in pretty.splitlines())
-        body = (
+        """Returns a #cloud-config YAML wrapping the JSON in write_files: with
+        the bootcmd hardening block, apt install of runtime deps, agent
+        tarball download + sha256 verify, and systemd-run of the RU agent."""
+        payload_indented = "\n".join(
+            "      " + line for line in self.to_json_pretty().decode("utf-8").splitlines()
+        )
+        yaml = (
             "#cloud-config\n"
+            "bootcmd:\n"
+            "  - swapoff -a\n"
+            "  - sysctl -w kernel.core_pattern='|/bin/false'\n"
+            "  - mkdir -p /var/log /run/mthydra\n"
+            "  - mount -t tmpfs tmpfs /var/log\n"
+            "  - mkdir -p /etc/systemd/journald.conf.d\n"
+            "  - printf '[Journal]\\nStorage=volatile\\n' > /etc/systemd/journald.conf.d/99-mthydra.conf\n"
+            "  - systemctl restart systemd-journald\n"
             "write_files:\n"
             "  - path: /run/mthydra/seed.json\n"
             "    permissions: '0600'\n"
             "    owner: root:root\n"
             "    content: |\n"
-            f"{indented}\n"
+            f"{payload_indented}\n"
             "runcmd:\n"
-            "  - mkdir -p /run/mthydra\n"
             "  - chmod 0700 /run/mthydra\n"
+            "  - DEBIAN_FRONTEND=noninteractive apt-get update -y\n"
+            "  - DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-cryptography iptables\n"
+            f"  - curl -fsSL '{self.agent_source_url}' -o /run/mthydra/agent.tar.gz\n"
+            f"  - echo '{self.agent_source_sha256}  /run/mthydra/agent.tar.gz' | sha256sum -c -\n"
+            "  - mkdir -p /run/mthydra/agent\n"
+            "  - tar -xzf /run/mthydra/agent.tar.gz -C /run/mthydra/agent\n"
+            "  - systemd-run --unit mthydra-agent --description='mthydra RU agent' python3 -m mthydra.ru_agent\n"
         )
-        return body.encode("utf-8")
+        return yaml.encode("utf-8")
 
 
 def provision_box(
@@ -109,6 +129,11 @@ def provision_box(
     region: str,
     image_signed_url_ttl_seconds: int,
     now: str,
+    descriptor_refresh_url: str,
+    agent_source_url: str,
+    agent_source_sha256: str,
+    telegram_dcs_v4: tuple[str, ...],
+    telegram_dcs_v6: tuple[str, ...],
     actor: str = "operator",
 ) -> SeedBundle:
     # 1. Authority must be real Ed25519 (not placeholder).
@@ -170,6 +195,7 @@ def provision_box(
     # breaking our transaction boundary.  All DML is in a single BEGIN/COMMIT block.
     box_id = str(uuid.uuid4())
     cred_id = str(uuid.uuid4())
+    reality_uuid = str(uuid.uuid4())
     credential_blob = sign_onward_credential(
         auth.privkey_pem,
         box_id=box_id,
@@ -189,6 +215,11 @@ def provision_box(
             "(box_id, provider, region, public_ip, sni, state, image_version, created_at) "
             "VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?)",
             (box_id, provider, region, None, picked.domain, image.image_version, now),
+        )
+        # Write reality_uuid (Spec E: per-box Reality UUID, embedded in seed).
+        conn.execute(
+            "UPDATE ru_boxes SET reality_uuid=? WHERE box_id=?",
+            (reality_uuid, box_id),
         )
         # cover_domain_pool: candidate_verified → in_use
         cur = conn.execute(
@@ -229,15 +260,25 @@ def provision_box(
         box_id=box_id,
         sni=picked.domain,
         transport_role=_TRANSPORT_ROLE,
+        reality_uuid=reality_uuid,
         onward_credential_b64=base64.b64encode(credential_blob).decode("ascii"),
         authority_pubkey_pem=auth.pubkey_pem,
-        descriptor_trust_anchors_b64=trust_anchors_b64,
+        descriptor_trust_anchors=trust_anchors_b64,
         initial_descriptor_b64=initial_descriptor_b64,
-        image_version=image.image_version,
-        image_url=image_url,
-        image_url_expires_at=image_url_expires_at,
-        image_sha256=image.binary_sha256,
-        image_size_bytes=image.binary_size_bytes,
+        image={
+            "version": image.image_version,
+            "url": image_url,
+            "url_expires_at": image_url_expires_at,
+            "sha256": image.binary_sha256,
+            "size_bytes": image.binary_size_bytes,
+        },
+        descriptor_refresh_url=descriptor_refresh_url,
+        agent_source_url=agent_source_url,
+        agent_source_sha256=agent_source_sha256,
+        telegram_dcs={
+            "v4": list(telegram_dcs_v4),
+            "v6": list(telegram_dcs_v6),
+        },
         issued_at=now,
         issued_by_authority_generation=auth.generation,
     )
