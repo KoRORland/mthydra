@@ -1,10 +1,12 @@
-"""Users, shards, and published-subset history."""
+"""Users + published-subset history. Shards live in `state.shards` (spec H)."""
 from __future__ import annotations
 
 import json
 import sqlite3
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
+
+from mthydra.controller.state import audit
 
 
 @dataclass(frozen=True)
@@ -14,15 +16,6 @@ class User:
     out_of_band_channel: str
     current_shard_id: str | None
     added_at: str
-
-
-@dataclass(frozen=True)
-class Shard:
-    shard_id: str
-    members_json: str
-    last_reshuffled_at: str
-    created_at: str
-    retired_at: str | None
 
 
 @dataclass(frozen=True)
@@ -54,17 +47,96 @@ def list_users(conn: sqlite3.Connection) -> list[User]:
     return [User(*r) for r in rows]
 
 
-def create_shard(conn: sqlite3.Connection, shard_id: str, members: list[str], at: str) -> None:
-    conn.execute(
-        "INSERT INTO shards (shard_id, members_json, last_reshuffled_at, created_at) VALUES (?, ?, ?, ?)",
-        (shard_id, json.dumps(members), at, at),
-    )
-    conn.commit()
-
-
 def set_user_shard(conn: sqlite3.Connection, user_id: str, shard_id: str | None) -> None:
     conn.execute("UPDATE users SET current_shard_id=? WHERE user_id=?", (shard_id, user_id))
     conn.commit()
+
+
+def assign_user_to_shard(
+    conn: sqlite3.Connection,
+    user_id: str,
+    shard_id: str,
+    *,
+    at: str,
+    max_size: int,
+) -> None:
+    """Add user to shard's members_json and update current_shard_id.
+
+    Refuses if shard is retired (LookupError), missing (LookupError), or at
+    `max_size` (ValueError). Idempotent: re-adding an existing member is a
+    no-op (no audit row written).
+    """
+    row = conn.execute(
+        "SELECT members_json, retired_at FROM shards WHERE shard_id=?",
+        (shard_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"no shard {shard_id!r}")
+    if row[1] is not None:
+        raise LookupError(f"shard {shard_id!r} is retired")
+    members = json.loads(row[0])
+    if user_id in members:
+        return
+    if len(members) >= max_size:
+        raise ValueError(f"shard {shard_id!r} at max_size={max_size}")
+    members.append(user_id)
+    conn.execute(
+        "UPDATE shards SET members_json=? WHERE shard_id=?",
+        (json.dumps(members), shard_id),
+    )
+    conn.execute(
+        "UPDATE users SET current_shard_id=? WHERE user_id=?",
+        (shard_id, user_id),
+    )
+    audit.log_event(
+        conn, ts=at, actor="shard_manager", action="shard_assign_user",
+        target=shard_id,
+        details_json=json.dumps({"user_id": user_id}),
+    )
+
+
+def unassigned_users(conn: sqlite3.Connection) -> list[str]:
+    return [
+        r[0] for r in conn.execute(
+            "SELECT user_id FROM users WHERE current_shard_id IS NULL ORDER BY user_id"
+        ).fetchall()
+    ]
+
+
+def reshuffle_unassigned(
+    conn: sqlite3.Connection,
+    *,
+    now: str,
+    target_size: int,
+    shard_id_factory: Callable[[], str],
+) -> list[str]:
+    """Group currently-unassigned users into shards of size <= target_size.
+
+    Creates new shards via `state.shards.create_shard` (kept lazy-imported to
+    avoid a circular import; `state.shards` does not depend on this module).
+    Returns the list of new shard_ids.
+    """
+    from mthydra.controller.state import shards as _shards
+
+    unassigned = unassigned_users(conn)
+    if not unassigned:
+        return []
+    new_ids: list[str] = []
+    for i in range(0, len(unassigned), target_size):
+        chunk = unassigned[i : i + target_size]
+        sid = shard_id_factory()
+        _shards.create_shard(
+            conn, shard_id=sid, members=chunk,
+            target_size=target_size, at=now,
+        )
+        for u in chunk:
+            conn.execute(
+                "UPDATE users SET current_shard_id=? WHERE user_id=?",
+                (sid, u),
+            )
+        new_ids.append(sid)
+    conn.commit()
+    return new_ids
 
 
 def publish_subset(conn: sqlite3.Connection, payload: dict[str, Any], channel: str, at: str) -> int:
