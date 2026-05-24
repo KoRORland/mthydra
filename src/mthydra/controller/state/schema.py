@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -20,6 +20,28 @@ _TRIGGER_BURNED_DOMAINS_NO_DELETE = """
     BEFORE DELETE ON burned_domains
     BEGIN
       SELECT RAISE(ABORT, 'cover-pool: burned_domains is append-only');
+    END
+    """
+
+_TRIGGER_RU_BOXES_NO_CROSS_SHARD_REASSIGN = """
+    CREATE TRIGGER IF NOT EXISTS ru_boxes_no_cross_shard_reassign
+    BEFORE UPDATE OF shard_id ON ru_boxes
+    WHEN OLD.shard_id IS NOT NULL
+     AND OLD.shard_id IS NOT NEW.shard_id
+     AND OLD.state != 'provisioning'
+    BEGIN
+      SELECT RAISE(ABORT, 'shard-manager: live/terminated boxes cannot change shard_id');
+    END
+    """
+
+_TRIGGER_RU_BOXES_TERMINATED_KEEPS_SHARD = """
+    CREATE TRIGGER IF NOT EXISTS ru_boxes_terminated_keeps_shard
+    BEFORE UPDATE OF state ON ru_boxes
+    WHEN NEW.state = 'terminated'
+     AND NEW.shard_id IS NULL
+     AND OLD.shard_id IS NOT NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'shard-manager: terminating a box does not clear shard_id (history preservation)');
     END
     """
 
@@ -86,7 +108,8 @@ _STATEMENTS: list[str] = [
       members_json       TEXT NOT NULL,
       last_reshuffled_at TEXT NOT NULL,
       created_at         TEXT NOT NULL,
-      retired_at         TEXT
+      retired_at         TEXT,
+      target_size        INTEGER
     )
     """,
     """
@@ -251,6 +274,9 @@ _STATEMENTS: list[str] = [
     """
     CREATE INDEX IF NOT EXISTS ix_ru_images_state ON ru_images(state)
     """,
+    # --- spec H additions: shard disjointness triggers ---
+    _TRIGGER_RU_BOXES_NO_CROSS_SHARD_REASSIGN,
+    _TRIGGER_RU_BOXES_TERMINATED_KEEPS_SHARD,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -414,6 +440,20 @@ def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
+    """Idempotent v6 → v7 migration: add shards.target_size + ru_boxes disjointness triggers."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(shards)").fetchall()]
+    if "target_size" not in cols:
+        conn.execute("ALTER TABLE shards ADD COLUMN target_size INTEGER")
+    conn.execute(_TRIGGER_RU_BOXES_NO_CROSS_SHARD_REASSIGN)
+    conn.execute(_TRIGGER_RU_BOXES_TERMINATED_KEEPS_SHARD)
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (7, _now()),
+    )
+    conn.commit()
+
+
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing; insert or migrate schema_version row."""
     for stmt in _STATEMENTS:
@@ -447,4 +487,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v4_to_v5(conn)
         if current < 6:
             migrate_v5_to_v6(conn)
+        if current < 7:
+            migrate_v6_to_v7(conn)
     conn.commit()

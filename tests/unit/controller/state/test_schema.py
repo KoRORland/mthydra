@@ -233,14 +233,15 @@ def test_v4_to_v5_migration_adds_table(tmp_db_path):
     assert "image_version" in cols
 
 
-def test_schema_version_is_6(tmp_db_path):
+def test_schema_version_at_least_6(tmp_db_path):
+    """Superseded by test_schema_version_is_7. Kept to preserve numbering."""
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
-    assert SCHEMA_VERSION == 6
+    assert SCHEMA_VERSION >= 6
     conn = connect(tmp_db_path)
     apply_schema(conn)
     row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 6
+    assert row[0] >= 6
 
 
 def test_v5_to_v6_migration_adds_columns(tmp_path):
@@ -321,3 +322,150 @@ def test_v5_to_v6_migration_from_v5_db(tmp_path):
         ).fetchall()
     }
     assert "idx_ru_boxes_reality_uuid" in idxs
+
+
+# --- spec H schema v7 tests ---
+
+def test_schema_version_is_7(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+
+    assert SCHEMA_VERSION == 7
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 7
+
+
+def test_shards_target_size_column_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(shards)").fetchall()]
+    assert "target_size" in cols
+
+
+def test_v7_no_cross_shard_reassign_trigger_blocks_live(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES ('s1', '[]', 2, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES ('s2', '[]', 2, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, shard_id, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni1.example', 's1', 'live', 'v1', '2026-05-24T00:00:00Z')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE ru_boxes SET shard_id='s2' WHERE box_id='b1'")
+        conn.commit()
+
+
+def test_v7_no_cross_shard_reassign_trigger_allows_provisioning(tmp_path):
+    """Reassigning a provisioning box is fine (operator may change their mind)."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES ('s1', '[]', 2, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES ('s2', '[]', 2, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, shard_id, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni1.example', 's1', 'provisioning', 'v1', '2026-05-24T00:00:00Z')"
+    )
+    conn.execute("UPDATE ru_boxes SET shard_id='s2' WHERE box_id='b1'")
+    conn.commit()
+    row = conn.execute("SELECT shard_id FROM ru_boxes WHERE box_id='b1'").fetchone()
+    assert row[0] == "s2"
+
+
+def test_v7_terminated_keeps_shard_trigger(tmp_path):
+    """terminating a box must NOT clear shard_id — history preservation."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES ('s1', '[]', 2, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, shard_id, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni1.example', 's1', 'live', 'v1', '2026-05-24T00:00:00Z')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "UPDATE ru_boxes SET state='terminated', shard_id=NULL WHERE box_id='b1'"
+        )
+        conn.commit()
+
+
+def test_v7_terminate_with_shard_retained_succeeds(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES ('s1', '[]', 2, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, shard_id, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni1.example', 's1', 'live', 'v1', '2026-05-24T00:00:00Z')"
+    )
+    conn.commit()
+    conn.execute(
+        "UPDATE ru_boxes SET state='terminated', terminated_at='2026-05-24T01:00:00Z' "
+        "WHERE box_id='b1'"
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT state, shard_id FROM ru_boxes WHERE box_id='b1'"
+    ).fetchone()
+    assert row == ("terminated", "s1")
+
+
+def test_v6_to_v7_migration_idempotent(tmp_path):
+    """Force schema_version back to 6 and verify migrate_v6_to_v7 brings it to 7
+    without breaking on already-present columns/triggers."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v6_to_v7
+
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    conn.execute("UPDATE schema_version SET version=6 WHERE rowid=1")
+    conn.commit()
+    migrate_v6_to_v7(conn)
+    v = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
+    assert v == 7
+    # Re-running is a no-op.
+    migrate_v6_to_v7(conn)
+    v2 = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
+    assert v2 == 7
