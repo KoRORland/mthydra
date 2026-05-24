@@ -1659,6 +1659,19 @@ def test_bootstrap_seeds_provision_drill_obligation(tmp_path, age_recipient):
     conn.close()
 
 
+def test_bootstrap_seeds_spec_e_obligations(tmp_path, age_recipient):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    assert "e_ru_agent_provision_replace_drill_proven" in obs
+    assert "e_data_exit_drill_proven" in obs
+    conn.close()
+
+
 # -----------------------------------------------------------------------------
 # Task 10 (Spec E): data-exit CLI subcommands
 # -----------------------------------------------------------------------------

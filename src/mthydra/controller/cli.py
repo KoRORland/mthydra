@@ -421,6 +421,8 @@ def run(argv: list[str]) -> int:
                     "eu_standby_drill_proven": 30 * 24,
                     "t4_image_promoted":  30 * 24,
                     "g_provision_drill_proven":  90 * 24,
+                    "e_ru_agent_provision_replace_drill_proven": 30 * 24,
+                    "e_data_exit_drill_proven":                  30 * 24,
                 } if args.role == "active" else {},
                 now=_now(),
                 role=args.role,
