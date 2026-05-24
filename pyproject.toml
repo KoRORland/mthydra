@@ -39,7 +39,11 @@ source = [
     "mthydra.controller.state",
     "mthydra.controller.restore",
 ]
-omit = ["*/tests/*", "*/__pycache__/*"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/mthydra/ru_agent/__main__.py",
+]
 
 [tool.coverage.report]
 show_missing = true

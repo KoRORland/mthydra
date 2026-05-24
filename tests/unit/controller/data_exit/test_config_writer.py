@@ -204,3 +204,37 @@ def test_write_atomic_creates_parent_dirs(tmp_path):
     out = tmp_path / "nested" / "dir" / "config.json"
     write_atomic(out, b"x")
     assert out.read_bytes() == b"x"
+
+
+def test_write_atomic_cleans_up_tempfile_on_failure(tmp_path, monkeypatch):
+    """If os.replace raises, the tempfile is unlinked and exception re-raises."""
+    import pytest
+    from mthydra.controller.data_exit import config_writer
+
+    def boom(*a, **kw):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(config_writer.os, "replace", boom)
+    out = tmp_path / "config.json"
+    with pytest.raises(RuntimeError, match="disk full"):
+        config_writer.write_atomic(out, b"x")
+    # No leftover *.tmp files.
+    leftover = list(tmp_path.glob(f"{out.name}.*.tmp"))
+    assert leftover == []
+
+
+def test_write_atomic_swallows_tempfile_missing_during_cleanup(tmp_path, monkeypatch):
+    """If both replace fails and tmp file vanishes mid-cleanup, FileNotFoundError
+    is swallowed and original exception still propagates."""
+    import pytest
+    from mthydra.controller.data_exit import config_writer
+
+    def boom_replace(*a, **kw):
+        raise RuntimeError("replace fail")
+
+    def fake_unlink(p):
+        raise FileNotFoundError(p)
+    monkeypatch.setattr(config_writer.os, "replace", boom_replace)
+    monkeypatch.setattr(config_writer.os, "unlink", fake_unlink)
+    out = tmp_path / "config.json"
+    with pytest.raises(RuntimeError, match="replace fail"):
+        config_writer.write_atomic(out, b"x")

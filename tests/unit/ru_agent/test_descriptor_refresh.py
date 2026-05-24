@@ -124,3 +124,116 @@ def test_refresh_terminates_after_6h_of_failures(tmp_path):
     for _ in range(loop.MAX_FAILURE_TICKS):
         loop.tick()
     assert terminated  # terminate_fn was called
+
+
+def test_verify_rejects_blob_too_short():
+    from mthydra.ru_agent import descriptor_refresh
+    loop = descriptor_refresh.RefreshLoop(
+        url="x", trust_anchors=[b"\0" * 32],
+        initial_descriptor=b"\0" * 66,
+        rewrite_fn=lambda b: None,
+        fetch_fn=lambda u, ims: (b"", ""),
+        terminate_fn=lambda r: None,
+    )
+    with pytest.raises(descriptor_refresh.RefreshError, match="too short"):
+        loop._verify(b"AB")  # < 2+64
+
+
+def test_verify_rejects_length_mismatch():
+    from mthydra.ru_agent import descriptor_refresh
+    # blob declares n=10 payload, but actual bytes don't match expected length.
+    blob = struct.pack(">H", 10) + b"x" * 5 + b"\0" * 64  # short payload
+    loop = descriptor_refresh.RefreshLoop(
+        url="x", trust_anchors=[b"\0" * 32],
+        initial_descriptor=b"\0" * 100,
+        rewrite_fn=lambda b: None,
+        fetch_fn=lambda u, ims: (b"", ""),
+        terminate_fn=lambda r: None,
+    )
+    with pytest.raises(descriptor_refresh.RefreshError, match="length mismatch"):
+        loop._verify(blob)
+
+
+def test_verify_rejects_payload_not_json():
+    """Signed-but-non-JSON payload raises RefreshError('payload not JSON')."""
+    from mthydra.ru_agent import descriptor_refresh
+    priv, pub = _make_keyed_signer()
+    payload = b"this is not json"
+    sig = priv.sign(payload)
+    blob = struct.pack(">H", len(payload)) + payload + sig
+    loop = descriptor_refresh.RefreshLoop(
+        url="x", trust_anchors=[pub],
+        initial_descriptor=blob,
+        rewrite_fn=lambda b: None,
+        fetch_fn=lambda u, ims: (b"", ""),
+        terminate_fn=lambda r: None,
+    )
+    with pytest.raises(descriptor_refresh.RefreshError, match="not JSON"):
+        loop._verify(blob)
+
+
+def test_next_sleep_seconds_within_jitter_range():
+    from mthydra.ru_agent import descriptor_refresh
+    blob, anchor = _signed_descriptor()
+    loop = descriptor_refresh.RefreshLoop(
+        url="x", trust_anchors=[anchor],
+        initial_descriptor=blob,
+        rewrite_fn=lambda b: None,
+        fetch_fn=lambda u, ims: (blob, ""),
+        terminate_fn=lambda r: None,
+    )
+    lo = loop.TICK_INTERVAL_SECONDS - loop.JITTER_SECONDS
+    hi = loop.TICK_INTERVAL_SECONDS + loop.JITTER_SECONDS
+    for _ in range(50):
+        v = loop.next_sleep_seconds()
+        assert lo <= v <= hi
+
+
+def test_run_forever_calls_tick_then_sleeps(monkeypatch):
+    """run_forever loops indefinitely; we break out by raising in sleep_fn."""
+    from mthydra.ru_agent import descriptor_refresh
+    blob, anchor = _signed_descriptor()
+    tick_calls = []
+
+    loop = descriptor_refresh.RefreshLoop(
+        url="x", trust_anchors=[anchor],
+        initial_descriptor=blob,
+        rewrite_fn=lambda b: None,
+        fetch_fn=lambda u, ims: (blob, ""),
+        terminate_fn=lambda r: None,
+    )
+    monkeypatch.setattr(loop, "tick", lambda: tick_calls.append(True))
+
+    class _Stop(Exception):
+        pass
+
+    sleeps = []
+
+    def fake_sleep(d):
+        sleeps.append(d)
+        if len(sleeps) >= 3:
+            raise _Stop
+    with pytest.raises(_Stop):
+        loop.run_forever(sleep_fn=fake_sleep)
+    assert len(tick_calls) == 3
+    assert len(sleeps) == 3
+
+
+def test_fetch_b2_smoke(monkeypatch):
+    """_fetch_b2 builds a Request, optionally adds If-Modified-Since, and reads."""
+    from mthydra.ru_agent import descriptor_refresh
+    import urllib.request
+
+    class _R:
+        headers = {"Last-Modified": "Sun, 23 May 2026 00:00:00 GMT"}
+        def read(self): return b"payload"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _R())
+    body, lm = descriptor_refresh._fetch_b2("https://x", "Sat, 22 May 2026 00:00:00 GMT")
+    assert body == b"payload"
+    assert lm.startswith("Sun")
+    # And without if-modified-since:
+    body2, _ = descriptor_refresh._fetch_b2("https://x", None)
+    assert body2 == b"payload"
