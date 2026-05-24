@@ -383,3 +383,162 @@ def test_check_28_passes_on_clean_db(tmp_db_path):
     issue_credential(conn, "b1", b"\x00" * 10, NOW, authority_generation=1)
     issue_credential(conn, "b2", b"\x00" * 10, NOW, authority_generation=1)
     check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+# ---------------------------------------------------------------------------
+# Spec E invariant checks (#29–#32) — gated on schema v6+
+# ---------------------------------------------------------------------------
+
+def test_check_29_rejects_duplicate_reality_uuid(tmp_db_path):
+    """Two ru_boxes sharing a reality_uuid must trip #29.
+
+    The partial UNIQUE INDEX would normally prevent this; we bypass by
+    temporarily dropping the index so the invariant has something to catch.
+    """
+    conn = _seeded(tmp_db_path)
+    from mthydra.controller.state.credentials import issue_credential
+    from mthydra.controller.state.ru_boxes import insert_box
+    insert_box(conn, "b1", "aws", "eu", "10.0.0.1", "a.invalid", "img", NOW)
+    insert_box(conn, "b2", "aws", "eu", "10.0.0.2", "b.invalid", "img", NOW)
+    issue_credential(conn, "b1", b"\x00" * 10, NOW, authority_generation=1)
+    issue_credential(conn, "b2", b"\x00" * 10, NOW, authority_generation=1)
+    conn.execute("DROP INDEX IF EXISTS idx_ru_boxes_reality_uuid")
+    conn.execute(
+        "UPDATE ru_boxes SET reality_uuid='shared-uuid' WHERE box_id IN ('b1','b2')"
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 29"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_30_rejects_live_box_without_reality_uuid(tmp_db_path):
+    """A live ru_box with an active onward credential but no reality_uuid trips #30."""
+    conn = _seeded(tmp_db_path)
+    from mthydra.controller.state.credentials import issue_credential
+    from mthydra.controller.state.ru_boxes import insert_box, mark_live
+    insert_box(conn, "boxX", "aws", "eu-1", "10.0.0.1", "sni-x.invalid",
+               "img-v1", NOW)
+    mark_live(conn, "boxX", public_ip="10.0.0.1", at=NOW)
+    issue_credential(conn, "boxX", b"\x00" * 10, NOW, authority_generation=1)
+    # No reality_uuid set
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 30"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_30_passes_when_live_box_has_reality_uuid(tmp_db_path):
+    """A live ru_box with reality_uuid and an active credential passes #30."""
+    conn = _seeded(tmp_db_path)
+    from mthydra.controller.state.credentials import issue_credential
+    from mthydra.controller.state.ru_boxes import insert_box, mark_live
+    insert_box(conn, "boxY", "aws", "eu-1", "10.0.0.2", "sni-y.invalid",
+               "img-v1", NOW)
+    mark_live(conn, "boxY", public_ip="10.0.0.2", at=NOW)
+    issue_credential(conn, "boxY", b"\x00" * 10, NOW, authority_generation=1)
+    conn.execute("UPDATE ru_boxes SET reality_uuid='ru-uuid-Y' WHERE box_id='boxY'")
+    conn.commit()
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_31_rejects_active_eu_node_without_cover_sni(tmp_db_path):
+    """An eu_node with role='active' but NULL cover_sni trips #31."""
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO eu_nodes (node_id, hostname, provider, region, public_ip, "
+        " role, added_at, cover_sni, reality_pubkey) "
+        "VALUES ('eu-n1', 'h', 'hetzner', 'fsn1', '1.2.3.4', 'active', ?, "
+        "        NULL, 'pk-abc')",
+        (NOW,),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 31"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_31_rejects_active_eu_node_without_reality_pubkey(tmp_db_path):
+    """An eu_node with role='active' but NULL reality_pubkey trips #31."""
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO eu_nodes (node_id, hostname, provider, region, public_ip, "
+        " role, added_at, cover_sni, reality_pubkey) "
+        "VALUES ('eu-n1', 'h', 'hetzner', 'fsn1', '1.2.3.4', 'active', ?, "
+        "        'cover.invalid', NULL)",
+        (NOW,),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 31"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_31_passes_for_retired_eu_node(tmp_db_path):
+    """A retired eu_node with NULL cover_sni is fine (#31 only applies to active/standby)."""
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO eu_nodes (node_id, hostname, provider, region, public_ip, "
+        " role, added_at, retired_at) "
+        "VALUES ('eu-r1', 'h', 'hetzner', 'fsn1', '1.2.3.4', 'retired', ?, ?)",
+        (NOW, NOW),
+    )
+    conn.commit()
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_32_rejects_mismatched_cover_sni(tmp_db_path):
+    """eu_exit_set and eu_nodes matched by public_ip must agree on cover_sni."""
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO eu_nodes (node_id, hostname, provider, region, public_ip, "
+        " role, added_at, cover_sni, reality_pubkey) "
+        "VALUES ('eu-n1', 'h', 'hetzner', 'fsn1', '1.2.3.4', 'active', ?, "
+        "        'node-cover.invalid', 'pk-abc')",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO eu_exit_set (fingerprint, endpoint, weight, added_at, "
+        " cover_sni, reality_pubkey) "
+        "VALUES ('fp-1', '1.2.3.4:443', 1, ?, 'descriptor-cover.invalid', 'pk-abc')",
+        (NOW,),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 32"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_32_passes_when_cover_sni_matches(tmp_db_path):
+    """Matching cover_sni on both sides passes #32."""
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO eu_nodes (node_id, hostname, provider, region, public_ip, "
+        " role, added_at, cover_sni, reality_pubkey) "
+        "VALUES ('eu-n1', 'h', 'hetzner', 'fsn1', '1.2.3.4', 'active', ?, "
+        "        'cover.invalid', 'pk-abc')",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO eu_exit_set (fingerprint, endpoint, weight, added_at, "
+        " cover_sni, reality_pubkey) "
+        "VALUES ('fp-1', '1.2.3.4:443', 1, ?, 'cover.invalid', 'pk-abc')",
+        (NOW,),
+    )
+    conn.commit()
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_32_skipped_when_retired(tmp_db_path):
+    """A retired eu_exit_set row is excluded from #32."""
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO eu_nodes (node_id, hostname, provider, region, public_ip, "
+        " role, added_at, cover_sni, reality_pubkey) "
+        "VALUES ('eu-n1', 'h', 'hetzner', 'fsn1', '1.2.3.4', 'active', ?, "
+        "        'node-cover.invalid', 'pk-abc')",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO eu_exit_set (fingerprint, endpoint, weight, added_at, retired_at, "
+        " cover_sni, reality_pubkey) "
+        "VALUES ('fp-1', '1.2.3.4:443', 1, ?, ?, 'old-cover.invalid', 'pk-abc')",
+        (NOW, NOW),
+    )
+    conn.commit()
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)

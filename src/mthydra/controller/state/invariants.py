@@ -314,3 +314,73 @@ def check_all(
         raise InvariantViolation(
             f"check 28: SNI {dup[0]!r} shared by {dup[1]} non-terminated boxes"
         )
+
+    # --- spec E checks (#29–#32) — gated on schema v6+ ---
+
+    if expected_schema_version >= 6:
+        _check_29_reality_uuid_unique(conn)
+        _check_30_live_box_has_reality_uuid_with_credential(conn)
+        _check_31_eu_node_active_has_cover_sni(conn)
+        _check_32_descriptor_cover_sni_matches_eu_nodes(conn)
+
+
+def _check_29_reality_uuid_unique(conn: sqlite3.Connection) -> None:
+    """No two ru_boxes share a reality_uuid (defence against accidental double-assign)."""
+    dup = conn.execute(
+        "SELECT reality_uuid, COUNT(*) FROM ru_boxes "
+        "WHERE reality_uuid IS NOT NULL "
+        "GROUP BY reality_uuid HAVING COUNT(*) > 1 LIMIT 1"
+    ).fetchone()
+    if dup is not None:
+        raise InvariantViolation(
+            f"check 29: reality_uuid {dup[0]!r} shared by {dup[1]} ru_boxes rows"
+        )
+
+
+def _check_30_live_box_has_reality_uuid_with_credential(conn: sqlite3.Connection) -> None:
+    """Every live ru_box with a non-revoked credential MUST have a non-NULL reality_uuid."""
+    row = conn.execute(
+        "SELECT rb.box_id FROM ru_boxes rb "
+        "JOIN onward_credentials oc ON oc.box_id = rb.box_id "
+        "                              AND oc.revoked_at IS NULL "
+        "WHERE rb.state = 'live' AND rb.reality_uuid IS NULL LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 30: live ru_boxes.box_id={row[0]!r} has active credential "
+            f"but reality_uuid IS NULL"
+        )
+
+
+def _check_31_eu_node_active_has_cover_sni(conn: sqlite3.Connection) -> None:
+    """eu_nodes.role IN ('active','standby') => non-NULL cover_sni AND reality_pubkey."""
+    row = conn.execute(
+        "SELECT node_id, role, cover_sni, reality_pubkey FROM eu_nodes "
+        "WHERE role IN ('active','standby') "
+        "AND (cover_sni IS NULL OR reality_pubkey IS NULL) LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 31: eu_nodes.node_id={row[0]!r} role={row[1]!r} "
+            f"missing cover_sni={row[2]!r} or reality_pubkey={row[3]!r}"
+        )
+
+
+def _check_32_descriptor_cover_sni_matches_eu_nodes(conn: sqlite3.Connection) -> None:
+    """eu_exit_set rows matched to eu_nodes by public_ip must have identical cover_sni."""
+    row = conn.execute(
+        "SELECT exs.fingerprint, exs.cover_sni, en.cover_sni "
+        "FROM eu_exit_set exs "
+        "JOIN eu_nodes en "
+        "  ON SUBSTR(exs.endpoint, 1, INSTR(exs.endpoint, ':') - 1) = en.public_ip "
+        "WHERE exs.retired_at IS NULL "
+        "  AND exs.cover_sni IS NOT NULL "
+        "  AND en.cover_sni IS NOT NULL "
+        "  AND exs.cover_sni != en.cover_sni "
+        "LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 32: eu_exit_set.fingerprint={row[0]!r} cover_sni={row[1]!r} "
+            f"differs from matching eu_nodes.cover_sni={row[2]!r}"
+        )
