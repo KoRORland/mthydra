@@ -395,6 +395,7 @@ No new RU-side CLI — the agent has no operator surface; control happens throug
 - **The agent runs as root** (needs raw iptables + tmpfs mounts + `shutdown -h`). Running mtg + sing-box as separate non-root child processes is in scope (Unix `setresuid` after fork), but the supervisor itself stays root.
 - **No surgical credential revocation on the RU box.** When the controller revokes a credential, the EU side stops accepting that UUID's handshakes (next tick). The RU box only notices via "all exits unreachable >2h" → self-terminate. This is the design, but it means there's a 2h window where the RU box is alive without service.
 - **`/var/log` on tmpfs interacts with journald.** The bootcmd mounts tmpfs over `/var/log` before journald starts, then configures `Storage=volatile`. Together this should keep journals in RAM, but the precise interaction depends on the cloud image's journald default. Verify per-image during the provision-replace drill (`e_ru_agent_provision_replace_drill_proven`).
+- **`data_exit_state` column** instead of overloading `eu_nodes.role` with 'degraded'. Implementation deviation: spec §5.4 said "extend the `state` column with 'degraded'" but the existing `eu_nodes` table uses `role` (active/standby/retired); the implementation added a new column `data_exit_state` with values 'healthy'/'degraded'/'stopped' to keep operational health orthogonal to organisational role. Invariant #31 and the wheel reference the new column.
 
 ---
 
