@@ -94,6 +94,14 @@ class DataExitConfig:
 
 
 @dataclass(frozen=True)
+class ShardManagerConfig:
+    target_size: int
+    max_size: int
+    reshuffle_interval_days: int
+    reshuffle_sweep_interval_seconds: int
+
+
+@dataclass(frozen=True)
 class Config:
     node: NodeConfig
     backup: BackupConfig
@@ -103,6 +111,7 @@ class Config:
     cover_pool: CoverPoolConfig
     standby: StandbyConfig
     image: ImageConfig
+    shard_manager: ShardManagerConfig
     data_exit: DataExitConfig | None = None
 
 
@@ -199,6 +208,32 @@ def _load_data_exit(data: dict) -> DataExitConfig | None:
         raise ConfigError(f"[data_exit] missing required key: {e}") from e
 
 
+def _load_shard_manager(data: dict) -> ShardManagerConfig:
+    sec = data.get("shard_manager", {})
+    target_size = _require_positive(
+        "shard_manager.target_size", sec.get("target_size", 2)
+    )
+    max_size = _require_positive(
+        "shard_manager.max_size", sec.get("max_size", 3)
+    )
+    if max_size < target_size:
+        raise ConfigError(
+            f"shard_manager.max_size ({max_size}) must be >= target_size ({target_size})"
+        )
+    return ShardManagerConfig(
+        target_size=target_size,
+        max_size=max_size,
+        reshuffle_interval_days=_require_positive(
+            "shard_manager.reshuffle_interval_days",
+            sec.get("reshuffle_interval_days", 14),
+        ),
+        reshuffle_sweep_interval_seconds=_parse_interval_seconds(
+            "shard_manager.reshuffle_sweep_interval",
+            sec.get("reshuffle_sweep_interval", 3600),
+        ),
+    )
+
+
 def _load_image(data: dict) -> ImageConfig:
     sec = data.get("image", {})
     return ImageConfig(
@@ -268,5 +303,6 @@ def load_config(path: Path | str) -> Config:
         cover_pool=_load_cover_pool(raw),
         standby=_load_standby(raw),
         image=_load_image(raw),
+        shard_manager=_load_shard_manager(raw),
         data_exit=_load_data_exit(raw),
     )

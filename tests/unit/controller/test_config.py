@@ -285,6 +285,55 @@ def test_load_config_data_exit_optional(tmp_path):
     assert cfg.data_exit is None
 
 
+def test_load_config_shard_manager_section(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[shard_manager]
+target_size = 2
+max_size = 3
+reshuffle_interval_days = 14
+reshuffle_sweep_interval = "1h"
+"""
+    )
+    cfg = load_config(p)
+    assert cfg.shard_manager.target_size == 2
+    assert cfg.shard_manager.max_size == 3
+    assert cfg.shard_manager.reshuffle_interval_days == 14
+    assert cfg.shard_manager.reshuffle_sweep_interval_seconds == 3600
+
+
+def test_load_config_shard_manager_defaults_when_section_missing(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(_MIN_BASE_TOML)
+    cfg = load_config(p)
+    assert cfg.shard_manager.target_size == 2
+    assert cfg.shard_manager.max_size == 3
+    assert cfg.shard_manager.reshuffle_interval_days == 14
+    assert cfg.shard_manager.reshuffle_sweep_interval_seconds == 3600
+
+
+def test_load_config_shard_manager_rejects_max_below_target(tmp_path):
+    from mthydra.controller.config import ConfigError, load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[shard_manager]
+target_size = 4
+max_size = 2
+"""
+    )
+    with pytest.raises(ConfigError, match="max_size"):
+        load_config(p)
+
+
 def test_data_exit_cover_sni_resolves_per_node():
     from mthydra.controller.config import DataExitConfig
 

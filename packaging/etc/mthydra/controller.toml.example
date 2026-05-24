@@ -60,6 +60,16 @@ upstream_check_interval = "168h"
 github_api_url          = "https://api.github.com"
 build_tmp_dir           = "/var/lib/mthydra/tmp"
 
+[shard_manager]
+# Spec H — per-user in-point isolation (T6). target_size is the size the
+# reshuffle picker aims for; max_size is the hard cap assign_user_to_shard
+# refuses to exceed. reshuffle_interval_days is the per-shard TTL. Both
+# size knobs are conscious cost/safety trades — see spec H §11.
+target_size               = 2
+max_size                  = 3
+reshuffle_interval_days   = 14
+reshuffle_sweep_interval  = "1h"
+
 [data_exit]
 listen_port = 443
 sing_box_socket = "/run/mthydra/sing-box.sock"
