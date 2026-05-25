@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -382,6 +383,56 @@ def build_parser() -> argparse.ArgumentParser:
     derk.add_argument("--db-path", default=DEFAULT_DB)
     derk.add_argument("--config", default="/etc/mthydra/controller.toml")
 
+    # ----- spec H: shard manager subcommands -----
+
+    ua = sub.add_parser("user-add", help="add a user to the circle")
+    ua.add_argument("user_id")
+    ua.add_argument("--out-of-band-channel", required=True,
+                     help="how to reach the user without Telegram (e.g. signal:+1)")
+    ua.add_argument("--display-name", default=None)
+    ua.add_argument("--db-path", default=DEFAULT_DB)
+
+    ul = sub.add_parser("user-list", help="list users + current_shard_id")
+    ul.add_argument("--db-path", default=DEFAULT_DB)
+    ul.add_argument("--json", action="store_true")
+
+    sc = sub.add_parser("shard-create",
+                         help="explicit-membership shard create (bootstrap path)")
+    sc.add_argument("shard_id")
+    sc.add_argument("--members", required=True,
+                     help="comma-separated user_ids")
+    sc.add_argument("--db-path", default=DEFAULT_DB)
+    sc.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    sl = sub.add_parser("shard-list", help="list shards")
+    sl.add_argument("--include-retired", action="store_true")
+    sl.add_argument("--db-path", default=DEFAULT_DB)
+    sl.add_argument("--json", action="store_true")
+
+    ss = sub.add_parser("shard-show", help="full detail of one shard")
+    ss.add_argument("shard_id")
+    ss.add_argument("--db-path", default=DEFAULT_DB)
+    ss.add_argument("--json", action="store_true")
+
+    sab = sub.add_parser("shard-assign-box",
+                          help="set ru_boxes.shard_id (provisioning state only)")
+    sab.add_argument("box_id")
+    sab.add_argument("--shard", required=True, dest="shard_id")
+    sab.add_argument("--db-path", default=DEFAULT_DB)
+
+    sr = sub.add_parser("shard-reshuffle",
+                         help="operator-driven out-of-band reshuffle of one shard")
+    sr.add_argument("shard_id")
+    sr.add_argument("--reason", default="operator_manual")
+    sr.add_argument("--db-path", default=DEFAULT_DB)
+    sr.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    sst = sub.add_parser("shard-stats",
+                          help="shard health summary (overdue + unassigned + ages)")
+    sst.add_argument("--db-path", default=DEFAULT_DB)
+    sst.add_argument("--config", default="/etc/mthydra/controller.toml")
+    sst.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -638,6 +689,23 @@ def run(argv: list[str]) -> int:
         return _cmd_data_exit_config_show(args)
     if args.cmd == "data-exit-reality-keygen":
         return _cmd_data_exit_reality_keygen(args)
+
+    if args.cmd == "user-add":
+        return _cmd_user_add(args)
+    if args.cmd == "user-list":
+        return _cmd_user_list(args)
+    if args.cmd == "shard-create":
+        return _cmd_shard_create(args)
+    if args.cmd == "shard-list":
+        return _cmd_shard_list(args)
+    if args.cmd == "shard-show":
+        return _cmd_shard_show(args)
+    if args.cmd == "shard-assign-box":
+        return _cmd_shard_assign_box(args)
+    if args.cmd == "shard-reshuffle":
+        return _cmd_shard_reshuffle(args)
+    if args.cmd == "shard-stats":
+        return _cmd_shard_stats(args)
 
     return 1
 
@@ -2205,6 +2273,298 @@ def _cmd_data_exit_reality_keygen(args) -> int:
         )
         print(f"data-exit-reality-keygen: {args.node_id} key generated "
               f"(pubkey={pub[:32]}...)")
+        return 0
+    finally:
+        conn.close()
+
+
+# ----- spec H: shard manager subcommands -----
+
+
+def _cmd_user_add(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.users_shards import add_user
+    conn = connect(args.db_path)
+    try:
+        try:
+            add_user(
+                conn,
+                user_id=args.user_id,
+                display_name=args.display_name,
+                out_of_band_channel=args.out_of_band_channel,
+                at=_now(),
+            )
+        except sqlite3.IntegrityError as e:
+            print(f"user-add: {e}", file=sys.stderr)
+            return 2
+        print(f"user-add: {args.user_id} added")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_user_list(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.users_shards import list_users
+    conn = connect(args.db_path)
+    try:
+        users = list_users(conn)
+        if args.json:
+            import json as _json
+            print(_json.dumps(
+                [{
+                    "user_id": u.user_id,
+                    "display_name": u.display_name,
+                    "out_of_band_channel": u.out_of_band_channel,
+                    "current_shard_id": u.current_shard_id,
+                    "added_at": u.added_at,
+                } for u in users],
+                sort_keys=True,
+            ))
+        else:
+            for u in users:
+                shard = u.current_shard_id or "<unassigned>"
+                name = u.display_name or "-"
+                print(f"{u.user_id}\t{name}\t{u.out_of_band_channel}\t{shard}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_shard_create(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.shards import create_shard
+    from mthydra.controller.state.users_shards import set_user_shard
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"shard-create: config error: {e}", file=sys.stderr)
+        return 2
+    members = [m.strip() for m in args.members.split(",") if m.strip()]
+    if not members:
+        print("shard-create: --members must list at least one user", file=sys.stderr)
+        return 2
+    conn = connect(args.db_path)
+    try:
+        # Refuse if any listed user already belongs to an active shard.
+        for u in members:
+            row = conn.execute(
+                "SELECT u.current_shard_id FROM users u "
+                "LEFT JOIN shards s ON s.shard_id = u.current_shard_id "
+                "WHERE u.user_id=? AND s.retired_at IS NULL",
+                (u,),
+            ).fetchone()
+            if row is not None and row[0]:
+                print(
+                    f"shard-create: user {u!r} already in active shard {row[0]!r}",
+                    file=sys.stderr,
+                )
+                return 2
+        try:
+            create_shard(
+                conn,
+                shard_id=args.shard_id,
+                members=members,
+                target_size=cfg.shard_manager.target_size,
+                at=_now(),
+            )
+        except sqlite3.IntegrityError as e:
+            print(f"shard-create: {e}", file=sys.stderr)
+            return 2
+        for u in members:
+            set_user_shard(conn, u, args.shard_id)
+        print(f"shard-create: {args.shard_id} created with members {members}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_shard_list(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.shards import list_active, list_all
+    conn = connect(args.db_path)
+    try:
+        shards = list_all(conn) if args.include_retired else list_active(conn)
+        if args.json:
+            import json as _json
+            print(_json.dumps(
+                [{
+                    "shard_id": s.shard_id,
+                    "members": _json.loads(s.members_json),
+                    "target_size": s.target_size,
+                    "last_reshuffled_at": s.last_reshuffled_at,
+                    "created_at": s.created_at,
+                    "retired_at": s.retired_at,
+                } for s in shards],
+                sort_keys=True,
+            ))
+        else:
+            import json as _json
+            for s in shards:
+                mem = _json.loads(s.members_json)
+                status = "retired" if s.retired_at else "active"
+                print(f"{s.shard_id}\t{status}\t{len(mem)}\t{s.last_reshuffled_at}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_shard_show(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.shards import get_shard, list_shard_boxes
+    conn = connect(args.db_path)
+    try:
+        try:
+            shard = get_shard(conn, args.shard_id)
+        except LookupError as e:
+            print(f"shard-show: {e}", file=sys.stderr)
+            return 2
+        boxes = list_shard_boxes(conn, args.shard_id, include_terminated=True)
+        import json as _json
+        members = _json.loads(shard.members_json)
+        out = {
+            "shard_id": shard.shard_id,
+            "members": members,
+            "target_size": shard.target_size,
+            "last_reshuffled_at": shard.last_reshuffled_at,
+            "created_at": shard.created_at,
+            "retired_at": shard.retired_at,
+            "boxes": boxes,
+        }
+        if args.json:
+            print(_json.dumps(out, sort_keys=True))
+        else:
+            print(f"shard_id: {shard.shard_id}")
+            print(f"  members: {members}")
+            print(f"  target_size: {shard.target_size}")
+            print(f"  last_reshuffled_at: {shard.last_reshuffled_at}")
+            print(f"  created_at: {shard.created_at}")
+            print(f"  retired_at: {shard.retired_at or '<active>'}")
+            print(f"  boxes: {boxes}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_shard_assign_box(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.shards import assign_box_to_shard
+    conn = connect(args.db_path)
+    try:
+        try:
+            assign_box_to_shard(
+                conn, box_id=args.box_id, shard_id=args.shard_id, at=_now(),
+            )
+        except LookupError as e:
+            print(f"shard-assign-box: {e}", file=sys.stderr)
+            return 2
+        except sqlite3.IntegrityError as e:
+            print(f"shard-assign-box: {e}", file=sys.stderr)
+            return 2
+        print(f"shard-assign-box: box {args.box_id} -> shard {args.shard_id}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_shard_reshuffle(args) -> int:
+    import json as _json
+    import uuid as _uuid
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.shard_manager.picker import pick_new_rosters
+    from mthydra.controller.state import shards as _shards
+    from mthydra.controller.state.db import connect
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"shard-reshuffle: config error: {e}", file=sys.stderr)
+        return 2
+    conn = connect(args.db_path)
+    try:
+        try:
+            old = _shards.get_shard(conn, args.shard_id)
+        except LookupError as e:
+            print(f"shard-reshuffle: {e}", file=sys.stderr)
+            return 2
+        if old.retired_at is not None:
+            print(f"shard-reshuffle: {args.shard_id} already retired",
+                  file=sys.stderr)
+            return 2
+        rosters = pick_new_rosters(
+            current_members=_json.loads(old.members_json),
+            unassigned=[],
+            target_size=cfg.shard_manager.target_size,
+        )
+        if not rosters:
+            print(f"shard-reshuffle: {args.shard_id} is empty (nothing to reshuffle)",
+                  file=sys.stderr)
+            return 2
+        primary = rosters[0]
+        new_sid = str(_uuid.uuid4())
+        _shards.reshuffle(
+            conn, args.shard_id,
+            now=_now(),
+            target_size=cfg.shard_manager.target_size,
+            new_shard_id=new_sid,
+            new_members=primary,
+            reason=args.reason,
+        )
+        for leftover in rosters[1:]:
+            extra_sid = str(_uuid.uuid4())
+            _shards.create_shard(
+                conn, shard_id=extra_sid, members=leftover,
+                target_size=cfg.shard_manager.target_size, at=_now(),
+            )
+            for u in leftover:
+                conn.execute(
+                    "UPDATE users SET current_shard_id=? WHERE user_id=?",
+                    (extra_sid, u),
+                )
+            conn.commit()
+        print(f"shard-reshuffle: {args.shard_id} -> {new_sid} (reason={args.reason!r})")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_shard_stats(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state import shards as _shards
+    from mthydra.controller.state.db import connect
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"shard-stats: config error: {e}", file=sys.stderr)
+        return 2
+    conn = connect(args.db_path)
+    try:
+        h = _shards.health(
+            conn, now=_now(),
+            reshuffle_interval_seconds=cfg.shard_manager.reshuffle_interval_days * 86400,
+        )
+        last_sweep = conn.execute(
+            "SELECT last_proven_at FROM obligation_clocks "
+            "WHERE obligation_id='shard_reshuffle_sweep_ran'"
+        ).fetchone()
+        out = {
+            "total_active": h.total_active,
+            "total_retired": h.total_retired,
+            "oldest_active_age_seconds": h.oldest_active_age_seconds,
+            "overdue_for_reshuffle": h.overdue_for_reshuffle,
+            "unassigned_users": h.unassigned_users,
+            "last_sweep_at": last_sweep[0] if last_sweep else None,
+        }
+        if args.json:
+            import json as _json
+            print(_json.dumps(out, sort_keys=True))
+        else:
+            print(f"active:    {h.total_active}")
+            print(f"retired:   {h.total_retired}")
+            print(f"oldest age (s): {h.oldest_active_age_seconds}")
+            print(f"overdue:   {h.overdue_for_reshuffle}")
+            print(f"unassigned: {h.unassigned_users}")
+            print(f"last sweep: {out['last_sweep_at']}")
         return 0
     finally:
         conn.close()

@@ -1891,3 +1891,219 @@ def test_data_exit_reality_keygen_refuses_if_already_present(tmp_path, age_recip
     err = capsys.readouterr().err
     assert "already has reality_pubkey" in err
 
+
+
+# ===== spec H: shard manager CLI =====
+
+
+def _h_init(tmp_path, age_recipient, db_name="state.sqlite"):
+    db = tmp_path / db_name
+    run([
+        "init", "--db-path", str(db),
+        "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    return db
+
+
+def _h_cfg(tmp_path, **overrides):
+    """Write a minimal controller.toml with [shard_manager] for spec H tests."""
+    p = tmp_path / "controller.toml"
+    tgt = overrides.get("target_size", 2)
+    mx = overrides.get("max_size", 3)
+    interval = overrides.get("reshuffle_interval_days", 14)
+    p.write_text(
+        "[node]\nrole='active'\nhostname='h'\n"
+        "[backup]\nfloor_interval_hours=24\non_change_debounce_seconds=30\n"
+        "endpoint=''\nbucket='b'\naccess_key_id='k'\n"
+        "[backup.retention]\nkeep_daily=30\nkeep_monthly=12\nobject_lock_days=365\n"
+        "[gap_monitor]\npoll_interval_minutes=30\nalarm_threshold_hours=48\n"
+        "recipient_email='op@example.org'\n"
+        "[descriptor]\nrotation_interval_hours=1\nvalidity_window_hours=24\n"
+        "[obligations]\n[obligations.timers_hours]\n"
+        "[cover_pool]\nrotation_ttl_days=14\nreverify_after_days=30\n"
+        "freeze_threshold=2\nreverify_sweep_interval='1h'\n"
+        "rotation_sweep_interval='1h'\nreplenishment_interval_days=90\n"
+        f"[shard_manager]\ntarget_size={tgt}\nmax_size={mx}\n"
+        f"reshuffle_interval_days={interval}\nreshuffle_sweep_interval='1h'\n"
+    )
+    return p
+
+
+def test_cli_user_add_and_user_list(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    rc = run(["user-add", "alice",
+              "--out-of-band-channel", "signal:+1555",
+              "--display-name", "Alice",
+              "--db-path", str(db)])
+    assert rc == 0
+    rc = run(["user-add", "bob",
+              "--out-of-band-channel", "email:bob@example.org",
+              "--db-path", str(db)])
+    assert rc == 0
+    capsys.readouterr()
+    rc = run(["user-list", "--db-path", str(db), "--json"])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    by_id = {u["user_id"]: u for u in out}
+    assert by_id["alice"]["display_name"] == "Alice"
+    assert by_id["alice"]["current_shard_id"] is None
+    assert by_id["bob"]["out_of_band_channel"] == "email:bob@example.org"
+
+
+def test_cli_user_add_refuses_duplicate(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    rc1 = run(["user-add", "alice", "--out-of-band-channel", "signal", "--db-path", str(db)])
+    assert rc1 == 0
+    rc2 = run(["user-add", "alice", "--out-of-band-channel", "signal", "--db-path", str(db)])
+    assert rc2 == 2
+
+
+def test_cli_shard_create_assigns_users(tmp_path, age_recipient):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    for u in ["u1", "u2"]:
+        run(["user-add", u, "--out-of-band-channel", "x", "--db-path", str(db)])
+    rc = run(["shard-create", "s1", "--members", "u1,u2",
+              "--db-path", str(db), "--config", str(cfg)])
+    assert rc == 0
+    # Users now reference s1.
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    rows = conn.execute(
+        "SELECT user_id, current_shard_id FROM users ORDER BY user_id"
+    ).fetchall()
+    assert rows == [("u1", "s1"), ("u2", "s1")]
+
+
+def test_cli_shard_create_refuses_already_in_active_shard(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    for u in ["u1", "u2"]:
+        run(["user-add", u, "--out-of-band-channel", "x", "--db-path", str(db)])
+    run(["shard-create", "s1", "--members", "u1", "--db-path", str(db), "--config", str(cfg)])
+    rc = run(["shard-create", "s2", "--members", "u1,u2",
+              "--db-path", str(db), "--config", str(cfg)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "already in active shard" in err
+
+
+def test_cli_shard_list_json(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    run(["user-add", "u1", "--out-of-band-channel", "x", "--db-path", str(db)])
+    run(["shard-create", "s1", "--members", "u1",
+         "--db-path", str(db), "--config", str(cfg)])
+    capsys.readouterr()
+    rc = run(["shard-list", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert len(out) == 1
+    assert out[0]["shard_id"] == "s1"
+    assert out[0]["members"] == ["u1"]
+    assert out[0]["target_size"] == 2
+
+
+def test_cli_shard_show(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    run(["user-add", "u1", "--out-of-band-channel", "x", "--db-path", str(db)])
+    run(["shard-create", "s1", "--members", "u1",
+         "--db-path", str(db), "--config", str(cfg)])
+    capsys.readouterr()
+    rc = run(["shard-show", "s1", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert out["shard_id"] == "s1"
+    assert out["members"] == ["u1"]
+    assert out["boxes"] == []
+
+
+def test_cli_shard_show_refuses_missing(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    rc = run(["shard-show", "nope", "--db-path", str(db)])
+    assert rc == 2
+
+
+def test_cli_shard_assign_box_provisioning_ok(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import insert_box
+    run(["user-add", "u1", "--out-of-band-channel", "x", "--db-path", str(db)])
+    run(["shard-create", "s1", "--members", "u1",
+         "--db-path", str(db), "--config", str(cfg)])
+    conn = connect(db)
+    insert_box(conn, "b1", "p", "r", "10.0.0.1", "sni-b1.example",
+               "img-v1", "2026-05-24T00:00:00Z")
+    conn.close()
+    rc = run(["shard-assign-box", "b1", "--shard", "s1", "--db-path", str(db)])
+    assert rc == 0
+    conn = connect(db)
+    row = conn.execute("SELECT shard_id FROM ru_boxes WHERE box_id='b1'").fetchone()
+    assert row[0] == "s1"
+
+
+def test_cli_shard_assign_box_refuses_live(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import insert_box, mark_live
+    run(["user-add", "u1", "--out-of-band-channel", "x", "--db-path", str(db)])
+    run(["shard-create", "s1", "--members", "u1",
+         "--db-path", str(db), "--config", str(cfg)])
+    # Create s2 cleanly via SQL (a real shard-create would refuse since u1 is in s1).
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES ('s2', '[]', 2, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z')"
+    )
+    insert_box(conn, "b1", "p", "r", "10.0.0.1", "sni-b1.example",
+               "img-v1", "2026-05-24T00:00:00Z")
+    conn.execute("UPDATE ru_boxes SET shard_id='s1' WHERE box_id='b1'")
+    mark_live(conn, "b1", public_ip="10.0.0.1", at="2026-05-24T00:01:00Z")
+    conn.commit()
+    conn.close()
+    rc = run(["shard-assign-box", "b1", "--shard", "s2", "--db-path", str(db)])
+    assert rc == 2
+
+
+def test_cli_shard_reshuffle_creates_new_shard(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    for u in ["u1", "u2"]:
+        run(["user-add", u, "--out-of-band-channel", "x", "--db-path", str(db)])
+    run(["shard-create", "s1", "--members", "u1,u2",
+         "--db-path", str(db), "--config", str(cfg)])
+    rc = run(["shard-reshuffle", "s1", "--db-path", str(db), "--config", str(cfg)])
+    assert rc == 0
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    # s1 retired
+    row = conn.execute("SELECT retired_at FROM shards WHERE shard_id='s1'").fetchone()
+    assert row[0] is not None
+    # exactly one new active shard exists
+    n_active = conn.execute(
+        "SELECT COUNT(*) FROM shards WHERE retired_at IS NULL"
+    ).fetchone()[0]
+    assert n_active == 1
+
+
+def test_cli_shard_stats_json(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    for u in ["u1", "u2", "u3"]:
+        run(["user-add", u, "--out-of-band-channel", "x", "--db-path", str(db)])
+    run(["shard-create", "s1", "--members", "u1",
+         "--db-path", str(db), "--config", str(cfg)])
+    capsys.readouterr()
+    rc = run(["shard-stats", "--json", "--db-path", str(db), "--config", str(cfg)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert out["total_active"] == 1
+    assert sorted(out["unassigned_users"]) == ["u2", "u3"]
