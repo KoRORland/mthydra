@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -42,6 +42,40 @@ _TRIGGER_RU_BOXES_TERMINATED_KEEPS_SHARD = """
      AND OLD.shard_id IS NOT NULL
     BEGIN
       SELECT RAISE(ABORT, 'shard-manager: terminating a box does not clear shard_id (history preservation)');
+    END
+    """
+
+_TRIGGER_PROBE_VANTAGES_NO_RELABEL_BURNED = """
+    CREATE TRIGGER IF NOT EXISTS probe_vantages_no_relabel_burned
+    BEFORE INSERT ON probe_vantages
+    WHEN EXISTS (SELECT 1 FROM probe_vantages WHERE label = NEW.label AND state='burned')
+    BEGIN
+      SELECT RAISE(ABORT, 'probe-vantage: label is in burned state; never reuse');
+    END
+    """
+
+_TRIGGER_PROBE_VANTAGES_BURNED_NO_REVERT = """
+    CREATE TRIGGER IF NOT EXISTS probe_vantages_burned_no_revert
+    BEFORE UPDATE OF state ON probe_vantages
+    WHEN OLD.state='burned' AND NEW.state != 'burned'
+    BEGIN
+      SELECT RAISE(ABORT, 'probe-vantage: burned state is monotonic');
+    END
+    """
+
+_TRIGGER_PROBE_RESULTS_NO_UPDATE = """
+    CREATE TRIGGER IF NOT EXISTS probe_results_no_update
+    BEFORE UPDATE ON probe_results
+    BEGIN
+      SELECT RAISE(ABORT, 'probe-results: append-only');
+    END
+    """
+
+_TRIGGER_PROBE_RESULTS_NO_DELETE = """
+    CREATE TRIGGER IF NOT EXISTS probe_results_no_delete
+    BEFORE DELETE ON probe_results
+    BEGIN
+      SELECT RAISE(ABORT, 'probe-results: append-only');
     END
     """
 
@@ -277,6 +311,66 @@ _STATEMENTS: list[str] = [
     # --- spec H additions: shard disjointness triggers ---
     _TRIGGER_RU_BOXES_NO_CROSS_SHARD_REASSIGN,
     _TRIGGER_RU_BOXES_TERMINATED_KEEPS_SHARD,
+    # --- spec I additions: probe vantage harness ---
+    """
+    CREATE TABLE IF NOT EXISTS probe_vantages (
+      vantage_id   TEXT PRIMARY KEY,
+      label        TEXT UNIQUE NOT NULL,
+      source_kind  TEXT NOT NULL,
+      region_hint  TEXT,
+      state        TEXT NOT NULL CHECK (state IN ('candidate','active','retired','burned')),
+      added_at     TEXT NOT NULL,
+      attested_at  TEXT,
+      last_used_at TEXT,
+      retired_at   TEXT,
+      burned_at    TEXT,
+      burn_reason  TEXT,
+      notes        TEXT
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_probe_vantages_state ON probe_vantages(state)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS probe_results (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      box_id        TEXT NOT NULL,
+      vantage_id    TEXT NOT NULL,
+      cycle_at      TEXT NOT NULL,
+      check_type    TEXT NOT NULL CHECK (check_type IN (
+                      'tls_fall_through','cover_domain_consistency','surface_scan',
+                      'valid_path_liveness','latency_loss','behavioural_identity'
+                    )),
+      status        TEXT NOT NULL CHECK (status IN ('pass','soft_fail','hard_fail')),
+      evidence_json TEXT,
+      image_version TEXT NOT NULL,
+      recorded_at   TEXT NOT NULL,
+      FOREIGN KEY (box_id) REFERENCES ru_boxes(box_id),
+      FOREIGN KEY (vantage_id) REFERENCES probe_vantages(vantage_id),
+      FOREIGN KEY (image_version) REFERENCES ru_images(image_version)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_probe_results_box_cycle
+      ON probe_results(box_id, cycle_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_probe_results_vantage
+      ON probe_results(vantage_id, cycle_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS image_profiles (
+      image_version TEXT PRIMARY KEY REFERENCES ru_images(image_version),
+      profile_json  TEXT NOT NULL,
+      recorded_at   TEXT NOT NULL,
+      recorded_by   TEXT NOT NULL,
+      notes         TEXT
+    )
+    """,
+    _TRIGGER_PROBE_VANTAGES_NO_RELABEL_BURNED,
+    _TRIGGER_PROBE_VANTAGES_BURNED_NO_REVERT,
+    _TRIGGER_PROBE_RESULTS_NO_UPDATE,
+    _TRIGGER_PROBE_RESULTS_NO_DELETE,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -440,6 +534,67 @@ def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
+    """Idempotent v7 → v8 migration: add probe_vantages, probe_results,
+    image_profiles tables + four triggers + two indexes."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS probe_vantages (
+          vantage_id   TEXT PRIMARY KEY,
+          label        TEXT UNIQUE NOT NULL,
+          source_kind  TEXT NOT NULL,
+          region_hint  TEXT,
+          state        TEXT NOT NULL CHECK (state IN ('candidate','active','retired','burned')),
+          added_at     TEXT NOT NULL,
+          attested_at  TEXT,
+          last_used_at TEXT,
+          retired_at   TEXT,
+          burned_at    TEXT,
+          burn_reason  TEXT,
+          notes        TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_probe_vantages_state ON probe_vantages(state);
+        CREATE TABLE IF NOT EXISTS probe_results (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          box_id        TEXT NOT NULL,
+          vantage_id    TEXT NOT NULL,
+          cycle_at      TEXT NOT NULL,
+          check_type    TEXT NOT NULL CHECK (check_type IN (
+                          'tls_fall_through','cover_domain_consistency','surface_scan',
+                          'valid_path_liveness','latency_loss','behavioural_identity'
+                        )),
+          status        TEXT NOT NULL CHECK (status IN ('pass','soft_fail','hard_fail')),
+          evidence_json TEXT,
+          image_version TEXT NOT NULL,
+          recorded_at   TEXT NOT NULL,
+          FOREIGN KEY (box_id) REFERENCES ru_boxes(box_id),
+          FOREIGN KEY (vantage_id) REFERENCES probe_vantages(vantage_id),
+          FOREIGN KEY (image_version) REFERENCES ru_images(image_version)
+        );
+        CREATE INDEX IF NOT EXISTS ix_probe_results_box_cycle
+          ON probe_results(box_id, cycle_at DESC);
+        CREATE INDEX IF NOT EXISTS ix_probe_results_vantage
+          ON probe_results(vantage_id, cycle_at DESC);
+        CREATE TABLE IF NOT EXISTS image_profiles (
+          image_version TEXT PRIMARY KEY REFERENCES ru_images(image_version),
+          profile_json  TEXT NOT NULL,
+          recorded_at   TEXT NOT NULL,
+          recorded_by   TEXT NOT NULL,
+          notes         TEXT
+        );
+        """
+    )
+    conn.execute(_TRIGGER_PROBE_VANTAGES_NO_RELABEL_BURNED)
+    conn.execute(_TRIGGER_PROBE_VANTAGES_BURNED_NO_REVERT)
+    conn.execute(_TRIGGER_PROBE_RESULTS_NO_UPDATE)
+    conn.execute(_TRIGGER_PROBE_RESULTS_NO_DELETE)
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (8, _now()),
+    )
+    conn.commit()
+
+
 def migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     """Idempotent v6 → v7 migration: add shards.target_size + ru_boxes disjointness triggers."""
     cols = [r[1] for r in conn.execute("PRAGMA table_info(shards)").fetchall()]
@@ -489,4 +644,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v5_to_v6(conn)
         if current < 7:
             migrate_v6_to_v7(conn)
+        if current < 8:
+            migrate_v7_to_v8(conn)
     conn.commit()

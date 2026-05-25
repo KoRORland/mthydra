@@ -326,16 +326,17 @@ def test_v5_to_v6_migration_from_v5_db(tmp_path):
 
 # --- spec H schema v7 tests ---
 
-def test_schema_version_is_7(tmp_path):
+def test_schema_version_at_least_7(tmp_path):
+    """Superseded by test_schema_version_is_8. Kept to preserve numbering."""
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
 
-    assert SCHEMA_VERSION == 7
+    assert SCHEMA_VERSION >= 7
     db = tmp_path / "state.sqlite"
     conn = connect(db)
     apply_schema(conn)
     row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 7
+    assert row[0] >= 7
 
 
 def test_shards_target_size_column_present(tmp_path):
@@ -469,3 +470,143 @@ def test_v6_to_v7_migration_idempotent(tmp_path):
     migrate_v6_to_v7(conn)
     v2 = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
     assert v2 == 7
+
+
+# --- spec I schema v8 tests ---
+
+def test_schema_version_is_8(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+
+    assert SCHEMA_VERSION == 8
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 8
+
+
+def test_probe_vantages_table_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(probe_vantages)").fetchall()}
+    assert {"vantage_id", "label", "source_kind", "state",
+            "added_at", "attested_at", "last_used_at",
+            "retired_at", "burned_at", "burn_reason"} <= cols
+
+
+def test_probe_results_table_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(probe_results)").fetchall()}
+    assert {"id", "box_id", "vantage_id", "cycle_at",
+            "check_type", "status", "evidence_json",
+            "image_version", "recorded_at"} <= cols
+
+
+def test_image_profiles_table_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(image_profiles)").fetchall()}
+    assert {"image_version", "profile_json", "recorded_at", "recorded_by"} <= cols
+
+
+def test_v8_probe_results_append_only(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    # Need a parent box + image + vantage to insert a row.
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', ?)",
+        ("2026-05-25T00:00:00Z",),
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni1.example', 'live', 'v1', ?)",
+        ("2026-05-25T00:00:00Z",),
+    )
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('vk', 'kz1', 'cloud-cis', 'active', ?)",
+        ("2026-05-25T00:00:00Z",),
+    )
+    conn.execute(
+        "INSERT INTO probe_results (box_id, vantage_id, cycle_at, check_type, status, "
+        "image_version, recorded_at) VALUES ('b1', 'vk', ?, 'tls_fall_through', 'pass', 'v1', ?)",
+        ("2026-05-25T00:00:00Z", "2026-05-25T00:00:00Z"),
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE probe_results SET status='hard_fail' WHERE id=1")
+        conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM probe_results WHERE id=1")
+        conn.commit()
+
+
+def test_v8_probe_vantages_no_relabel_burned(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('v1', 'kz1', 'cloud-cis', 'burned', ?)",
+        ("2026-05-25T00:00:00Z",),
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+            "VALUES ('v2', 'kz1', 'cloud-cis', 'candidate', ?)",
+            ("2026-05-25T00:00:00Z",),
+        )
+        conn.commit()
+
+
+def test_v8_probe_vantages_burned_no_revert(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('v1', 'kz1', 'cloud-cis', 'burned', ?)",
+        ("2026-05-25T00:00:00Z",),
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE probe_vantages SET state='active' WHERE vantage_id='v1'")
+        conn.commit()
+
+
+def test_v7_to_v8_migration_idempotent(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v7_to_v8
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute("UPDATE schema_version SET version=7 WHERE rowid=1")
+    conn.commit()
+    migrate_v7_to_v8(conn)
+    v = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
+    assert v == 8
+    # Re-run is a no-op.
+    migrate_v7_to_v8(conn)
+    v2 = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
+    assert v2 == 8
