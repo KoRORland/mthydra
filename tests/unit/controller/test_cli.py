@@ -325,9 +325,9 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
     from mthydra.controller.cli import _build_destination
     from mthydra.controller.config import (
         BackupConfig, Config, CoverPoolConfig, DescriptorConfig,
-        DistributionConfig, GapMonitorConfig, ImageConfig, NodeConfig,
-        ObligationsConfig, ObservabilityConfig, ProbeConfig, RetentionConfig,
-        ShardManagerConfig, StandbyConfig,
+        DistributionConfig, GapMonitorConfig, ImageCanaryConfig, ImageConfig,
+        NodeConfig, ObligationsConfig, ObservabilityConfig, ProbeConfig,
+        RetentionConfig, ShardManagerConfig, StandbyConfig,
     )
 
     cfg = Config(
@@ -365,6 +365,7 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
             upstream_check_interval_seconds=168 * 3600,
             github_api_url="https://api.github.com",
             build_tmp_dir="/var/lib/mthydra/tmp",
+            canary=ImageCanaryConfig(min_boxes=1, min_cycles_per_box=4),
         ),
         shard_manager=ShardManagerConfig(
             target_size=2,

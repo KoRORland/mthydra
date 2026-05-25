@@ -70,12 +70,20 @@ class StandbyConfig:
 
 
 @dataclass(frozen=True)
+class ImageCanaryConfig:
+    """Spec D2 — canary promotion gate thresholds."""
+    min_boxes: int
+    min_cycles_per_box: int
+
+
+@dataclass(frozen=True)
 class ImageConfig:
     upstream_repo: str
     upstream_release_asset: str
     upstream_check_interval_seconds: int
     github_api_url: str
     build_tmp_dir: str
+    canary: ImageCanaryConfig
 
 
 @dataclass(frozen=True)
@@ -427,6 +435,16 @@ def _load_probe(data: dict) -> ProbeConfig:
 
 def _load_image(data: dict) -> ImageConfig:
     sec = data.get("image", {})
+    canary_sec = sec.get("canary", {})
+    canary = ImageCanaryConfig(
+        min_boxes=_require_positive(
+            "image.canary.min_boxes", canary_sec.get("min_boxes", 1)
+        ),
+        min_cycles_per_box=_require_positive(
+            "image.canary.min_cycles_per_box",
+            canary_sec.get("min_cycles_per_box", 4),
+        ),
+    )
     return ImageConfig(
         upstream_repo=str(sec.get("upstream_repo", "9seconds/mtg")),
         upstream_release_asset=str(sec.get("upstream_release_asset", "mtg-linux-amd64")),
@@ -436,6 +454,7 @@ def _load_image(data: dict) -> ImageConfig:
         ),
         github_api_url=str(sec.get("github_api_url", "https://api.github.com")),
         build_tmp_dir=str(sec.get("build_tmp_dir", "/var/lib/mthydra/tmp")),
+        canary=canary,
     )
 
 

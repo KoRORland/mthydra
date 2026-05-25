@@ -531,6 +531,33 @@ def test_data_exit_cover_sni_resolves_per_node():
     assert c.cover_sni_for("eu2") == "d.example"
 
 
+def test_load_image_canary_defaults(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(_MIN_BASE_TOML)
+    cfg = load_config(p)
+    assert cfg.image.canary.min_boxes == 1
+    assert cfg.image.canary.min_cycles_per_box == 4
+
+
+def test_load_image_canary_overrides(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[image.canary]
+min_boxes = 3
+min_cycles_per_box = 8
+"""
+    )
+    cfg = load_config(p)
+    assert cfg.image.canary.min_boxes == 3
+    assert cfg.image.canary.min_cycles_per_box == 8
+
+
 def test_load_image_config_defaults(tmp_path):
     """Missing [image] section: load with safe defaults."""
     from mthydra.controller.config import load_config

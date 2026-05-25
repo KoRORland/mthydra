@@ -60,6 +60,13 @@ upstream_check_interval = "168h"
 github_api_url          = "https://api.github.com"
 build_tmp_dir           = "/var/lib/mthydra/tmp"
 
+[image.canary]
+# Spec D2 — promotion gate thresholds. min_boxes is the floor of the
+# canary cohort; min_cycles_per_box is the per-canary probe-cycle floor.
+# min_distinct_vantages comes from [probe] — DO NOT duplicate here.
+min_boxes          = 1
+min_cycles_per_box = 4
+
 [shard_manager]
 # Spec H — per-user in-point isolation (T6). target_size is the size the
 # reshuffle picker aims for; max_size is the hard cap assign_user_to_shard

@@ -205,6 +205,21 @@ def test_dist_user_heartbeat_breach_classified_as_crit(conn):
     assert snap.anti_obligations[0].severity == "crit"
 
 
+def test_image_rollback_pending_classified_as_crit(conn):
+    """Spec D2 amendment: image_rollback_pending::* surfaces as crit."""
+    from mthydra.controller.state.obligations import set_obligation
+    set_obligation(conn,
+                   obligation_id="image_rollback_pending::b1",
+                   last_proven_at=NOW, proven_by="x",
+                   next_due_at=NOW, details=None)
+    snap = collect_snapshot(conn, now=NOW)
+    assert len(snap.anti_obligations) == 1
+    a = snap.anti_obligations[0]
+    assert a.kind == "image_rollback_pending"
+    assert a.target == "b1"
+    assert a.severity == "crit"
+
+
 def test_probe_coverage_pending_graduates_to_crit(conn):
     # Insert a probe_coverage_pending whose last_proven_at is > 6h ago.
     set_obligation(conn,

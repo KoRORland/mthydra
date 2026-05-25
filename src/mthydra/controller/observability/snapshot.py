@@ -35,6 +35,8 @@ _ANTI_PREFIXES = frozenset({
     # Spec K — distribution channel anti-obligations (J snapshot amendment).
     "dist_user_unregistered",
     "dist_user_heartbeat_breach",
+    # Spec D2 — rollback-pending boxes (J snapshot amendment).
+    "image_rollback_pending",
 })
 
 

@@ -29,6 +29,11 @@ def test_anti_dist_user_kinds():
     assert severity_for_anti("dist_user_heartbeat_breach") == "crit"
 
 
+def test_anti_image_rollback_pending_is_crit():
+    """Spec D2 amendment to spec J's severity table."""
+    assert severity_for_anti("image_rollback_pending") == "crit"
+
+
 def test_anti_probe_coverage_graduated():
     assert severity_for_anti("probe_coverage_pending", age_seconds=0) == "warn"
     assert severity_for_anti("probe_coverage_pending", age_seconds=3000) == "warn"

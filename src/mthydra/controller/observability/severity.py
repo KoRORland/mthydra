@@ -20,6 +20,8 @@ _FIXED: dict[str, str] = {
     # Spec K — distribution channel anti-obligations (J severity table amendment).
     "dist_user_unregistered":          "warn",
     "dist_user_heartbeat_breach":      "crit",
+    # Spec D2 — rollback-pending boxes still running rolled-back code.
+    "image_rollback_pending":          "crit",
 }
 
 # Age-graduated thresholds (seconds) for probe coverage gaps.
