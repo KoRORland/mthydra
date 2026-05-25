@@ -694,16 +694,17 @@ def test_v8_to_v9_migration_idempotent(tmp_path):
 
 # --- spec K schema v10 tests ---
 
-def test_schema_version_is_10(tmp_path):
+def test_schema_version_at_least_10(tmp_path):
+    """Superseded by test_schema_version_is_11. Kept to preserve numbering."""
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
 
-    assert SCHEMA_VERSION == 10
+    assert SCHEMA_VERSION >= 10
     db = tmp_path / "state.sqlite"
     conn = connect(db)
     apply_schema(conn)
     row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 10
+    assert row[0] >= 10
 
 
 def test_user_channels_table_present(tmp_path):
@@ -788,3 +789,121 @@ def test_v9_to_v10_migration_idempotent(tmp_path):
     assert conn.execute(
         "SELECT version FROM schema_version WHERE rowid=1"
     ).fetchone()[0] == 10
+
+
+# --- spec D2 schema v11 tests ---
+
+def test_schema_version_is_11(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+
+    assert SCHEMA_VERSION == 11
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 11
+
+
+def test_v11_ru_boxes_is_canary_column_default_0(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(ru_boxes)").fetchall()]
+    assert "is_canary" in cols
+    # Insert a row without specifying is_canary — should default to 0.
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, "
+        "image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'live', 'v1', '2026-05-25T00:00:00Z')"
+    )
+    conn.commit()
+    row = conn.execute("SELECT is_canary FROM ru_boxes WHERE box_id='b1'").fetchone()
+    assert row[0] == 0
+
+
+def test_v11_canary_index_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    idxs = {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='ru_boxes'"
+        ).fetchall()
+    }
+    assert "ix_ru_boxes_canary" in idxs
+
+
+def test_v11_image_profiles_no_update_for_retired_trigger(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    # Seed a retired image + its profile.
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, "
+        "built_at, retired_at) "
+        "VALUES ('v_old', 'r', 'r', 'u', 'm', 'sha', 1, 'retired', ?, ?)",
+        ("2026-05-20T00:00:00Z", "2026-05-25T00:00:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO image_profiles (image_version, profile_json, recorded_at, "
+        "recorded_by) VALUES ('v_old', '{}', ?, 'op')",
+        ("2026-05-20T00:00:00Z",),
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "UPDATE image_profiles SET profile_json='changed' "
+            "WHERE image_version='v_old'"
+        )
+        conn.commit()
+
+
+def test_v11_image_profiles_update_allowed_for_candidate(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v_new', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', ?)",
+        ("2026-05-25T00:00:00Z",),
+    )
+    conn.execute(
+        "INSERT INTO image_profiles (image_version, profile_json, recorded_at, "
+        "recorded_by) VALUES ('v_new', '{}', ?, 'op')",
+        ("2026-05-25T00:00:00Z",),
+    )
+    conn.commit()
+    # Candidate -> update allowed.
+    conn.execute(
+        "UPDATE image_profiles SET profile_json='{\"updated\":1}' "
+        "WHERE image_version='v_new'"
+    )
+    conn.commit()
+
+
+def test_v10_to_v11_migration_idempotent(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v10_to_v11
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute("UPDATE schema_version SET version=10 WHERE rowid=1")
+    conn.commit()
+    migrate_v10_to_v11(conn)
+    v = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
+    assert v == 11
+    migrate_v10_to_v11(conn)
+    assert conn.execute(
+        "SELECT version FROM schema_version WHERE rowid=1"
+    ).fetchone()[0] == 11

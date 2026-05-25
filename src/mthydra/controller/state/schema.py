@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -111,6 +111,18 @@ _TRIGGER_DISTRIBUTION_LOG_NO_DELETE = """
     END
     """
 
+_TRIGGER_IMAGE_PROFILES_NO_UPDATE_FOR_RETIRED = """
+    CREATE TRIGGER IF NOT EXISTS image_profiles_no_update_for_retired
+    BEFORE UPDATE ON image_profiles
+    WHEN EXISTS (
+      SELECT 1 FROM ru_images
+      WHERE image_version = NEW.image_version AND state = 'retired'
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'image-profiles: row for retired image is forensic-immutable');
+    END
+    """
+
 _STATEMENTS: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -193,6 +205,7 @@ _STATEMENTS: list[str] = [
       terminated_at      TEXT,
       termination_reason TEXT,
       reality_uuid       TEXT,
+      is_canary          INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (shard_id) REFERENCES shards(shard_id)
     )
     """,
@@ -461,6 +474,12 @@ _STATEMENTS: list[str] = [
     """,
     _TRIGGER_DISTRIBUTION_LOG_NO_UPDATE,
     _TRIGGER_DISTRIBUTION_LOG_NO_DELETE,
+    # --- spec D2 additions: image canary + retired profile immutability ---
+    _TRIGGER_IMAGE_PROFILES_NO_UPDATE_FOR_RETIRED,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ru_boxes_canary
+      ON ru_boxes(image_version) WHERE is_canary = 1
+    """,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -620,6 +639,26 @@ def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
         (6, _now()),
+    )
+    conn.commit()
+
+
+def migrate_v10_to_v11(conn: sqlite3.Connection) -> None:
+    """Idempotent v10 → v11 migration: ru_boxes.is_canary + partial index +
+    image_profiles retired-immutability trigger."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(ru_boxes)").fetchall()]
+    if "is_canary" not in cols:
+        conn.execute(
+            "ALTER TABLE ru_boxes ADD COLUMN is_canary INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_ru_boxes_canary "
+        "ON ru_boxes(image_version) WHERE is_canary = 1"
+    )
+    conn.execute(_TRIGGER_IMAGE_PROFILES_NO_UPDATE_FOR_RETIRED)
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (11, _now()),
     )
     conn.commit()
 
@@ -809,4 +848,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v8_to_v9(conn)
         if current < 10:
             migrate_v9_to_v10(conn)
+        if current < 11:
+            migrate_v10_to_v11(conn)
     conn.commit()
