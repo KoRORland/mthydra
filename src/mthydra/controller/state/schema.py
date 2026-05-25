@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -92,6 +92,22 @@ _TRIGGER_ALERT_LOG_NO_DELETE = """
     BEFORE DELETE ON alert_log
     BEGIN
       SELECT RAISE(ABORT, 'alert-log: append-only');
+    END
+    """
+
+_TRIGGER_DISTRIBUTION_LOG_NO_UPDATE = """
+    CREATE TRIGGER IF NOT EXISTS distribution_log_no_update
+    BEFORE UPDATE ON distribution_log
+    BEGIN
+      SELECT RAISE(ABORT, 'distribution-log: append-only');
+    END
+    """
+
+_TRIGGER_DISTRIBUTION_LOG_NO_DELETE = """
+    CREATE TRIGGER IF NOT EXISTS distribution_log_no_delete
+    BEFORE DELETE ON distribution_log
+    BEGIN
+      SELECT RAISE(ABORT, 'distribution-log: append-only');
     END
     """
 
@@ -412,6 +428,39 @@ _STATEMENTS: list[str] = [
     """,
     _TRIGGER_ALERT_LOG_NO_UPDATE,
     _TRIGGER_ALERT_LOG_NO_DELETE,
+    # --- spec K additions: user distribution channel ---
+    """
+    CREATE TABLE IF NOT EXISTS user_channels (
+      user_id          TEXT PRIMARY KEY REFERENCES users(user_id),
+      telegram_chat_id TEXT,
+      email_addr       TEXT,
+      registered_at    TEXT NOT NULL,
+      updated_at       TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS distribution_log (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id      TEXT NOT NULL REFERENCES users(user_id),
+      channel      TEXT NOT NULL CHECK (channel IN ('telegram','email','dryrun')),
+      kind         TEXT NOT NULL,
+      attempted_at TEXT NOT NULL,
+      delivered_at TEXT,
+      subset_hash  TEXT,
+      payload_json TEXT NOT NULL,
+      error        TEXT
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_distribution_log_user_channel
+      ON distribution_log(user_id, channel, attempted_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_distribution_log_attempted
+      ON distribution_log(attempted_at DESC)
+    """,
+    _TRIGGER_DISTRIBUTION_LOG_NO_UPDATE,
+    _TRIGGER_DISTRIBUTION_LOG_NO_DELETE,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -575,6 +624,44 @@ def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
+    """Idempotent v9 → v10 migration: add user_channels + distribution_log
+    + two indexes + two triggers."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS user_channels (
+          user_id          TEXT PRIMARY KEY REFERENCES users(user_id),
+          telegram_chat_id TEXT,
+          email_addr       TEXT,
+          registered_at    TEXT NOT NULL,
+          updated_at       TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS distribution_log (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id      TEXT NOT NULL REFERENCES users(user_id),
+          channel      TEXT NOT NULL CHECK (channel IN ('telegram','email','dryrun')),
+          kind         TEXT NOT NULL,
+          attempted_at TEXT NOT NULL,
+          delivered_at TEXT,
+          subset_hash  TEXT,
+          payload_json TEXT NOT NULL,
+          error        TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_distribution_log_user_channel
+          ON distribution_log(user_id, channel, attempted_at DESC);
+        CREATE INDEX IF NOT EXISTS ix_distribution_log_attempted
+          ON distribution_log(attempted_at DESC);
+        """
+    )
+    conn.execute(_TRIGGER_DISTRIBUTION_LOG_NO_UPDATE)
+    conn.execute(_TRIGGER_DISTRIBUTION_LOG_NO_DELETE)
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (10, _now()),
+    )
+    conn.commit()
+
+
 def migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
     """Idempotent v8 → v9 migration: add alert_log + two indexes + two triggers."""
     conn.executescript(
@@ -720,4 +807,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v7_to_v8(conn)
         if current < 9:
             migrate_v8_to_v9(conn)
+        if current < 10:
+            migrate_v9_to_v10(conn)
     conn.commit()

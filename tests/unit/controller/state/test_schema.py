@@ -615,16 +615,17 @@ def test_v7_to_v8_migration_idempotent(tmp_path):
 
 # --- spec J schema v9 tests ---
 
-def test_schema_version_is_9(tmp_path):
+def test_schema_version_at_least_9(tmp_path):
+    """Superseded by test_schema_version_is_10. Kept to preserve numbering."""
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
 
-    assert SCHEMA_VERSION == 9
+    assert SCHEMA_VERSION >= 9
     db = tmp_path / "state.sqlite"
     conn = connect(db)
     apply_schema(conn)
     row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 9
+    assert row[0] >= 9
 
 
 def test_alert_log_table_present(tmp_path):
@@ -689,3 +690,101 @@ def test_v8_to_v9_migration_idempotent(tmp_path):
     assert conn.execute(
         "SELECT version FROM schema_version WHERE rowid=1"
     ).fetchone()[0] == 9
+
+
+# --- spec K schema v10 tests ---
+
+def test_schema_version_is_10(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+
+    assert SCHEMA_VERSION == 10
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 10
+
+
+def test_user_channels_table_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(user_channels)").fetchall()}
+    assert {"user_id", "telegram_chat_id", "email_addr",
+            "registered_at", "updated_at"} <= cols
+
+
+def test_distribution_log_table_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(distribution_log)").fetchall()}
+    assert {"id", "user_id", "channel", "kind", "attempted_at",
+            "delivered_at", "subset_hash", "payload_json", "error"} <= cols
+
+
+def test_v10_distribution_log_append_only(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    # Need a parent user for the FK.
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, added_at) "
+        "VALUES ('u1', NULL, 'email', '2026-05-25T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO distribution_log (user_id, channel, kind, attempted_at, "
+        "delivered_at, subset_hash, payload_json) "
+        "VALUES ('u1', 'telegram', 'subset_delta', ?, ?, 'h1', '[]')",
+        ("2026-05-25T00:00:00Z", "2026-05-25T00:00:01Z"),
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE distribution_log SET payload_json='changed' WHERE id=1")
+        conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM distribution_log")
+        conn.commit()
+
+
+def test_v10_distribution_log_channel_check(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, added_at) "
+        "VALUES ('u1', NULL, 'email', '2026-05-25T00:00:00Z')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO distribution_log (user_id, channel, kind, attempted_at, "
+            "payload_json) VALUES ('u1', 'bogus', 'subset_delta', ?, '{}')",
+            ("2026-05-25T00:00:00Z",),
+        )
+        conn.commit()
+
+
+def test_v9_to_v10_migration_idempotent(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v9_to_v10
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute("UPDATE schema_version SET version=9 WHERE rowid=1")
+    conn.commit()
+    migrate_v9_to_v10(conn)
+    v = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
+    assert v == 10
+    migrate_v9_to_v10(conn)
+    assert conn.execute(
+        "SELECT version FROM schema_version WHERE rowid=1"
+    ).fetchone()[0] == 10
