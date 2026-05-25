@@ -1157,6 +1157,8 @@ def _cmd_serve(args) -> int:
     )
     from mthydra.controller.standby.heartbeat import StandbyHeartbeatPoller
     from mthydra.controller.shard_manager.wheel import ShardReshuffleWheel
+    from mthydra.controller.probe.audit_wheel import ProbeAuditWheel
+    from mthydra.controller.probe.evaluator import ProbeConfigView
 
     set_audit_mirror("/var/lib/mthydra/logs/audit.log")
 
@@ -1201,6 +1203,18 @@ def _cmd_serve(args) -> int:
         sweep_interval_seconds=cfg.shard_manager.reshuffle_sweep_interval_seconds,
         mode=mode,
     )
+    probe_wheel = ProbeAuditWheel(
+        db_path=args.db_path,
+        cfg=ProbeConfigView(
+            soft_fail_window_M=cfg.probe.soft_fail_window_M,
+            soft_fail_threshold_N=cfg.probe.soft_fail_threshold_N,
+            min_distinct_vantages=cfg.probe.min_distinct_vantages,
+        ),
+        coverage_window_seconds=cfg.probe.coverage_window_seconds,
+        probe_vantage_ttl_days=cfg.probe.probe_vantage_ttl_days,
+        sweep_interval_seconds=cfg.probe.probe_audit_sweep_interval_seconds,
+        mode=mode,
+    )
 
     if mode != "offline":
         orch.arm()
@@ -1210,7 +1224,8 @@ def _cmd_serve(args) -> int:
         poller.arm()
         tracker.arm()
         shard_wheel.arm()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel armed", flush=True)
+        probe_wheel.arm()
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel + probe audit wheel armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -1226,6 +1241,7 @@ def _cmd_serve(args) -> int:
         poller.disarm()
         tracker.disarm()
         shard_wheel.disarm()
+        probe_wheel.disarm()
         print("serve: stopped", flush=True)
     return 0
 
