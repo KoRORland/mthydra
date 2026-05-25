@@ -300,11 +300,12 @@ def build_parser() -> argparse.ArgumentParser:
     il.add_argument("--json", action="store_true")
 
     ip = sub.add_parser("image-promote",
-                         help="atomic candidate -> promoted; prior promoted -> retired")
+                         help="atomic candidate -> promoted; prior promoted -> retired (spec D2 gated)")
     ip.add_argument("image_version")
     ip.add_argument("--evidence", required=True,
-                     help="evidence text (placeholder for D2 validation gate)")
+                     help="operator-attested evidence text (recorded in audit; not validated)")
     ip.add_argument("--db-path", default=DEFAULT_DB)
+    ip.add_argument("--config", default="/etc/mthydra/controller.toml")
 
     ir = sub.add_parser("image-retire", help="mark a ru_images row as retired")
     ir.add_argument("image_version")
@@ -2147,20 +2148,53 @@ def _cmd_image_list(args) -> int:
 
 
 def _cmd_image_promote(args) -> int:
+    import json as _json
+
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.image.gate import (
+        GateConfigView, evaluate_promotion_gate,
+    )
+    from mthydra.controller.state.audit import log_event
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_images import promote
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"image-promote: config error: {e}", file=sys.stderr)
+        return 2
+
+    gate_cfg = GateConfigView(
+        min_canary_boxes=cfg.image.canary.min_boxes,
+        min_cycles_per_box=cfg.image.canary.min_cycles_per_box,
+        min_distinct_vantages=cfg.probe.min_distinct_vantages,
+    )
 
     conn = connect(args.db_path)
     try:
         rc = _require_active_role(conn, "image-promote")
         if rc is not None:
             return rc
+        # Spec D2: gate before promoting.
+        res = evaluate_promotion_gate(conn, args.image_version, cfg=gate_cfg)
+        if not res.passed:
+            for reason in res.reasons:
+                print(f"image-promote: gate: {reason}", file=sys.stderr)
+            log_event(
+                conn, ts=_now(), actor="operator",
+                action="image_promote_refused",
+                target=args.image_version,
+                details_json=_json.dumps({"reasons": list(res.reasons)}),
+            )
+            return 2
         try:
             promote(conn, args.image_version, at=_now(), evidence=args.evidence)
         except (ValueError, LookupError) as e:
             print(f"image-promote: {e}", file=sys.stderr)
             return 2
-        print(f"image-promote: {args.image_version} -> promoted")
+        print(f"image-promote: {args.image_version} -> promoted "
+              f"(gate passed: {res.canary_probe_rows} probe rows across "
+              f"{res.canary_distinct_vantages} distinct vantages)")
         return 0
     finally:
         conn.close()

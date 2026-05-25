@@ -1253,11 +1253,17 @@ def test_image_promote_requires_evidence(tmp_path, age_recipient):
 def test_image_promote_clears_upstream_release_obligation(tmp_path, age_recipient):
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
     run(["init", "--db-path", str(db),
          "--age-recipient", age_recipient,
          "--provider-credential", "b2=id:secret"])
     from mthydra.controller.state.db import connect
+    from mthydra.controller.state.image_profiles import pin
     from mthydra.controller.state.obligations import list_obligations, set_obligation
+    from mthydra.controller.state.probe_results import record
+    from mthydra.controller.state.probe_vantages import add_candidate, attest_active
+    from mthydra.controller.state.ru_boxes import insert_box, mark_live
     from mthydra.controller.state.ru_images import insert_candidate
     conn = connect(db)
     insert_candidate(
@@ -1268,13 +1274,68 @@ def test_image_promote_clears_upstream_release_obligation(tmp_path, age_recipien
     set_obligation(conn, "t4_upstream_release_available::v2.1.7",
                    last_proven_at="2026-05-21T00:00:00Z",
                    proven_by="tracker", next_due_at="2026-05-21T00:00:00Z")
+    # Spec D2: satisfy the gate — pin profile, 1 canary, 4 cycles, 2 vantages.
+    pin(conn, image_version="iv1", profile_json='{}',
+        recorded_by="op", at="2026-05-21T00:00:00Z")
+    add_candidate(conn, vantage_id="vk", label="kz1", source_kind="x",
+                  at="2026-05-21T00:00:00Z")
+    attest_active(conn, "vk", at="2026-05-21T00:00:00Z")
+    add_candidate(conn, vantage_id="vb", label="by1", source_kind="x",
+                  at="2026-05-21T00:00:00Z")
+    attest_active(conn, "vb", at="2026-05-21T00:00:00Z")
+    insert_box(conn, "b-canary", "p", "r", "10.0.0.1", "sni-canary",
+               "iv1", "2026-05-21T00:00:00Z", is_canary=True)
+    mark_live(conn, "b-canary", public_ip="10.0.0.1",
+              at="2026-05-21T00:01:00Z")
+    for i, vid in enumerate(["vk", "vk", "vb", "vb"]):
+        record(conn, box_id="b-canary", vantage_id=vid,
+               cycle_at=f"2026-05-21T0{i + 2}:00:00Z",
+               check_type="surface_scan", status="pass",
+               evidence_json=None, image_version="iv1",
+               recorded_at=f"2026-05-21T0{i + 2}:00:01Z")
     conn.close()
-    rc = run(["image-promote", "iv1", "--evidence", "smoke", "--db-path", str(db)])
+    rc = run(["image-promote", "iv1", "--evidence", "smoke",
+              "--db-path", str(db), "--config", str(cfg_path)])
     assert rc == 0
     conn = connect(db)
     obs = {o.obligation_id for o in list_obligations(conn)}
     assert "t4_upstream_release_available::v2.1.7" not in obs
     assert "t4_image_promoted" in obs
+    conn.close()
+
+
+def test_image_promote_refused_by_gate(tmp_path, age_recipient, capsys):
+    """Spec D2: image-promote refuses with each gate-failure reason on stderr."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import insert_candidate
+    conn = connect(db)
+    insert_candidate(
+        conn, image_version="iv1", upstream_release="v2.1.7",
+        upstream_repo="9seconds/mtg", binary_url="x", manifest_url="x",
+        binary_sha256="iv1", binary_size_bytes=100,
+        built_at="2026-05-21T00:00:00Z",
+    )
+    conn.close()
+    # No profile, no canary — gate should refuse.
+    rc = run(["image-promote", "iv1", "--evidence", "smoke",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "image_profiles row missing" in err
+    assert "insufficient canary boxes" in err
+    # Audit row recorded.
+    conn = connect(db)
+    rows = conn.execute(
+        "SELECT details_json FROM audit_log WHERE action='image_promote_refused'"
+    ).fetchall()
+    assert len(rows) == 1
     conn.close()
 
 
