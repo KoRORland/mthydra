@@ -2610,3 +2610,223 @@ def test_serve_refuses_active_without_observability_credentials(
     assert rc == 2
     err = capsys.readouterr().err
     assert "[observability.telegram]" in err
+
+
+# ===== spec K: distribution CLI =====
+
+
+def _k_cfg(tmp_path, *, with_dist_creds=True):
+    """Build a controller.toml that satisfies dist-publish-now config-load."""
+    cfg = tmp_path / "k_cfg.toml"
+    dist_block = ""
+    if with_dist_creds:
+        dist_block = (
+            "[distribution.telegram]\nbot_token='dist-token'\n"
+            "[distribution.email]\nsmtp_host='smtp.example.org'\nsmtp_port=587\n"
+            "from_addr='dist@example.org'\nusername='dist@example.org'\npassword='pw'\n"
+        )
+    cfg.write_text(
+        "[node]\nrole='active'\nhostname='h'\n"
+        "[backup]\nfloor_interval_hours=24\non_change_debounce_seconds=30\n"
+        "endpoint=''\nbucket='b'\naccess_key_id='k'\n"
+        "[backup.retention]\nkeep_daily=30\nkeep_monthly=12\nobject_lock_days=365\n"
+        "[gap_monitor]\npoll_interval_minutes=30\nalarm_threshold_hours=48\n"
+        "recipient_email='op@example.org'\n"
+        "[descriptor]\nrotation_interval_hours=1\nvalidity_window_hours=24\n"
+        "[obligations]\n[obligations.timers_hours]\n"
+        "[cover_pool]\nrotation_ttl_days=14\nreverify_after_days=30\n"
+        "freeze_threshold=2\nreverify_sweep_interval='1h'\n"
+        "rotation_sweep_interval='1h'\nreplenishment_interval_days=90\n"
+        + dist_block
+    )
+    return cfg
+
+
+def test_cli_user_channels_set_and_show(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, added_at) "
+        "VALUES ('u1', NULL, 'email', '2026-05-25T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    rc = run(["user-channels-set", "u1",
+              "--telegram", "12345",
+              "--email", "u1@example.org",
+              "--db-path", str(db)])
+    assert rc == 0
+    capsys.readouterr()
+    rc = run(["user-channels-show", "u1", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert out["telegram_chat_id"] == "12345"
+    assert out["email_addr"] == "u1@example.org"
+
+
+def test_cli_user_channels_set_refuses_no_args(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    rc = run(["user-channels-set", "u1", "--db-path", str(db)])
+    assert rc == 2
+
+
+def test_cli_user_channels_show_missing(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    rc = run(["user-channels-show", "u-nope", "--db-path", str(db)])
+    assert rc == 2
+
+
+def test_cli_user_channels_list_json(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, added_at) "
+        "VALUES ('u1', NULL, 'email', '2026-05-25T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    run(["user-channels-set", "u1", "--telegram", "t1", "--db-path", str(db)])
+    capsys.readouterr()
+    rc = run(["user-channels-list", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert len(out) == 1
+    assert out[0]["telegram_chat_id"] == "t1"
+
+
+def test_cli_dist_status_json(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    capsys.readouterr()
+    rc = run(["dist-status", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert out == []
+
+
+def test_cli_dist_publish_now_offline(tmp_path, age_recipient, capsys):
+    """dist-publish-now with no users -> succeeds with zero dispatched."""
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _k_cfg(tmp_path)
+    rc = run([
+        "--mode", "offline",
+        "dist-publish-now", "--user-id", "u1",
+        "--db-path", str(db), "--config", str(cfg),
+    ])
+    assert rc == 0
+
+
+def test_cli_dist_test_offline_dispatches(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _k_cfg(tmp_path)
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, added_at) "
+        "VALUES ('u1', NULL, 'email', '2026-05-25T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    run(["user-channels-set", "u1",
+         "--telegram", "12345", "--email", "u1@example.org",
+         "--db-path", str(db)])
+    rc = run([
+        "--mode", "offline",
+        "dist-test", "--user-id", "u1",
+        "--db-path", str(db), "--config", str(cfg),
+    ])
+    assert rc == 0
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    n = conn.execute(
+        "SELECT COUNT(*) FROM distribution_log WHERE kind='test'"
+    ).fetchone()[0]
+    assert n == 2
+    conn.close()
+
+
+def test_cli_dist_test_user_without_channels(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _k_cfg(tmp_path)
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, added_at) "
+        "VALUES ('u1', NULL, 'email', '2026-05-25T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    rc = run([
+        "--mode", "offline",
+        "dist-test", "--user-id", "u1",
+        "--db-path", str(db), "--config", str(cfg),
+    ])
+    assert rc == 2
+
+
+def test_cli_dist_log_recent_json(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.distribution_log import append
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, added_at) "
+        "VALUES ('u1', NULL, 'email', '2026-05-25T00:00:00Z')"
+    )
+    conn.commit()
+    for i in range(3):
+        append(conn, user_id="u1", channel="telegram", kind="subset_delta",
+               attempted_at=f"2026-05-25T0{i}:00:00Z",
+               delivered_at=f"2026-05-25T0{i}:00:01Z",
+               subset_hash=f"h{i}", payload_json='[]', error=None)
+    conn.close()
+    capsys.readouterr()
+    rc = run(["dist-log-recent", "--limit", "2", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert len(out) == 2
+    assert out[0]["subset_hash"] == "h2"
+
+
+def test_serve_refuses_active_without_distribution_credentials(
+    tmp_path, age_recipient, capsys, monkeypatch,
+):
+    """Spec K K-D10: active mode without distribution sinks -> exit 2."""
+    from mthydra.controller.cli import run as _run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    # Has observability creds (so spec J refusal does NOT fire first) but no
+    # distribution creds.
+    cfg_path.write_text(
+        "[node]\nrole='active'\nhostname='h'\n"
+        "[backup]\nfloor_interval_hours=24\non_change_debounce_seconds=30\n"
+        "endpoint='https://example'\nbucket='b'\naccess_key_id='k'\n"
+        "[backup.retention]\nkeep_daily=30\nkeep_monthly=12\nobject_lock_days=365\n"
+        "[gap_monitor]\npoll_interval_minutes=30\nalarm_threshold_hours=48\n"
+        "recipient_email='op@example.org'\n"
+        "[descriptor]\nrotation_interval_hours=1\nvalidity_window_hours=24\n"
+        "[obligations]\n[obligations.timers_hours]\n"
+        "[cover_pool]\nrotation_ttl_days=14\nreverify_after_days=30\n"
+        "freeze_threshold=2\nreverify_sweep_interval='1h'\n"
+        "rotation_sweep_interval='1h'\nreplenishment_interval_days=90\n"
+        "[observability.telegram]\nbot_token='t'\nchat_id='c'\n"
+        "[observability.email]\nsmtp_host='s'\nsmtp_port=587\n"
+        "from_addr='f'\nto_addr='t'\nusername='u'\npassword='p'\n"
+    )
+    _run(["init", "--db-path", str(db),
+          "--age-recipient", age_recipient,
+          "--provider-credential", "b2=id:secret"])
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(age_recipient + "\n")
+    monkeypatch.setattr("mthydra.controller.cli.DEFAULT_RECIPIENT_FILE",
+                        str(recipient_file))
+    capsys.readouterr()
+    rc = _run(["serve", "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "[distribution.telegram]" in err

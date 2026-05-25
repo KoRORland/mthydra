@@ -539,6 +539,50 @@ def build_parser() -> argparse.ArgumentParser:
     obs_hb.add_argument("--db-path", default=DEFAULT_DB)
     obs_hb.add_argument("--config", default="/etc/mthydra/controller.toml")
 
+    # ----- spec K: distribution channel subcommands -----
+
+    uc_set = sub.add_parser("user-channels-set",
+                             help="register/update per-user Telegram + email contact points")
+    uc_set.add_argument("user_id")
+    uc_set.add_argument("--telegram", dest="telegram_chat_id", default=None)
+    uc_set.add_argument("--email", dest="email_addr", default=None)
+    uc_set.add_argument("--db-path", default=DEFAULT_DB)
+
+    uc_show = sub.add_parser("user-channels-show",
+                              help="show one user's registered channels")
+    uc_show.add_argument("user_id")
+    uc_show.add_argument("--db-path", default=DEFAULT_DB)
+    uc_show.add_argument("--json", action="store_true")
+
+    uc_list = sub.add_parser("user-channels-list",
+                              help="list all registered user channels")
+    uc_list.add_argument("--db-path", default=DEFAULT_DB)
+    uc_list.add_argument("--json", action="store_true")
+
+    ds = sub.add_parser("dist-status",
+                          help="per-user shard + current subset + last-delivery summary")
+    ds.add_argument("--db-path", default=DEFAULT_DB)
+    ds.add_argument("--json", action="store_true")
+
+    dpn = sub.add_parser("dist-publish-now",
+                           help="force immediate publish for one user")
+    dpn.add_argument("--user-id", required=True)
+    dpn.add_argument("--db-path", default=DEFAULT_DB)
+    dpn.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    dt = sub.add_parser("dist-test",
+                         help="send a synthetic test message to one user (deploy check)")
+    dt.add_argument("--user-id", required=True)
+    dt.add_argument("--db-path", default=DEFAULT_DB)
+    dt.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    dlr = sub.add_parser("dist-log-recent",
+                          help="tail of distribution_log; most-recent first")
+    dlr.add_argument("--user-id", default=None)
+    dlr.add_argument("--limit", type=int, default=50)
+    dlr.add_argument("--db-path", default=DEFAULT_DB)
+    dlr.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -851,6 +895,21 @@ def run(argv: list[str]) -> int:
         return _cmd_obs_alert_test(args, mode)
     if args.cmd == "obs-heartbeat-now":
         return _cmd_obs_heartbeat_now(args, mode)
+
+    if args.cmd == "user-channels-set":
+        return _cmd_user_channels_set(args)
+    if args.cmd == "user-channels-show":
+        return _cmd_user_channels_show(args)
+    if args.cmd == "user-channels-list":
+        return _cmd_user_channels_list(args)
+    if args.cmd == "dist-status":
+        return _cmd_dist_status(args)
+    if args.cmd == "dist-publish-now":
+        return _cmd_dist_publish_now(args, mode)
+    if args.cmd == "dist-test":
+        return _cmd_dist_test(args, mode)
+    if args.cmd == "dist-log-recent":
+        return _cmd_dist_log_recent(args)
 
     return 1
 
@@ -1262,6 +1321,14 @@ def _cmd_serve(args) -> int:
                 file=sys.stderr,
             )
             return 2
+        # Spec K K-D10: same discipline for distribution sinks.
+        if cfg.distribution.telegram is None or cfg.distribution.email is None:
+            print(
+                "serve: refusing — [distribution.telegram] and "
+                "[distribution.email] are required for active mode",
+                file=sys.stderr,
+            )
+            return 2
 
     recipient_path = DEFAULT_RECIPIENT_FILE
     try:
@@ -1312,6 +1379,10 @@ def _cmd_serve(args) -> int:
     from mthydra.controller.probe.evaluator import ProbeConfigView
     from mthydra.controller.observability.alerter import AlertSweep
     from mthydra.controller.observability.heartbeat import ObsHeartbeatPublisher
+    from mthydra.controller.distribution.publisher import DistributionPublisher
+    from mthydra.controller.distribution.user_heartbeat import (
+        DistUserHeartbeatPublisher,
+    )
 
     set_audit_mirror("/var/lib/mthydra/logs/audit.log")
 
@@ -1389,6 +1460,20 @@ def _cmd_serve(args) -> int:
         breach_threshold=cfg.observability.heartbeat_breach_threshold,
         mode=mode,
     )
+    dist_tg_sink, dist_em_sink = _build_dist_sinks(cfg, mode)
+    dist_publisher = DistributionPublisher(
+        db_path=args.db_path,
+        telegram_sink=dist_tg_sink, email_sink=dist_em_sink,
+        sweep_interval_seconds=cfg.distribution.publish_sweep_interval_seconds,
+        mode=mode,
+    )
+    dist_user_heartbeat = DistUserHeartbeatPublisher(
+        db_path=args.db_path,
+        telegram_sink=dist_tg_sink,
+        interval_seconds=cfg.distribution.user_heartbeat_interval_seconds,
+        breach_threshold=cfg.distribution.heartbeat_breach_threshold,
+        mode=mode,
+    )
 
     if mode != "offline":
         orch.arm()
@@ -1401,7 +1486,9 @@ def _cmd_serve(args) -> int:
         probe_wheel.arm()
         alerter.arm()
         obs_heartbeat.arm()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat armed", flush=True)
+        dist_publisher.arm()
+        dist_user_heartbeat.arm()
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -1420,6 +1507,8 @@ def _cmd_serve(args) -> int:
         probe_wheel.disarm()
         alerter.disarm()
         obs_heartbeat.disarm()
+        dist_publisher.disarm()
+        dist_user_heartbeat.disarm()
         print("serve: stopped", flush=True)
     return 0
 
@@ -3327,3 +3416,251 @@ def _cmd_obs_heartbeat_now(args, mode: str) -> int:
           f"{'OK' if res['success'] else 'FAIL'} "
           f"consecutive_failures={res['consecutive_failures']}")
     return 0 if res["success"] else 2
+
+
+# ----- spec K: distribution channel subcommands -----
+
+
+def _build_dist_sinks(cfg, mode: str):
+    """Return (telegram_sink, email_sink). DryRun in offline OR when creds missing."""
+    from mthydra.controller.distribution.sinks import (
+        DryRunDistributionSink, EmailDistributionSink, TelegramDistributionSink,
+    )
+    if mode == "offline":
+        return (DryRunDistributionSink(label="telegram"),
+                DryRunDistributionSink(label="email"))
+    tg = cfg.distribution.telegram
+    em = cfg.distribution.email
+    tg_sink = (
+        TelegramDistributionSink(bot_token=tg.bot_token)
+        if tg is not None else DryRunDistributionSink(label="telegram")
+    )
+    em_sink = (
+        EmailDistributionSink(
+            smtp_host=em.smtp_host, smtp_port=em.smtp_port,
+            from_addr=em.from_addr,
+            username=em.username, password=em.password,
+        )
+        if em is not None else DryRunDistributionSink(label="email")
+    )
+    return tg_sink, em_sink
+
+
+def _cmd_user_channels_set(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.user_channels import set_channels
+    if not args.telegram_chat_id and not args.email_addr:
+        print("user-channels-set: at least one of --telegram or --email required",
+              file=sys.stderr)
+        return 2
+    conn = connect(args.db_path)
+    try:
+        try:
+            set_channels(
+                conn, args.user_id,
+                telegram_chat_id=args.telegram_chat_id,
+                email_addr=args.email_addr, at=_now(),
+            )
+        except sqlite3.IntegrityError as e:
+            print(f"user-channels-set: {e}", file=sys.stderr)
+            return 2
+        print(f"user-channels-set: {args.user_id} registered")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_user_channels_show(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.user_channels import get_channels
+    conn = connect(args.db_path)
+    try:
+        row = get_channels(conn, args.user_id)
+        if row is None:
+            print(f"user-channels-show: no channels for {args.user_id!r}",
+                  file=sys.stderr)
+            return 2
+        if args.json:
+            import json as _json
+            print(_json.dumps({
+                "user_id": row.user_id,
+                "telegram_chat_id": row.telegram_chat_id,
+                "email_addr": row.email_addr,
+                "registered_at": row.registered_at,
+                "updated_at": row.updated_at,
+            }, sort_keys=True))
+        else:
+            print(f"user_id: {row.user_id}")
+            print(f"telegram: {row.telegram_chat_id or '-'}")
+            print(f"email:    {row.email_addr or '-'}")
+            print(f"registered: {row.registered_at}")
+            print(f"updated:    {row.updated_at}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_user_channels_list(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.user_channels import list_channels
+    conn = connect(args.db_path)
+    try:
+        rows = list_channels(conn)
+        if args.json:
+            import json as _json
+            print(_json.dumps([
+                {
+                    "user_id": r.user_id,
+                    "telegram_chat_id": r.telegram_chat_id,
+                    "email_addr": r.email_addr,
+                } for r in rows
+            ], sort_keys=True))
+        else:
+            for r in rows:
+                tg = r.telegram_chat_id or "-"
+                em = r.email_addr or "-"
+                print(f"{r.user_id}\tTG:{tg}\tEM:{em}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_dist_status(args) -> int:
+    from mthydra.controller.distribution.payload import build_subset
+    from mthydra.controller.state import distribution_log as _dl
+    from mthydra.controller.state.db import connect
+    conn = connect(args.db_path)
+    try:
+        users = [
+            r[0] for r in conn.execute(
+                "SELECT user_id FROM users WHERE current_shard_id IS NOT NULL "
+                "ORDER BY user_id"
+            ).fetchall()
+        ]
+        records = []
+        for u in users:
+            payload = build_subset(conn, u, now=_now())
+            shard = payload.shard_id if payload else None
+            box_count = len(payload.boxes) if payload else 0
+            tg_last = _dl.last_subset_hash(conn, u, "telegram")
+            em_last = _dl.last_subset_hash(conn, u, "email")
+            records.append({
+                "user_id": u, "shard_id": shard,
+                "current_box_count": box_count,
+                "last_subset_hash_telegram": tg_last,
+                "last_subset_hash_email": em_last,
+            })
+        if args.json:
+            import json as _json
+            print(_json.dumps(records, sort_keys=True))
+        else:
+            for r in records:
+                print(f"{r['user_id']}\tshard={r['shard_id']}\t"
+                      f"boxes={r['current_box_count']}\t"
+                      f"tg={r['last_subset_hash_telegram'] or '-'[:8]}\t"
+                      f"em={r['last_subset_hash_email'] or '-'[:8]}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_dist_publish_now(args, mode: str) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.distribution.publisher import DistributionPublisher
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"dist-publish-now: config error: {e}", file=sys.stderr)
+        return 2
+    tg_sink, em_sink = _build_dist_sinks(cfg, mode)
+    pub = DistributionPublisher(
+        db_path=args.db_path,
+        telegram_sink=tg_sink, email_sink=em_sink,
+        sweep_interval_seconds=cfg.distribution.publish_sweep_interval_seconds,
+        mode=mode, clock=_now,
+    )
+    res = pub.run_once()
+    print(f"dist-publish-now: dispatched={res['dispatched']} "
+          f"deduped={res['deduped']} unregistered={res['unregistered']}")
+    return 0
+
+
+def _cmd_dist_test(args, mode: str) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state import distribution_log as _dl
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.user_channels import get_channels
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"dist-test: config error: {e}", file=sys.stderr)
+        return 2
+    tg_sink, em_sink = _build_dist_sinks(cfg, mode)
+    conn = connect(args.db_path)
+    try:
+        row = get_channels(conn, args.user_id)
+        if row is None:
+            print(f"dist-test: no channels for {args.user_id!r}", file=sys.stderr)
+            return 2
+        now = _now()
+        body = f"mthydra distribution test @ {now}"
+        for label, configured, sink in (
+            ("telegram", row.telegram_chat_id, tg_sink),
+            ("email", row.email_addr, em_sink),
+        ):
+            if not configured:
+                continue
+            try:
+                if label == "telegram":
+                    res = sink(chat_id=configured, message=body)
+                else:
+                    res = sink(to_addr=configured,
+                                subject="mthydra distribution test",
+                                body=body)
+                success = bool(getattr(res, "success", False))
+                err = getattr(res, "error", None)
+            except Exception as e:
+                success = False
+                err = repr(e)
+            _dl.append(
+                conn, user_id=args.user_id, channel=label, kind="test",
+                attempted_at=now,
+                delivered_at=now if success else None,
+                subset_hash=None, payload_json=body, error=err,
+            )
+            print(f"dist-test: {label} -> "
+                  f"{'OK' if success else 'FAIL ' + (err or '')}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_dist_log_recent(args) -> int:
+    from mthydra.controller.state import distribution_log as _dl
+    from mthydra.controller.state.db import connect
+    conn = connect(args.db_path)
+    try:
+        rows = _dl.recent(conn, user_id=args.user_id, limit=args.limit)
+        if args.json:
+            import json as _json
+            print(_json.dumps([
+                {
+                    "id": r.id,
+                    "user_id": r.user_id,
+                    "channel": r.channel,
+                    "kind": r.kind,
+                    "attempted_at": r.attempted_at,
+                    "delivered_at": r.delivered_at,
+                    "subset_hash": r.subset_hash,
+                    "error": r.error,
+                } for r in rows
+            ], sort_keys=True))
+        else:
+            for r in rows:
+                status = "OK" if r.delivered_at else "FAIL"
+                err = f" err={r.error!r}" if r.error else ""
+                print(f"#{r.id} {r.attempted_at} {r.user_id} {r.channel} "
+                      f"{r.kind} {status}{err}")
+        return 0
+    finally:
+        conn.close()
