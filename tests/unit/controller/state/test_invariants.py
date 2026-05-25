@@ -846,3 +846,14 @@ def test_check_42_skipped_on_standby(tmp_db_path):
     except InvariantViolation as e:
         # Must NOT be the heartbeat check.
         assert "check 42" not in str(e)
+
+
+# --- spec K checks (#43) ---
+
+
+def test_check_43_rejects_missing_distribution_log_triggers(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute("DROP TRIGGER IF EXISTS distribution_log_no_update")
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 43"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)

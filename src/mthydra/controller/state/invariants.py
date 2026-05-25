@@ -345,6 +345,11 @@ def check_all(
         _check_41_alert_log_triggers_present(conn)
         _check_42_heartbeat_freshness_at_startup(conn, now_iso=_now_str)
 
+    # --- spec K checks (#43) — gated on schema v10+ ---
+
+    if expected_schema_version >= 10:
+        _check_43_distribution_log_triggers_present(conn)
+
 
 def _check_29_reality_uuid_unique(conn: sqlite3.Connection) -> None:
     """No two ru_boxes share a reality_uuid (defence against accidental double-assign)."""
@@ -386,6 +391,20 @@ def _check_31_eu_node_active_has_cover_sni(conn: sqlite3.Connection) -> None:
             f"check 31: eu_nodes.node_id={row[0]!r} role={row[1]!r} "
             f"missing cover_sni={row[2]!r} or reality_pubkey={row[3]!r}"
         )
+
+
+def _check_43_distribution_log_triggers_present(conn: sqlite3.Connection) -> None:
+    """Both append-only triggers must be present on distribution_log."""
+    trigs = {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        ).fetchall()
+    }
+    for required in ("distribution_log_no_update", "distribution_log_no_delete"):
+        if required not in trigs:
+            raise InvariantViolation(
+                f"check 43: distribution-log trigger {required} is missing"
+            )
 
 
 def _check_41_alert_log_triggers_present(conn: sqlite3.Connection) -> None:
