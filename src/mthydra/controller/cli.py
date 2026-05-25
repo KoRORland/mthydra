@@ -1084,6 +1084,7 @@ def _cmd_serve(args) -> int:
         CoverPoolRotationSweep,
     )
     from mthydra.controller.standby.heartbeat import StandbyHeartbeatPoller
+    from mthydra.controller.shard_manager.wheel import ShardReshuffleWheel
 
     set_audit_mirror("/var/lib/mthydra/logs/audit.log")
 
@@ -1120,6 +1121,14 @@ def _cmd_serve(args) -> int:
         poll_interval_seconds=cfg.image.upstream_check_interval_seconds,
         mode=mode,
     )
+    shard_wheel = ShardReshuffleWheel(
+        db_path=args.db_path,
+        target_size=cfg.shard_manager.target_size,
+        max_size=cfg.shard_manager.max_size,
+        reshuffle_interval_days=cfg.shard_manager.reshuffle_interval_days,
+        sweep_interval_seconds=cfg.shard_manager.reshuffle_sweep_interval_seconds,
+        mode=mode,
+    )
 
     if mode != "offline":
         orch.arm()
@@ -1128,7 +1137,8 @@ def _cmd_serve(args) -> int:
         rotation_sweep.arm()
         poller.arm()
         tracker.arm()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker armed", flush=True)
+        shard_wheel.arm()
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -1143,6 +1153,7 @@ def _cmd_serve(args) -> int:
         rotation_sweep.disarm()
         poller.disarm()
         tracker.disarm()
+        shard_wheel.disarm()
         print("serve: stopped", flush=True)
     return 0
 
