@@ -101,8 +101,28 @@ An artifact whose tests live only in the implementer's head does not count as bu
 ## 5. Status
 
 - `design.md` — accepted (initial commit).
-- This document — initial draft.
-- Specs `A` through `L` — **not yet written**. Next step: brainstorm spec `A` (foundation bundle) per `superpowers:brainstorming`.
+- This document — current.
+- Specs `A` through `K` — **written, implemented, tested.** Each has its own spec under `doc/specs/`, its plan under `doc/plans/`, and lives implemented in the codebase with passing test suite + per-spec coverage targets met.
+- Spec `D2` (canary + validation gate + soft-burn rollback) — written and implemented after `I`/`G`/`H` unblocked it. Lives at `doc/specs/2026-05-25-D2-image-canary-validation.md` + `doc/plans/2026-05-25-D2-image-canary-validation-plan.md`.
+- Spec `L` (break-glass dormant path, T1) — **deferred MVP**. Not yet specced or planned. See §6 honesty note below.
+
+### Cross-spec amendments shipped post-MVP
+
+- **C × I:** `cover-attest-verified` now consumes spec I's `probe_vantages` registry. Free-text labels still accepted when the registry is empty (transitional); once any vantage is registered, attestation requires `state='active'`.
+- **D × I (via D2):** `image-promote` now requires a pinned `image_profiles` row for the candidate (gate condition #1 in spec D2). `image-build --profile-json` is mandatory.
+- **J × K:** spec J's severity table classifies spec K's `dist_user_unregistered::*` and `dist_user_heartbeat_breach::*` anti-obligation kinds.
+- **J × D2:** spec J's severity table classifies `image_rollback_pending::*` as `crit`.
+
+### Known follow-ups (named in residuals, not yet built)
+
+- **Spec L** — break-glass dormant path (T1). Deferred MVP per §6 below.
+- **`obs-alert-ack`** mechanism (spec J residual #4).
+- **`probe-credential-issue` CLI** for the dedicated probe credential (spec I residual #7).
+- **`alert_log` / `probe_results` / `distribution_log` compaction** — all three are append-only and grow with traffic.
+- **T8 — cold-acquisition verification** (periodic reboot-then-image test).
+- **T9 — off-box backup independence** (backups on infra independent of EU node *and* provider).
+- **T12 — obscurity-assumption documentation** in the operator runbook (a documentation artifact, not code).
+- **Probe profile diffing** — D2 only checks that *a* profile exists; the comparison against the outgoing image's profile is operator judgement (D2 §13 residual #1).
 
 ---
 
