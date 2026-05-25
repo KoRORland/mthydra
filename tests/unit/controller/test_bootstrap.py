@@ -151,6 +151,24 @@ def test_init_seeds_cover_pool_obligations(tmp_path):
     assert "cover_pool_replenishment_proven" in ids
 
 
+def test_init_seeds_distribution_obligations(tmp_path):
+    db = tmp_path / "state.sqlite"
+    init_state(
+        db_path=db,
+        age_recipient=FAKE_RECIPIENT,
+        provider_credentials={"b2": "id:secret"},
+        obligation_timer_hours={
+            "dist_publish_sweep_ran": 1,
+        },
+        now="2026-05-25T00:00:00Z",
+    )
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import list_obligations
+    conn = connect(db)
+    ids = {o.obligation_id for o in list_obligations(conn)}
+    assert "dist_publish_sweep_ran" in ids
+
+
 def test_init_seeds_probe_obligations(tmp_path):
     db = tmp_path / "state.sqlite"
     init_state(

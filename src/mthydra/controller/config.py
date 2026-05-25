@@ -140,6 +140,29 @@ class ObservabilityConfig:
 
 
 @dataclass(frozen=True)
+class DistributionTelegramConfig:
+    bot_token: str
+
+
+@dataclass(frozen=True)
+class DistributionEmailConfig:
+    smtp_host: str
+    smtp_port: int
+    from_addr: str
+    username: str
+    password: str
+
+
+@dataclass(frozen=True)
+class DistributionConfig:
+    publish_sweep_interval_seconds: int
+    user_heartbeat_interval_seconds: int
+    heartbeat_breach_threshold: int
+    telegram: DistributionTelegramConfig | None
+    email: DistributionEmailConfig | None
+
+
+@dataclass(frozen=True)
 class Config:
     node: NodeConfig
     backup: BackupConfig
@@ -152,6 +175,7 @@ class Config:
     shard_manager: ShardManagerConfig
     probe: ProbeConfig
     observability: ObservabilityConfig
+    distribution: DistributionConfig
     data_exit: DataExitConfig | None = None
 
 
@@ -271,6 +295,48 @@ def _load_shard_manager(data: dict) -> ShardManagerConfig:
             "shard_manager.reshuffle_sweep_interval",
             sec.get("reshuffle_sweep_interval", 3600),
         ),
+    )
+
+
+def _load_distribution(data: dict) -> DistributionConfig:
+    sec = data.get("distribution", {})
+    tg = sec.get("telegram", {})
+    em = sec.get("email", {})
+
+    def _tg() -> DistributionTelegramConfig | None:
+        token = str(tg.get("bot_token", ""))
+        if not token:
+            return None
+        return DistributionTelegramConfig(bot_token=token)
+
+    def _em() -> DistributionEmailConfig | None:
+        host = str(em.get("smtp_host", ""))
+        port = int(em.get("smtp_port", 587))
+        from_addr = str(em.get("from_addr", ""))
+        username = str(em.get("username", ""))
+        password = str(em.get("password", ""))
+        if not (host and from_addr and username and password):
+            return None
+        return DistributionEmailConfig(
+            smtp_host=host, smtp_port=port, from_addr=from_addr,
+            username=username, password=password,
+        )
+
+    return DistributionConfig(
+        publish_sweep_interval_seconds=_parse_interval_seconds(
+            "distribution.publish_sweep_interval",
+            sec.get("publish_sweep_interval", 300),
+        ),
+        user_heartbeat_interval_seconds=_parse_interval_seconds(
+            "distribution.user_heartbeat_interval",
+            sec.get("user_heartbeat_interval", 86400),
+        ),
+        heartbeat_breach_threshold=_require_positive(
+            "distribution.heartbeat_breach_threshold",
+            sec.get("heartbeat_breach_threshold", 3),
+        ),
+        telegram=_tg(),
+        email=_em(),
     )
 
 
@@ -431,5 +497,6 @@ def load_config(path: Path | str) -> Config:
         shard_manager=_load_shard_manager(raw),
         probe=_load_probe(raw),
         observability=_load_observability(raw),
+        distribution=_load_distribution(raw),
         data_exit=_load_data_exit(raw),
     )

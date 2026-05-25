@@ -65,6 +65,14 @@ from_addr = "ops@example.org"
 to_addr = "op@example.org"
 username = "ops@example.org"
 password = "app-pw"
+[distribution.telegram]
+bot_token = "dist-token"
+[distribution.email]
+smtp_host = "smtp.example.org"
+smtp_port = 587
+from_addr = "dist@example.org"
+username = "dist@example.org"
+password = "app-pw"
 """
 
 _PROVISION_V2_ARGS = [
@@ -316,9 +324,10 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
     """In dryrun mode, _build_destination must point at bucket_override, not cfg.backup.bucket."""
     from mthydra.controller.cli import _build_destination
     from mthydra.controller.config import (
-        BackupConfig, Config, CoverPoolConfig, DescriptorConfig, GapMonitorConfig,
-        ImageConfig, NodeConfig, ObligationsConfig, ObservabilityConfig,
-        ProbeConfig, RetentionConfig, ShardManagerConfig, StandbyConfig,
+        BackupConfig, Config, CoverPoolConfig, DescriptorConfig,
+        DistributionConfig, GapMonitorConfig, ImageConfig, NodeConfig,
+        ObligationsConfig, ObservabilityConfig, ProbeConfig, RetentionConfig,
+        ShardManagerConfig, StandbyConfig,
     )
 
     cfg = Config(
@@ -378,6 +387,13 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
             alert_dedupe_window_warn_seconds=3600,
             alert_dedupe_window_crit_seconds=900,
             alert_dedupe_window_info_seconds=21600,
+            telegram=None,
+            email=None,
+        ),
+        distribution=DistributionConfig(
+            publish_sweep_interval_seconds=300,
+            user_heartbeat_interval_seconds=86400,
+            heartbeat_breach_threshold=3,
             telegram=None,
             email=None,
         ),

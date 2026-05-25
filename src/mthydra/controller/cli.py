@@ -583,6 +583,8 @@ def run(argv: list[str]) -> int:
                     # Spec J — observability obligations.
                     "obs_alerter_sweep_ran": 1,
                     "obs_heartbeat_proven": 2,
+                    # Spec K — distribution obligations.
+                    "dist_publish_sweep_ran": 1,
                     "descriptor_signing_key_rotation": 8760,
                     "cover_pool_reverify_pass_proven": 60 * 24,
                     "cover_pool_replenishment_proven": 90 * 24,

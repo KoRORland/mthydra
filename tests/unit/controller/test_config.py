@@ -418,6 +418,70 @@ chat_id = ""
     assert cfg.observability.telegram is None
 
 
+def test_load_config_distribution_section(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[distribution]
+publish_sweep_interval = "5m"
+user_heartbeat_interval = "24h"
+heartbeat_breach_threshold = 3
+
+[distribution.telegram]
+bot_token = "dist-token"
+
+[distribution.email]
+smtp_host = "smtp.example.org"
+smtp_port = 587
+from_addr = "dist@example.org"
+username = "dist@example.org"
+password = "app-pw"
+"""
+    )
+    cfg = load_config(p)
+    assert cfg.distribution.publish_sweep_interval_seconds == 300
+    assert cfg.distribution.user_heartbeat_interval_seconds == 86400
+    assert cfg.distribution.heartbeat_breach_threshold == 3
+    assert cfg.distribution.telegram is not None
+    assert cfg.distribution.telegram.bot_token == "dist-token"
+    assert cfg.distribution.email is not None
+    assert cfg.distribution.email.from_addr == "dist@example.org"
+
+
+def test_load_config_distribution_credentials_optional(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(_MIN_BASE_TOML)
+    cfg = load_config(p)
+    assert cfg.distribution.telegram is None
+    assert cfg.distribution.email is None
+    # Defaults still parse.
+    assert cfg.distribution.publish_sweep_interval_seconds == 300
+
+
+def test_load_config_distribution_partial_email_collapses_to_none(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[distribution.email]
+smtp_host = "smtp.example.org"
+smtp_port = 587
+from_addr = "dist@example.org"
+username = ""
+password = "app-pw"
+"""
+    )
+    cfg = load_config(p)
+    assert cfg.distribution.email is None
+
+
 def test_load_config_probe_rejects_N_above_M(tmp_path):
     from mthydra.controller.config import ConfigError, load_config
 
