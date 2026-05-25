@@ -2206,3 +2206,202 @@ def test_cli_ru_box_terminate_benign_reason_no_reshuffle(tmp_path, age_recipient
         "SELECT COUNT(*) FROM audit_log WHERE action='shard_reshuffle'"
     ).fetchone()[0]
     assert audits == 0
+
+
+# ===== spec I: probe vantage harness CLI =====
+
+
+def test_cli_vantage_add_and_list(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    rc = run(["vantage-add", "v1",
+              "--label", "kz1",
+              "--source-kind", "cloud-cis",
+              "--region-hint", "KZ-almaty",
+              "--db-path", str(db)])
+    assert rc == 0
+    rc = run(["vantage-add", "v2",
+              "--label", "by1",
+              "--source-kind", "cloud-cis",
+              "--db-path", str(db)])
+    assert rc == 0
+    capsys.readouterr()
+    rc = run(["vantage-list", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    ids = {v["vantage_id"]: v for v in out}
+    assert ids["v1"]["region_hint"] == "KZ-almaty"
+    assert ids["v1"]["state"] == "candidate"
+
+
+def test_cli_vantage_attest_active_and_burn(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    run(["vantage-add", "v1", "--label", "kz1", "--source-kind", "x",
+         "--db-path", str(db)])
+    rc = run(["vantage-attest-active", "v1", "--evidence", "ssh-log",
+              "--db-path", str(db)])
+    assert rc == 0
+    rc = run(["vantage-burn", "v1", "--reason", "leaked",
+              "--db-path", str(db)])
+    assert rc == 0
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT state, burn_reason FROM probe_vantages WHERE vantage_id='v1'"
+    ).fetchone()
+    assert row == ("burned", "leaked")
+
+
+def test_cli_vantage_burn_refuses_double_burn(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    run(["vantage-add", "v1", "--label", "kz1", "--source-kind", "x",
+         "--db-path", str(db)])
+    run(["vantage-burn", "v1", "--reason", "r1", "--db-path", str(db)])
+    rc = run(["vantage-burn", "v1", "--reason", "r2", "--db-path", str(db)])
+    assert rc == 2
+
+
+def test_cli_profile_pin_and_show(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    # Seed an image via raw SQL.
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', '2026-05-25T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text('{"tls_handshake":"x"}')
+    rc = run(["profile-pin", "v1",
+              "--profile-json", str(profile_path),
+              "--recorded-by", "op",
+              "--db-path", str(db)])
+    assert rc == 0
+    capsys.readouterr()
+    rc = run(["profile-show", "v1", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert out["image_version"] == "v1"
+    assert '"tls_handshake"' in out["profile_json"]
+
+
+def test_cli_profile_show_missing(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    rc = run(["profile-show", "v1", "--db-path", str(db)])
+    assert rc == 2
+
+
+def test_cli_probe_record_refuses_inactive_vantage(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', '2026-05-25T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'live', 'v1', '2026-05-25T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    run(["vantage-add", "v1", "--label", "kz1", "--source-kind", "x",
+         "--db-path", str(db)])
+    # state=candidate -> probe-record refuses
+    rc = run(["probe-record",
+              "--box-id", "b1",
+              "--vantage", "v1",
+              "--check", "surface_scan",
+              "--status", "pass",
+              "--cycle-at", "2026-05-25T01:00:00Z",
+              "--db-path", str(db)])
+    assert rc == 2
+
+
+def test_cli_probe_record_happy_path(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', '2026-05-25T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'live', 'v1', '2026-05-25T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    run(["vantage-add", "v1", "--label", "kz1", "--source-kind", "x",
+         "--db-path", str(db)])
+    run(["vantage-attest-active", "v1", "--db-path", str(db)])
+    rc = run(["probe-record",
+              "--box-id", "b1",
+              "--vantage", "v1",
+              "--check", "tls_fall_through",
+              "--status", "pass",
+              "--cycle-at", "2026-05-25T01:00:00Z",
+              "--db-path", str(db)])
+    assert rc == 0
+    conn = connect(db)
+    n = conn.execute("SELECT COUNT(*) FROM probe_results").fetchone()[0]
+    assert n == 1
+
+
+def test_cli_probe_evaluate_returns_verdict(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    # Extend the cfg file with [probe] section so probe-evaluate's config loads.
+    cfg.write_text(cfg.read_text() + "\n[probe]\nsoft_fail_window_M=4\n"
+                   "soft_fail_threshold_N=3\nmin_distinct_vantages=2\n"
+                   "coverage_window_seconds=3600\nprobe_vantage_ttl_days=14\n"
+                   "probe_audit_sweep_interval='5m'\n")
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', '2026-05-25T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'live', 'v1', '2026-05-25T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO image_profiles (image_version, profile_json, recorded_at, recorded_by) "
+        "VALUES ('v1', '{}', '2026-05-25T00:00:00Z', 'op')"
+    )
+    conn.commit()
+    conn.close()
+    capsys.readouterr()
+    rc = run(["probe-evaluate", "--box-id", "b1", "--json",
+              "--db-path", str(db), "--config", str(cfg)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert out["verdict"] == "healthy"
+
+
+def test_cli_probe_due_json(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO obligation_clocks (obligation_id, last_proven_at, proven_by, next_due_at) "
+        "VALUES ('probe_kill_pending::b1', ?, 'probe_audit_sweep', ?)",
+        ("2026-05-25T00:00:00Z", "2026-05-25T00:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+    capsys.readouterr()
+    rc = run(["probe-due", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert out["kill_pending"] == ["probe_kill_pending::b1"]

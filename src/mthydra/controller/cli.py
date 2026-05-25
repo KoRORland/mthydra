@@ -433,6 +433,83 @@ def build_parser() -> argparse.ArgumentParser:
     sst.add_argument("--config", default="/etc/mthydra/controller.toml")
     sst.add_argument("--json", action="store_true")
 
+    # ----- spec I: probe vantage harness subcommands -----
+
+    va = sub.add_parser("vantage-add", help="add a candidate probe vantage")
+    va.add_argument("vantage_id")
+    va.add_argument("--label", required=True)
+    va.add_argument("--source-kind", required=True)
+    va.add_argument("--region-hint", default=None)
+    va.add_argument("--notes", default=None)
+    va.add_argument("--db-path", default=DEFAULT_DB)
+
+    vaa = sub.add_parser("vantage-attest-active",
+                          help="candidate -> active (operator confirms RU-approximating)")
+    vaa.add_argument("vantage_id")
+    vaa.add_argument("--evidence", default=None)
+    vaa.add_argument("--db-path", default=DEFAULT_DB)
+
+    vl = sub.add_parser("vantage-list", help="list probe vantages")
+    vl.add_argument("--state",
+                     choices=["candidate", "active", "retired", "burned"],
+                     default=None)
+    vl.add_argument("--db-path", default=DEFAULT_DB)
+    vl.add_argument("--json", action="store_true")
+
+    vr = sub.add_parser("vantage-retire", help="active -> retired")
+    vr.add_argument("vantage_id")
+    vr.add_argument("--reason", default=None)
+    vr.add_argument("--db-path", default=DEFAULT_DB)
+
+    vb = sub.add_parser("vantage-burn",
+                          help="-> burned (monotonic; no undo)")
+    vb.add_argument("vantage_id")
+    vb.add_argument("--reason", required=True)
+    vb.add_argument("--db-path", default=DEFAULT_DB)
+
+    pp = sub.add_parser("profile-pin",
+                          help="pin a known-good profile for an image_version")
+    pp.add_argument("image_version")
+    pp.add_argument("--profile-json", required=True,
+                     help="path to JSON file, or '-' to read stdin")
+    pp.add_argument("--recorded-by", required=True)
+    pp.add_argument("--notes", default=None)
+    pp.add_argument("--db-path", default=DEFAULT_DB)
+
+    ps_show = sub.add_parser("profile-show",
+                          help="print the pinned profile for an image_version")
+    ps_show.add_argument("image_version")
+    ps_show.add_argument("--db-path", default=DEFAULT_DB)
+    ps_show.add_argument("--json", action="store_true")
+
+    prr = sub.add_parser("probe-record",
+                          help="append one probe_results row (operator submits)")
+    prr.add_argument("--box-id", required=True)
+    prr.add_argument("--vantage", required=True, dest="vantage_id")
+    prr.add_argument("--check", required=True, dest="check_type",
+                      choices=["tls_fall_through", "cover_domain_consistency",
+                                "surface_scan", "valid_path_liveness",
+                                "latency_loss", "behavioural_identity"])
+    prr.add_argument("--status", required=True,
+                      choices=["pass", "soft_fail", "hard_fail"])
+    prr.add_argument("--cycle-at", required=True)
+    prr.add_argument("--evidence", default=None)
+    prr.add_argument("--image-version", default=None,
+                      help="defaults to the box's current image_version")
+    prr.add_argument("--db-path", default=DEFAULT_DB)
+
+    pe = sub.add_parser("probe-evaluate",
+                          help="run evaluate_box and print the verdict")
+    pe.add_argument("--box-id", required=True)
+    pe.add_argument("--config", default="/etc/mthydra/controller.toml")
+    pe.add_argument("--db-path", default=DEFAULT_DB)
+    pe.add_argument("--json", action="store_true")
+
+    pd = sub.add_parser("probe-due",
+                          help="show kill_pending + coverage_pending + rotation_pending")
+    pd.add_argument("--db-path", default=DEFAULT_DB)
+    pd.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -710,6 +787,27 @@ def run(argv: list[str]) -> int:
         return _cmd_shard_reshuffle(args)
     if args.cmd == "shard-stats":
         return _cmd_shard_stats(args)
+
+    if args.cmd == "vantage-add":
+        return _cmd_vantage_add(args)
+    if args.cmd == "vantage-attest-active":
+        return _cmd_vantage_attest_active(args)
+    if args.cmd == "vantage-list":
+        return _cmd_vantage_list(args)
+    if args.cmd == "vantage-retire":
+        return _cmd_vantage_retire(args)
+    if args.cmd == "vantage-burn":
+        return _cmd_vantage_burn(args)
+    if args.cmd == "profile-pin":
+        return _cmd_profile_pin(args)
+    if args.cmd == "profile-show":
+        return _cmd_profile_show(args)
+    if args.cmd == "probe-record":
+        return _cmd_probe_record(args)
+    if args.cmd == "probe-evaluate":
+        return _cmd_probe_evaluate(args)
+    if args.cmd == "probe-due":
+        return _cmd_probe_due(args)
 
     return 1
 
@@ -2634,6 +2732,319 @@ def _cmd_shard_stats(args) -> int:
             print(f"overdue:   {h.overdue_for_reshuffle}")
             print(f"unassigned: {h.unassigned_users}")
             print(f"last sweep: {out['last_sweep_at']}")
+        return 0
+    finally:
+        conn.close()
+
+
+# ----- spec I: probe vantage harness subcommands -----
+
+
+def _cmd_vantage_add(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_vantages import add_candidate
+    conn = connect(args.db_path)
+    try:
+        try:
+            add_candidate(
+                conn,
+                vantage_id=args.vantage_id,
+                label=args.label,
+                source_kind=args.source_kind,
+                at=_now(),
+                region_hint=args.region_hint,
+                notes=args.notes,
+            )
+        except sqlite3.IntegrityError as e:
+            print(f"vantage-add: {e}", file=sys.stderr)
+            return 2
+        print(f"vantage-add: {args.vantage_id} added (candidate)")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_vantage_attest_active(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_vantages import attest_active
+    conn = connect(args.db_path)
+    try:
+        try:
+            attest_active(conn, args.vantage_id, at=_now(), evidence=args.evidence)
+        except (LookupError, ValueError) as e:
+            print(f"vantage-attest-active: {e}", file=sys.stderr)
+            return 2
+        print(f"vantage-attest-active: {args.vantage_id} -> active")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_vantage_list(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_vantages import list_by_state
+    conn = connect(args.db_path)
+    try:
+        rows = list_by_state(conn, args.state)
+        if args.json:
+            import json as _json
+            print(_json.dumps(
+                [{
+                    "vantage_id": v.vantage_id,
+                    "label": v.label,
+                    "source_kind": v.source_kind,
+                    "region_hint": v.region_hint,
+                    "state": v.state,
+                    "added_at": v.added_at,
+                    "attested_at": v.attested_at,
+                    "last_used_at": v.last_used_at,
+                    "retired_at": v.retired_at,
+                    "burned_at": v.burned_at,
+                    "burn_reason": v.burn_reason,
+                } for v in rows],
+                sort_keys=True,
+            ))
+        else:
+            for v in rows:
+                print(f"{v.vantage_id}\t{v.state}\t{v.label}\t{v.source_kind}"
+                      f"\t{v.region_hint or '-'}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_vantage_retire(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_vantages import retire
+    conn = connect(args.db_path)
+    try:
+        try:
+            retire(conn, args.vantage_id, at=_now(), reason=args.reason)
+        except (LookupError, ValueError) as e:
+            print(f"vantage-retire: {e}", file=sys.stderr)
+            return 2
+        print(f"vantage-retire: {args.vantage_id} -> retired")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_vantage_burn(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_vantages import burn
+    conn = connect(args.db_path)
+    try:
+        try:
+            burn(conn, args.vantage_id, at=_now(), reason=args.reason)
+        except (LookupError, ValueError) as e:
+            print(f"vantage-burn: {e}", file=sys.stderr)
+            return 2
+        print(f"vantage-burn: {args.vantage_id} -> burned (label permanently poisoned)")
+        return 0
+    finally:
+        conn.close()
+
+
+def _read_profile_json(arg: str) -> str:
+    if arg == "-":
+        return sys.stdin.read()
+    p = Path(arg)
+    return p.read_text()
+
+
+def _cmd_profile_pin(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.image_profiles import pin
+    try:
+        profile_json = _read_profile_json(args.profile_json)
+    except OSError as e:
+        print(f"profile-pin: cannot read profile: {e}", file=sys.stderr)
+        return 2
+    conn = connect(args.db_path)
+    try:
+        try:
+            pin(
+                conn,
+                image_version=args.image_version,
+                profile_json=profile_json,
+                recorded_by=args.recorded_by,
+                at=_now(),
+                notes=args.notes,
+            )
+        except (LookupError, ValueError) as e:
+            print(f"profile-pin: {e}", file=sys.stderr)
+            return 2
+        print(f"profile-pin: {args.image_version} profile pinned by {args.recorded_by}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_profile_show(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.image_profiles import get_profile
+    conn = connect(args.db_path)
+    try:
+        p = get_profile(conn, args.image_version)
+        if p is None:
+            print(f"profile-show: no profile for {args.image_version!r}",
+                  file=sys.stderr)
+            return 2
+        if args.json:
+            import json as _json
+            print(_json.dumps({
+                "image_version": p.image_version,
+                "profile_json": p.profile_json,
+                "recorded_at": p.recorded_at,
+                "recorded_by": p.recorded_by,
+                "notes": p.notes,
+            }, sort_keys=True))
+        else:
+            print(f"image_version: {p.image_version}")
+            print(f"recorded_by: {p.recorded_by}")
+            print(f"recorded_at: {p.recorded_at}")
+            print(f"notes: {p.notes or '-'}")
+            print("profile_json:")
+            print(p.profile_json)
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_probe_record(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_results import record
+    evidence = None
+    if args.evidence:
+        # Treat --evidence as text by default; if it's a path that exists, read it.
+        p = Path(args.evidence)
+        if p.exists():
+            try:
+                evidence = p.read_text()
+            except OSError:
+                evidence = args.evidence
+        else:
+            evidence = args.evidence
+    conn = connect(args.db_path)
+    try:
+        image_version = args.image_version
+        if image_version is None:
+            row = conn.execute(
+                "SELECT image_version FROM ru_boxes WHERE box_id=?", (args.box_id,)
+            ).fetchone()
+            if row is None:
+                print(f"probe-record: unknown box {args.box_id!r}", file=sys.stderr)
+                return 2
+            image_version = row[0]
+        try:
+            rid = record(
+                conn,
+                box_id=args.box_id,
+                vantage_id=args.vantage_id,
+                cycle_at=args.cycle_at,
+                check_type=args.check_type,
+                status=args.status,
+                evidence_json=evidence,
+                image_version=image_version,
+                recorded_at=_now(),
+            )
+        except (LookupError, ValueError) as e:
+            print(f"probe-record: {e}", file=sys.stderr)
+            return 2
+        print(f"probe-record: id={rid} box={args.box_id} vantage={args.vantage_id} "
+              f"check={args.check_type} status={args.status}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_probe_evaluate(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.probe.evaluator import (
+        EvaluationError, ProbeConfigView, evaluate_box,
+    )
+    from mthydra.controller.state.db import connect
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"probe-evaluate: config error: {e}", file=sys.stderr)
+        return 2
+    view = ProbeConfigView(
+        soft_fail_window_M=cfg.probe.soft_fail_window_M,
+        soft_fail_threshold_N=cfg.probe.soft_fail_threshold_N,
+        min_distinct_vantages=cfg.probe.min_distinct_vantages,
+    )
+    conn = connect(args.db_path)
+    try:
+        try:
+            res = evaluate_box(conn, box_id=args.box_id, cfg=view, now=_now())
+        except EvaluationError as e:
+            print(f"probe-evaluate: {e}", file=sys.stderr)
+            return 2
+        if args.json:
+            import json as _json
+            print(_json.dumps({
+                "box_id": res.box_id,
+                "verdict": res.verdict,
+                "offending_checks": list(res.offending_checks),
+                "distinct_vantages_consulted": res.distinct_vantages_consulted,
+                "evidence_pointer": list(res.evidence_pointer),
+            }, sort_keys=True))
+        else:
+            print(f"box: {res.box_id}")
+            print(f"verdict: {res.verdict}")
+            print(f"distinct_vantages: {res.distinct_vantages_consulted}")
+            if res.offending_checks:
+                print(f"offending: {list(res.offending_checks)}")
+            if res.evidence_pointer:
+                print(f"evidence_ids: {list(res.evidence_pointer)}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_probe_due(args) -> int:
+    from mthydra.controller.state.db import connect
+    conn = connect(args.db_path)
+    try:
+        kill = [
+            r[0] for r in conn.execute(
+                "SELECT obligation_id FROM obligation_clocks "
+                "WHERE obligation_id LIKE 'probe_kill_pending::%' ORDER BY obligation_id"
+            ).fetchall()
+        ]
+        coverage = [
+            r[0] for r in conn.execute(
+                "SELECT obligation_id FROM obligation_clocks "
+                "WHERE obligation_id LIKE 'probe_coverage_pending::%' ORDER BY obligation_id"
+            ).fetchall()
+        ]
+        rotation = [
+            r[0] for r in conn.execute(
+                "SELECT obligation_id FROM obligation_clocks "
+                "WHERE obligation_id LIKE 'probe_vantage_rotation_pending::%' ORDER BY obligation_id"
+            ).fetchall()
+        ]
+        blocked = [
+            r[0] for r in conn.execute(
+                "SELECT obligation_id FROM obligation_clocks "
+                "WHERE obligation_id LIKE 'probe_evaluate_blocked::%' ORDER BY obligation_id"
+            ).fetchall()
+        ]
+        out = {
+            "kill_pending": kill,
+            "coverage_pending": coverage,
+            "rotation_pending": rotation,
+            "evaluate_blocked": blocked,
+        }
+        if args.json:
+            import json as _json
+            print(_json.dumps(out, sort_keys=True))
+        else:
+            print(f"kill_pending:     {kill}")
+            print(f"coverage_pending: {coverage}")
+            print(f"rotation_pending: {rotation}")
+            print(f"evaluate_blocked: {blocked}")
         return 0
     finally:
         conn.close()
