@@ -428,11 +428,25 @@ def test_check_30_rejects_live_box_without_reality_uuid(tmp_db_path):
 
 def test_check_30_passes_when_live_box_has_reality_uuid(tmp_db_path):
     """A live ru_box with reality_uuid and an active credential passes #30."""
+    import json as _json
     conn = _seeded(tmp_db_path)
     from mthydra.controller.state.credentials import issue_credential
     from mthydra.controller.state.ru_boxes import insert_box, mark_live
+    # Spec H #33: live box must have a shard. Provision shard first, assign while
+    # provisioning, then mark_live + add reality_uuid + credential.
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("s-y", _json.dumps(["u-y"]), 2, NOW, NOW),
+    )
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, current_shard_id, added_at) "
+        "VALUES ('u-y', NULL, 'email', 's-y', ?)",
+        (NOW,),
+    )
     insert_box(conn, "boxY", "aws", "eu-1", "10.0.0.2", "sni-y.invalid",
                "img-v1", NOW)
+    conn.execute("UPDATE ru_boxes SET shard_id='s-y' WHERE box_id='boxY'")
     mark_live(conn, "boxY", public_ip="10.0.0.2", at=NOW)
     issue_credential(conn, "boxY", b"\x00" * 10, NOW, authority_generation=1)
     conn.execute("UPDATE ru_boxes SET reality_uuid='ru-uuid-Y' WHERE box_id='boxY'")
@@ -539,6 +553,101 @@ def test_check_32_skipped_when_retired(tmp_db_path):
         " cover_sni, reality_pubkey) "
         "VALUES ('fp-1', '1.2.3.4:443', 1, ?, ?, 'old-cover.invalid', 'pk-abc')",
         (NOW, NOW),
+    )
+    conn.commit()
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+# --- spec H checks (#33–#36) ---
+
+def _setup_active_shard(conn, shard_id="s1", members=None, target_size=2):
+    import json as _json
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (shard_id, _json.dumps(members or []), target_size, NOW, NOW),
+    )
+    conn.commit()
+
+
+def test_check_33_rejects_live_box_without_shard(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    # Live box without shard. Must satisfy #27 (active credential) and #30
+    # (reality_uuid) so that #33 is the next failure.
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, "
+        "created_at, reality_uuid) "
+        "VALUES ('b1', 'p', 'r', 'sni1.example', 'live', 'v1', ?, 'uuid-1')",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO onward_credentials (cred_id, box_id, credential, issued_at, authority_generation) "
+        "VALUES ('c1', 'b1', X'aa', ?, 1)",
+        (NOW,),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 33"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_34_rejects_user_on_retired_shard(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    _setup_active_shard(conn, "s1", members=[])
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, current_shard_id, added_at) "
+        "VALUES ('u1', NULL, 'email', 's1', ?)",
+        (NOW,),
+    )
+    conn.execute("UPDATE shards SET retired_at=? WHERE shard_id='s1'", (NOW,))
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 34"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_35_rejects_cross_shard_user(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    _setup_active_shard(conn, "s1", members=["u1", "u2"])
+    _setup_active_shard(conn, "s2", members=["u2", "u3"])
+    with pytest.raises(InvariantViolation, match="check 35"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_36_rejects_empty_active_shard(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    _setup_active_shard(conn, "s1", members=[])
+    with pytest.raises(InvariantViolation, match="check 36"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_36_allows_retired_empty_shard(tmp_db_path):
+    """Retired shards with empty membership are fine (audit residue)."""
+    conn = _seeded(tmp_db_path)
+    _setup_active_shard(conn, "s1", members=[])
+    conn.execute("UPDATE shards SET retired_at=? WHERE shard_id='s1'", (NOW,))
+    conn.commit()
+    # Other invariants would otherwise complain about an empty active shard; we just
+    # retired it. No #36 violation now.
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_33_passes_when_live_box_has_shard(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    _setup_active_shard(conn, "s1", members=["u1"])
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, current_shard_id, added_at) "
+        "VALUES ('u1', NULL, 'email', 's1', ?)",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, shard_id, state, image_version, "
+        "created_at, reality_uuid) "
+        "VALUES ('b1', 'p', 'r', 'sni1.example', 's1', 'live', 'v1', ?, 'uuid-1')",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO onward_credentials (cred_id, box_id, credential, issued_at, authority_generation) "
+        "VALUES ('c1', 'b1', X'aa', ?, 1)",
+        (NOW,),
     )
     conn.commit()
     check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)

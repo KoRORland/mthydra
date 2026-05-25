@@ -323,6 +323,14 @@ def check_all(
         _check_31_eu_node_active_has_cover_sni(conn)
         _check_32_descriptor_cover_sni_matches_eu_nodes(conn)
 
+    # --- spec H checks (#33–#36) — gated on schema v7+ ---
+
+    if expected_schema_version >= 7:
+        _check_33_live_box_has_shard(conn)
+        _check_34_user_not_on_retired_shard(conn)
+        _check_35_no_cross_shard_user(conn)
+        _check_36_no_empty_active_shard(conn)
+
 
 def _check_29_reality_uuid_unique(conn: sqlite3.Connection) -> None:
     """No two ru_boxes share a reality_uuid (defence against accidental double-assign)."""
@@ -364,6 +372,68 @@ def _check_31_eu_node_active_has_cover_sni(conn: sqlite3.Connection) -> None:
             f"check 31: eu_nodes.node_id={row[0]!r} role={row[1]!r} "
             f"missing cover_sni={row[2]!r} or reality_pubkey={row[3]!r}"
         )
+
+
+def _check_33_live_box_has_shard(conn: sqlite3.Connection) -> None:
+    """Every ru_boxes row with state='live' has shard_id IS NOT NULL."""
+    row = conn.execute(
+        "SELECT box_id FROM ru_boxes WHERE state='live' AND shard_id IS NULL LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 33: live ru_boxes.box_id={row[0]!r} has no shard_id"
+        )
+
+
+def _check_34_user_not_on_retired_shard(conn: sqlite3.Connection) -> None:
+    """No users row references a shards row whose retired_at IS NOT NULL."""
+    row = conn.execute(
+        "SELECT u.user_id, s.shard_id FROM users u "
+        "JOIN shards s ON s.shard_id = u.current_shard_id "
+        "WHERE s.retired_at IS NOT NULL LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 34: users.user_id={row[0]!r} references retired shard {row[1]!r}"
+        )
+
+
+def _check_35_no_cross_shard_user(conn: sqlite3.Connection) -> None:
+    """No two active shards share any user_id in members_json."""
+    rows = conn.execute(
+        "SELECT shard_id, members_json FROM shards WHERE retired_at IS NULL"
+    ).fetchall()
+    seen: dict[str, str] = {}
+    for sid, mj in rows:
+        try:
+            members = json.loads(mj)
+        except json.JSONDecodeError as e:
+            raise InvariantViolation(
+                f"check 35: shards.shard_id={sid!r} has invalid members_json: {e}"
+            ) from e
+        for u in members:
+            if u in seen and seen[u] != sid:
+                raise InvariantViolation(
+                    f"check 35: user {u!r} appears in both "
+                    f"shards {seen[u]!r} and {sid!r}"
+                )
+            seen[u] = sid
+
+
+def _check_36_no_empty_active_shard(conn: sqlite3.Connection) -> None:
+    """Every active shard has a non-empty members_json list."""
+    rows = conn.execute(
+        "SELECT shard_id, members_json FROM shards WHERE retired_at IS NULL"
+    ).fetchall()
+    for sid, mj in rows:
+        try:
+            members = json.loads(mj)
+        except json.JSONDecodeError as e:
+            raise InvariantViolation(
+                f"check 36: shards.shard_id={sid!r} has invalid members_json: {e}"
+            ) from e
+        if not members:
+            raise InvariantViolation(f"check 36: empty active shard {sid!r}")
 
 
 def _check_32_descriptor_cover_sni_matches_eu_nodes(conn: sqlite3.Connection) -> None:
