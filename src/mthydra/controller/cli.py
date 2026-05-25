@@ -551,6 +551,9 @@ def run(argv: list[str]) -> int:
                     "probe_audit_sweep_ran": 1,
                     "probe_coverage_proven": 2,
                     "probe_vantage_rotation_proven": 28 * 24,
+                    # Spec J — observability obligations.
+                    "obs_alerter_sweep_ran": 1,
+                    "obs_heartbeat_proven": 2,
                     "descriptor_signing_key_rotation": 8760,
                     "cover_pool_reverify_pass_proven": 60 * 24,
                     "cover_pool_replenishment_proven": 90 * 24,

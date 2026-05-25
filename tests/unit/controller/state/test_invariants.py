@@ -775,3 +775,74 @@ def test_check_40_warns_on_duplicate_region(tmp_db_path):
     # Should emit RuntimeWarning, NOT raise.
     with pytest.warns(RuntimeWarning, match="check 40"):
         check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+# --- spec J checks (#41–#42) ---
+
+def test_check_41_rejects_missing_alert_log_triggers(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute("DROP TRIGGER IF EXISTS alert_log_no_update")
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 41"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_42_passes_with_no_alert_log_rows(tmp_db_path):
+    """Fresh install: no alert_log rows -> no spurious raise."""
+    conn = _seeded(tmp_db_path)
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_42_passes_with_fresh_heartbeat(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+        "kind, target, dedupe_key, payload) "
+        "VALUES (?, ?, 'email', 'heartbeat', 'heartbeat', NULL, 'h', 'ok')",
+        ("2026-05-19T00:00:00Z", "2026-05-19T00:00:01Z"),
+    )
+    conn.commit()
+    # NOW = "2026-05-19T00:00:00Z" — 1 second age -> fresh.
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_42_raises_on_stale_heartbeat(tmp_db_path):
+    """alert_log has a row, but heartbeat is > 2h old."""
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+        "kind, target, dedupe_key, payload) "
+        "VALUES (?, ?, 'email', 'heartbeat', 'heartbeat', NULL, 'h', 'ok')",
+        ("2026-05-18T20:00:00Z", "2026-05-18T20:00:01Z"),
+    )
+    # Some non-heartbeat row too so the table is non-empty even if heartbeat
+    # check finds nothing recent.
+    conn.execute(
+        "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+        "kind, target, dedupe_key, payload) "
+        "VALUES (?, NULL, 'telegram', 'warn', 'x', NULL, 'k', 'p')",
+        ("2026-05-19T00:00:00Z",),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 42"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_42_skipped_on_standby(tmp_db_path):
+    """Standby nodes don't emit heartbeats; check 42 should skip."""
+    conn = _seeded(tmp_db_path)
+    conn.execute("UPDATE node_state SET role='standby' WHERE rowid=1")
+    conn.execute(
+        "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+        "kind, target, dedupe_key, payload) "
+        "VALUES (?, NULL, 'telegram', 'warn', 'x', NULL, 'k', 'p')",
+        ("2026-05-19T00:00:00Z",),
+    )
+    conn.commit()
+    # Spec F check 23 will complain about credential_authority on standby,
+    # so we expect a different InvariantViolation — not check 42.
+    try:
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+    except InvariantViolation as e:
+        # Must NOT be the heartbeat check.
+        assert "check 42" not in str(e)

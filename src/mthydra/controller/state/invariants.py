@@ -339,6 +339,12 @@ def check_all(
         _check_39_promoted_image_has_profile(conn)
         _check_40_active_vantage_distinct_region(conn)
 
+    # --- spec J checks (#41–#42) — gated on schema v9+ ---
+
+    if expected_schema_version >= 9:
+        _check_41_alert_log_triggers_present(conn)
+        _check_42_heartbeat_freshness_at_startup(conn, now_iso=_now_str)
+
 
 def _check_29_reality_uuid_unique(conn: sqlite3.Connection) -> None:
     """No two ru_boxes share a reality_uuid (defence against accidental double-assign)."""
@@ -379,6 +385,68 @@ def _check_31_eu_node_active_has_cover_sni(conn: sqlite3.Connection) -> None:
         raise InvariantViolation(
             f"check 31: eu_nodes.node_id={row[0]!r} role={row[1]!r} "
             f"missing cover_sni={row[2]!r} or reality_pubkey={row[3]!r}"
+        )
+
+
+def _check_41_alert_log_triggers_present(conn: sqlite3.Connection) -> None:
+    """Both append-only triggers must be present on alert_log."""
+    trigs = {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        ).fetchall()
+    }
+    for required in ("alert_log_no_update", "alert_log_no_delete"):
+        if required not in trigs:
+            raise InvariantViolation(
+                f"check 41: alert-log trigger {required} is missing"
+            )
+
+
+def _check_42_heartbeat_freshness_at_startup(
+    conn: sqlite3.Connection, *, now_iso: str,
+) -> None:
+    """If alert_log has any rows, the most-recent successful heartbeat must be
+    within 2 hours (the default heartbeat cadence × 2). Fresh installs with no
+    rows are exempt to avoid spurious raise.
+
+    Active-only: standby nodes do not emit heartbeats.
+    """
+    from datetime import datetime, timezone
+
+    role_row = conn.execute(
+        "SELECT role FROM node_state WHERE rowid=1"
+    ).fetchone()
+    if role_row is None or role_row[0] != "active":
+        return
+    total = conn.execute(
+        "SELECT COUNT(*) FROM alert_log"
+    ).fetchone()[0]
+    if total == 0:
+        return
+    row = conn.execute(
+        "SELECT attempted_at FROM alert_log "
+        "WHERE severity='heartbeat' AND delivered_at IS NOT NULL "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        raise InvariantViolation(
+            "check 42: alert_log has rows but no successful heartbeat ever"
+        )
+    try:
+        last_s = int(
+            datetime.strptime(row[0], "%Y-%m-%dT%H:%M:%SZ")
+            .replace(tzinfo=timezone.utc).timestamp()
+        )
+        now_s = int(
+            datetime.strptime(now_iso, "%Y-%m-%dT%H:%M:%SZ")
+            .replace(tzinfo=timezone.utc).timestamp()
+        )
+    except (ValueError, OSError):
+        return
+    if now_s - last_s > 2 * 3600:
+        raise InvariantViolation(
+            f"check 42: last successful heartbeat was {row[0]}; "
+            f"more than 2h ago at startup (dead-man's-switch breach detected)"
         )
 
 
