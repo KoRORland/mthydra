@@ -17,6 +17,9 @@ _FIXED: dict[str, str] = {
     "shard_overdue_pending":           "warn",
     "shard_unassigned_pending":        "info",
     "obs_dead_mans_switch_breach":     "crit",
+    # Spec K — distribution channel anti-obligations (J severity table amendment).
+    "dist_user_unregistered":          "warn",
+    "dist_user_heartbeat_breach":      "crit",
 }
 
 # Age-graduated thresholds (seconds) for probe coverage gaps.

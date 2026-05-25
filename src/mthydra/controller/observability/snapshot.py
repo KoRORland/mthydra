@@ -32,6 +32,9 @@ _ANTI_PREFIXES = frozenset({
     "cover_pool_rotation_pending",
     "shard_overdue_pending",
     "shard_unassigned_pending",
+    # Spec K — distribution channel anti-obligations (J snapshot amendment).
+    "dist_user_unregistered",
+    "dist_user_heartbeat_breach",
 })
 
 

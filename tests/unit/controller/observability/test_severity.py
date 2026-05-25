@@ -23,6 +23,12 @@ def test_anti_unknown_defaults_warn():
     assert severity_for_anti("future_kind_we_have_not_added") == "warn"
 
 
+def test_anti_dist_user_kinds():
+    """Spec K amendment to spec J's severity table."""
+    assert severity_for_anti("dist_user_unregistered") == "warn"
+    assert severity_for_anti("dist_user_heartbeat_breach") == "crit"
+
+
 def test_anti_probe_coverage_graduated():
     assert severity_for_anti("probe_coverage_pending", age_seconds=0) == "warn"
     assert severity_for_anti("probe_coverage_pending", age_seconds=3000) == "warn"

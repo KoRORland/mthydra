@@ -180,6 +180,31 @@ def test_summary_line_present(conn):
     assert "live boxes" in snap.summary_line
 
 
+def test_dist_user_unregistered_classified_as_anti(conn):
+    """Spec K amendment: dist_user_unregistered::* must be classified as anti."""
+    from mthydra.controller.state.obligations import set_obligation
+    set_obligation(conn,
+                   obligation_id="dist_user_unregistered::u1",
+                   last_proven_at=NOW, proven_by="x",
+                   next_due_at=NOW, details=None)
+    snap = collect_snapshot(conn, now=NOW)
+    assert len(snap.anti_obligations) == 1
+    a = snap.anti_obligations[0]
+    assert a.kind == "dist_user_unregistered"
+    assert a.target == "u1"
+    assert a.severity == "warn"
+
+
+def test_dist_user_heartbeat_breach_classified_as_crit(conn):
+    from mthydra.controller.state.obligations import set_obligation
+    set_obligation(conn,
+                   obligation_id="dist_user_heartbeat_breach::u1",
+                   last_proven_at=NOW, proven_by="x",
+                   next_due_at=NOW, details=None)
+    snap = collect_snapshot(conn, now=NOW)
+    assert snap.anti_obligations[0].severity == "crit"
+
+
 def test_probe_coverage_pending_graduates_to_crit(conn):
     # Insert a probe_coverage_pending whose last_proven_at is > 6h ago.
     set_obligation(conn,
