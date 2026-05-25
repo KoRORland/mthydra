@@ -414,7 +414,11 @@ def run(argv: list[str]) -> int:
                     "t3_profile_repin": 0,
                     "t4_upstream_check": 168,
                     "t5_pool_revalidation": 168,
-                    "t6_reshuffle": 168,
+                    # Spec H: replaces the placeholder t6_reshuffle. Cadence
+                    # is reshuffle_interval_days x 2 (default 14d x 2 = 28d).
+                    "shard_reshuffle_proven": 28 * 24,
+                    "shard_reshuffle_sweep_ran": 1,
+                    "shard_disjointness_check_proven": 24,
                     "descriptor_signing_key_rotation": 8760,
                     "cover_pool_reverify_pass_proven": 60 * 24,
                     "cover_pool_replenishment_proven": 90 * 24,
