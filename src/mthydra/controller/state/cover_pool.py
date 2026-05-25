@@ -76,7 +76,40 @@ def attest_verified(
     evidence: str | None = None,
     actor: str = "operator",
 ) -> None:
-    """candidate_unverified → candidate_verified (C-D1, operator-attested for MVP)."""
+    """candidate_unverified → candidate_verified (C-D1, operator-attested for MVP).
+
+    Spec I §13 amendment: when the probe_vantages registry exists (schema v8+),
+    `from_vantage` must reference an active row. Pre-v8 deployments (no
+    probe_vantages table yet) fall through with a free-text label.
+    """
+    has_registry = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='probe_vantages'"
+    ).fetchone()
+    if has_registry is not None:
+        # Spec I §13 amendment: enforce vantage-registry coupling only when the
+        # registry is non-empty. An empty registry means the operator has not yet
+        # populated it (pre-spec-I-rollout transitional state); free-text labels
+        # remain accepted during that window. Once any row exists, the operator
+        # is responsible for either registering all vantage labels or accepting
+        # the refusal. The runbook is the place that closes this window.
+        registry_populated = conn.execute(
+            "SELECT 1 FROM probe_vantages LIMIT 1"
+        ).fetchone()
+        if registry_populated is not None:
+            row = conn.execute(
+                "SELECT state FROM probe_vantages WHERE label=?",
+                (from_vantage,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(
+                    f"vantage label {from_vantage!r} not in probe_vantages registry; "
+                    "run mthydra-controller vantage-add + vantage-attest-active first"
+                )
+            if row[0] != "active":
+                raise ValueError(
+                    f"vantage label {from_vantage!r} is in state={row[0]!r}; "
+                    "only 'active' vantages may attest"
+                )
     cur = conn.execute(
         "UPDATE cover_domain_pool SET state='candidate_verified', "
         "verified_from_vantage=?, last_verified_at=? "

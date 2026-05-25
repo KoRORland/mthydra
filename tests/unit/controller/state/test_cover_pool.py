@@ -220,3 +220,79 @@ def test_rotate_and_burn_refuses_missing(conn):
             last_box_id="none",
             at=NOW,
         )
+
+
+# --- Spec I §13 amendment (C×I): vantage label must be a registered active row ---
+
+
+def test_attest_verified_allows_free_text_when_registry_empty(tmp_db_path):
+    """Empty probe_vantages registry preserves pre-amendment behavior."""
+    from mthydra.controller.state.cover_pool import add_candidate, attest_verified
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    add_candidate(conn, "x.org", added_at="2026-05-25T00:00:00Z")
+    # No probe_vantages rows -> free-text label accepted.
+    attest_verified(conn, "x.org", from_vantage="ru-vps-01",
+                    at="2026-05-25T01:00:00Z")
+    state = conn.execute(
+        "SELECT state FROM cover_domain_pool WHERE domain='x.org'"
+    ).fetchone()[0]
+    assert state == "candidate_verified"
+
+
+def test_attest_verified_refuses_unknown_vantage_when_registry_populated(tmp_db_path):
+    """If probe_vantages has any rows, vantage label must be one of them."""
+    from mthydra.controller.state.cover_pool import add_candidate, attest_verified
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_vantages import add_candidate as add_vantage
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    add_candidate(conn, "x.org", added_at="2026-05-25T00:00:00Z")
+    # Registered (candidate state) — populates the registry.
+    add_vantage(conn, vantage_id="v1", label="kz1", source_kind="x",
+                at="2026-05-25T00:00:00Z")
+    with pytest.raises(ValueError, match="not in probe_vantages registry"):
+        attest_verified(conn, "x.org", from_vantage="typo-vantage",
+                        at="2026-05-25T01:00:00Z")
+
+
+def test_attest_verified_refuses_non_active_vantage(tmp_db_path):
+    """Vantage exists but is not in state='active' -> refuse."""
+    from mthydra.controller.state.cover_pool import add_candidate, attest_verified
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_vantages import add_candidate as add_vantage
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    add_candidate(conn, "x.org", added_at="2026-05-25T00:00:00Z")
+    add_vantage(conn, vantage_id="v1", label="kz1", source_kind="x",
+                at="2026-05-25T00:00:00Z")
+    # kz1 is in 'candidate' state — not yet attested as active.
+    with pytest.raises(ValueError, match=r"state='candidate'"):
+        attest_verified(conn, "x.org", from_vantage="kz1",
+                        at="2026-05-25T01:00:00Z")
+
+
+def test_attest_verified_accepts_active_vantage(tmp_db_path):
+    from mthydra.controller.state.cover_pool import add_candidate, attest_verified
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_vantages import (
+        add_candidate as add_vantage, attest_active,
+    )
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_db_path)
+    apply_schema(conn)
+    add_candidate(conn, "x.org", added_at="2026-05-25T00:00:00Z")
+    add_vantage(conn, vantage_id="v1", label="kz1", source_kind="x",
+                at="2026-05-25T00:00:00Z")
+    attest_active(conn, "v1", at="2026-05-25T00:00:01Z")
+    # Now kz1 is active.
+    attest_verified(conn, "x.org", from_vantage="kz1",
+                    at="2026-05-25T01:00:00Z")
+    state = conn.execute(
+        "SELECT state FROM cover_domain_pool WHERE domain='x.org'"
+    ).fetchone()[0]
+    assert state == "candidate_verified"
