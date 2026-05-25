@@ -240,3 +240,30 @@ def test_health_handles_empty_fleet(conn):
     assert h.unassigned_users == []
     assert h.total_active == 0
     assert h.total_retired == 0
+
+
+def test_list_all_includes_retired(conn):
+    from mthydra.controller.state.shards import list_all
+
+    create_shard(conn, shard_id="s1", members=[], target_size=2,
+                 at="2026-05-24T00:00:00Z")
+    create_shard(conn, shard_id="s2", members=[], target_size=2,
+                 at="2026-05-24T00:00:00Z")
+    retire_shard(conn, "s1", at="2026-05-24T01:00:00Z")
+    everything = list_all(conn)
+    assert sorted(s.shard_id for s in everything) == ["s1", "s2"]
+
+
+def test_assign_box_to_shard_refuses_missing_box(conn):
+    create_shard(conn, shard_id="s1", members=[], target_size=2,
+                 at="2026-05-24T00:00:00Z")
+    with pytest.raises(LookupError):
+        assign_box_to_shard(conn, box_id="nope", shard_id="s1",
+                            at="2026-05-24T00:01:00Z")
+
+
+def test_reshuffle_refuses_missing_old_shard(conn):
+    with pytest.raises(LookupError):
+        reshuffle(conn, "nope", now="2026-05-24T00:00:00Z",
+                  target_size=2, new_shard_id="s-new",
+                  new_members=[], reason="ttl")

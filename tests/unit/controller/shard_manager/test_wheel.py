@@ -189,3 +189,78 @@ def test_arm_and_disarm_in_production_mode(tmp_path):
     assert wheel._scheduler is not None
     wheel.disarm()
     assert wheel._scheduler is None
+
+
+def test_default_clock_and_default_shard_id_factory(tmp_path):
+    """Smoke-cover the default callables used when tests don't override."""
+    from mthydra.controller.shard_manager.wheel import (
+        _default_clock,
+        _default_shard_id,
+    )
+    ts = _default_clock()
+    assert ts.endswith("Z") and "T" in ts
+    sid = _default_shard_id()
+    # uuid4 yields 36-char hex form.
+    assert len(sid) == 36 and sid.count("-") == 4
+
+
+def test_run_once_retires_empty_overdue_shard(tmp_path):
+    """Edge case: an overdue shard with no members. Spec H §7.1 step retire-and-skip."""
+    db, conn = _seed(tmp_path)
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES ('s1', '[]', 2, '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    wheel = ShardReshuffleWheel(
+        db, target_size=2, max_size=3, reshuffle_interval_days=14,
+        sweep_interval_seconds=3600, mode="offline",
+        clock=lambda: "2026-05-21T00:00:00Z",
+        shard_id_factory=_ids_iter(),
+    )
+    result = wheel.run_once()
+    # No primary reshuffle row (empty shard short-circuits to retire).
+    assert result["reshuffled"] == []
+    conn2 = connect(db)
+    retired_at = conn2.execute(
+        "SELECT retired_at FROM shards WHERE shard_id='s1'"
+    ).fetchone()[0]
+    assert retired_at == "2026-05-21T00:00:00Z"
+    conn2.close()
+
+
+def test_run_once_handles_leftover_chunks(tmp_path):
+    """Shard members > target_size: picker produces leftover chunks; each becomes its own shard."""
+    import json as _json
+    db, conn = _seed(tmp_path)
+    # Shard with 4 members at target_size 2 — reshuffle yields 2 chunks (one
+    # primary + one leftover).
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES ('s1', ?, 2, '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z')",
+        (_json.dumps(["u1", "u2", "u3", "u4"]),),
+    )
+    for u in ["u1", "u2", "u3", "u4"]:
+        conn.execute(
+            "INSERT INTO users (user_id, display_name, out_of_band_channel, current_shard_id, added_at) "
+            "VALUES (?, NULL, 'email', 's1', '2026-05-01T00:00:00Z')",
+            (u,),
+        )
+    conn.commit()
+    conn.close()
+    wheel = ShardReshuffleWheel(
+        db, target_size=2, max_size=3, reshuffle_interval_days=14,
+        sweep_interval_seconds=3600, mode="offline",
+        clock=lambda: "2026-05-21T00:00:00Z",
+        shard_id_factory=_ids_iter(),
+    )
+    result = wheel.run_once()
+    # primary + leftover = 2 new shards from this reshuffle.
+    assert len(result["reshuffled"]) == 2
+    conn2 = connect(db)
+    n_active = conn2.execute(
+        "SELECT COUNT(*) FROM shards WHERE retired_at IS NULL"
+    ).fetchone()[0]
+    assert n_active == 2
+    conn2.close()
