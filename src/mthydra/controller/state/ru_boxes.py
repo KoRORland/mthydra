@@ -30,11 +30,15 @@ def insert_box(
     sni: str,
     image_version: str,
     created_at: str,
+    *,
+    is_canary: bool = False,
 ) -> None:
     conn.execute(
-        "INSERT INTO ru_boxes (box_id, provider, region, public_ip, sni, state, image_version, created_at) "
-        "VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?)",
-        (box_id, provider, region, public_ip, sni, image_version, created_at),
+        "INSERT INTO ru_boxes (box_id, provider, region, public_ip, sni, state, "
+        "image_version, created_at, is_canary) "
+        "VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?, ?)",
+        (box_id, provider, region, public_ip, sni, image_version,
+         created_at, 1 if is_canary else 0),
     )
     conn.commit()
 
@@ -84,3 +88,50 @@ def list_live(conn: sqlite3.Connection) -> list[Box]:
         "FROM ru_boxes WHERE state='live' ORDER BY box_id"
     ).fetchall()
     return [Box(*r) for r in rows]
+
+
+def list_canary_boxes(
+    conn: sqlite3.Connection,
+    *,
+    image_version: str | None = None,
+    state_filter: tuple[str, ...] | None = None,
+) -> list[str]:
+    """Return box_ids of canary boxes, optionally filtered by image_version + state."""
+    sql = "SELECT box_id FROM ru_boxes WHERE is_canary=1"
+    params: list[object] = []
+    if image_version is not None:
+        sql += " AND image_version=?"
+        params.append(image_version)
+    if state_filter is not None:
+        placeholders = ",".join("?" * len(state_filter))
+        sql += f" AND state IN ({placeholders})"
+        params.extend(state_filter)
+    sql += " ORDER BY box_id"
+    return [r[0] for r in conn.execute(sql, params).fetchall()]
+
+
+def clear_canary_flag(
+    conn: sqlite3.Connection,
+    box_id: str,
+    *,
+    at: str,
+    reason: str,
+) -> None:
+    """Demote a canary box to regular fleet. Writes an audit row."""
+    import json as _json
+    from mthydra.controller.state import audit
+    row = conn.execute(
+        "SELECT is_canary FROM ru_boxes WHERE box_id=?", (box_id,)
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"no box {box_id!r}")
+    if row[0] == 0:
+        raise ValueError(f"box {box_id!r} is not a canary")
+    conn.execute(
+        "UPDATE ru_boxes SET is_canary=0 WHERE box_id=?",
+        (box_id,),
+    )
+    audit.log_event(
+        conn, ts=at, actor="operator", action="ru_box_canary_clear",
+        target=box_id, details_json=_json.dumps({"reason": reason}),
+    )

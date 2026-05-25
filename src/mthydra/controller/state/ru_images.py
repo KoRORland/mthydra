@@ -196,6 +196,28 @@ def list_images(
     return [RUImage(*r) for r in rows]
 
 
+def list_live_boxes_for_image(
+    conn: sqlite3.Connection,
+    image_version: str,
+    *,
+    include_terminated: bool = False,
+) -> list[str]:
+    """Return box_ids built from this image_version. Spec D2: rollback uses this
+    to enumerate the boxes needing replacement."""
+    if include_terminated:
+        rows = conn.execute(
+            "SELECT box_id FROM ru_boxes WHERE image_version=? ORDER BY box_id",
+            (image_version,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT box_id FROM ru_boxes "
+            "WHERE image_version=? AND state IN ('provisioning','live') ORDER BY box_id",
+            (image_version,),
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
 def get_image(conn: sqlite3.Connection, image_version: str) -> RUImage:
     row = conn.execute(
         f"SELECT {_COLS} FROM ru_images WHERE image_version=?", (image_version,)
