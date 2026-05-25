@@ -2940,3 +2940,67 @@ def test_serve_refuses_active_without_distribution_credentials(
     assert rc == 2
     err = capsys.readouterr().err
     assert "[distribution.telegram]" in err
+
+
+# ===== spec D2: provision-seed --canary + canary clear =====
+
+
+def test_provision_seed_canary_flag_marks_row(tmp_path, age_recipient, monkeypatch):
+    """Spec D2: --canary flag plumbs through to ru_boxes.is_canary."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+
+    from mthydra.controller.backup.s3_dest import S3Destination
+    monkeypatch.setattr(
+        S3Destination, "presigned_image_url",
+        lambda self, *, image_version, ttl_seconds=3600: (
+            f"https://b2.example/{image_version}/mtg?sig=stub",
+            "2026-05-21T01:00:00Z",
+        ),
+    )
+    _setup_provision_prereqs(db, age_recipient, cfg_path)
+    rc = run(["provision-seed",
+              "--provider", "hetzner", "--region", "fsn1",
+              "--canary",
+              "--db-path", str(db), "--config", str(cfg_path),
+              *_PROVISION_V2_ARGS])
+    assert rc == 0
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT is_canary FROM ru_boxes ORDER BY box_id DESC LIMIT 1"
+    ).fetchone()
+    assert row[0] == 1
+    conn.close()
+
+
+def test_provision_seed_without_canary_marks_zero(tmp_path, age_recipient, monkeypatch):
+    """Spec D2: without --canary, is_canary defaults to 0."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+
+    from mthydra.controller.backup.s3_dest import S3Destination
+    monkeypatch.setattr(
+        S3Destination, "presigned_image_url",
+        lambda self, *, image_version, ttl_seconds=3600: (
+            f"https://b2.example/{image_version}/mtg?sig=stub",
+            "2026-05-21T01:00:00Z",
+        ),
+    )
+    _setup_provision_prereqs(db, age_recipient, cfg_path)
+    rc = run(["provision-seed",
+              "--provider", "hetzner", "--region", "fsn1",
+              "--db-path", str(db), "--config", str(cfg_path),
+              *_PROVISION_V2_ARGS])
+    assert rc == 0
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT is_canary FROM ru_boxes ORDER BY box_id DESC LIMIT 1"
+    ).fetchone()
+    assert row[0] == 0
+    conn.close()

@@ -135,6 +135,7 @@ def provision_box(
     telegram_dcs_v4: tuple[str, ...],
     telegram_dcs_v6: tuple[str, ...],
     actor: str = "operator",
+    is_canary: bool = False,
 ) -> SeedBundle:
     # 1. Authority must be real Ed25519 (not placeholder).
     try:
@@ -206,15 +207,18 @@ def provision_box(
         "sni": picked.domain,
         "image_version": image.image_version,
         "authority_generation": auth.generation,
+        "is_canary": bool(is_canary),
     }, separators=(",", ":"))
     try:
         conn.execute("BEGIN")
         # ru_boxes insert (state='provisioning')
         conn.execute(
             "INSERT INTO ru_boxes "
-            "(box_id, provider, region, public_ip, sni, state, image_version, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?)",
-            (box_id, provider, region, None, picked.domain, image.image_version, now),
+            "(box_id, provider, region, public_ip, sni, state, image_version, "
+            "created_at, is_canary) "
+            "VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?, ?)",
+            (box_id, provider, region, None, picked.domain, image.image_version,
+             now, 1 if is_canary else 0),
         )
         # Write reality_uuid (Spec E: per-box Reality UUID, embedded in seed).
         conn.execute(

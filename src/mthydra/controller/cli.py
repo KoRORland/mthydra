@@ -361,6 +361,8 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--agent-source-url", required=True)
     ps.add_argument("--agent-source-sha256", required=True)
     ps.add_argument("--descriptor-refresh-url", required=True)
+    ps.add_argument("--canary", action="store_true", dest="is_canary",
+                     help="mark the resulting ru_box as is_canary=1 (spec D2 soak)")
 
     des = sub.add_parser("data-exit-status",
                           help="show sing-box wheel status for an EU node")
@@ -2322,6 +2324,7 @@ def _cmd_provision_seed(args) -> int:
                 agent_source_sha256=args.agent_source_sha256,
                 telegram_dcs_v4=cfg.data_exit.telegram_dcs_v4,
                 telegram_dcs_v6=cfg.data_exit.telegram_dcs_v6,
+                is_canary=args.is_canary,
             )
         except ProvisionError as e:
             print(f"provision-seed: {e}", file=sys.stderr)
