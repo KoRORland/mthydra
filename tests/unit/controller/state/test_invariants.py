@@ -651,3 +651,127 @@ def test_check_33_passes_when_live_box_has_shard(tmp_db_path):
     )
     conn.commit()
     check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+# --- spec I checks (#37–#40) ---
+
+def _seed_image_and_vantage(conn, image_version="v1", vantage_id="vk", label="kz1", state="active"):
+    conn.execute(
+        "INSERT OR IGNORE INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES (?, 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', ?)",
+        (image_version, NOW),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES (?, ?, 'cloud-cis', ?, ?)",
+        (vantage_id, label, state, NOW),
+    )
+    conn.commit()
+
+
+def test_check_37_rejects_dup_label(tmp_db_path):
+    """Seed a duplicate label by bypassing the UNIQUE constraint via DROP+recreate."""
+    conn = _seeded(tmp_db_path)
+    _seed_image_and_vantage(conn, vantage_id="v1", label="kz1")
+    # Drop and recreate probe_vantages WITHOUT the UNIQUE on label to seed the bad state.
+    conn.execute("DROP TABLE probe_vantages")
+    conn.execute(
+        "CREATE TABLE probe_vantages ("
+        "  vantage_id TEXT PRIMARY KEY, label TEXT NOT NULL, source_kind TEXT NOT NULL,"
+        "  region_hint TEXT,"
+        "  state TEXT NOT NULL CHECK (state IN ('candidate','active','retired','burned')),"
+        "  added_at TEXT NOT NULL, attested_at TEXT, last_used_at TEXT,"
+        "  retired_at TEXT, burned_at TEXT, burn_reason TEXT, notes TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('v1', 'kz1', 'cloud-cis', 'active', ?)",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('v2', 'kz1', 'cloud-cis', 'active', ?)",
+        (NOW,),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 37"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_38_rejects_orphan_probe_result(tmp_db_path):
+    """Seed an orphan probe_results row by deleting the parent vantage with FK off."""
+    conn = _seeded(tmp_db_path)
+    _seed_image_and_vantage(conn)
+    # Use a provisioning box + a credential so checks #27/#30/#33 don't fire first.
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'provisioning', 'v1', ?)",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO onward_credentials (cred_id, box_id, credential, issued_at, authority_generation) "
+        "VALUES ('c1', 'b1', X'aa', ?, 1)",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO probe_results (box_id, vantage_id, cycle_at, check_type, status, "
+        "image_version, recorded_at) VALUES ('b1', 'vk', ?, 'surface_scan', 'pass', 'v1', ?)",
+        (NOW, NOW),
+    )
+    conn.commit()
+    # PRAGMA foreign_keys=OFF must be set OUTSIDE a transaction.
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("DELETE FROM probe_vantages WHERE vantage_id='vk'")
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = ON")
+    with pytest.raises(InvariantViolation, match="check 38"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_39_rejects_promoted_without_profile(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at, promoted_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'promoted', ?, ?)",
+        (NOW, NOW),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 39"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_39_passes_when_profile_pinned(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at, promoted_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'promoted', ?, ?)",
+        (NOW, NOW),
+    )
+    conn.execute(
+        "INSERT INTO image_profiles (image_version, profile_json, recorded_at, recorded_by) "
+        "VALUES ('v1', '{}', ?, 'op')",
+        (NOW,),
+    )
+    conn.commit()
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_40_warns_on_duplicate_region(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, region_hint, state, added_at) "
+        "VALUES ('v1', 'kz1', 'cloud-cis', 'KZ-almaty', 'active', ?)",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, region_hint, state, added_at) "
+        "VALUES ('v2', 'kz2', 'cloud-cis', 'KZ-almaty', 'active', ?)",
+        (NOW,),
+    )
+    conn.commit()
+    # Should emit RuntimeWarning, NOT raise.
+    with pytest.warns(RuntimeWarning, match="check 40"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)

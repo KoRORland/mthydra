@@ -331,6 +331,14 @@ def check_all(
         _check_35_no_cross_shard_user(conn)
         _check_36_no_empty_active_shard(conn)
 
+    # --- spec I checks (#37–#40) — gated on schema v8+ ---
+
+    if expected_schema_version >= 8:
+        _check_37_vantage_label_unique(conn)
+        _check_38_probe_results_no_orphan(conn)
+        _check_39_promoted_image_has_profile(conn)
+        _check_40_active_vantage_distinct_region(conn)
+
 
 def _check_29_reality_uuid_unique(conn: sqlite3.Connection) -> None:
     """No two ru_boxes share a reality_uuid (defence against accidental double-assign)."""
@@ -371,6 +379,72 @@ def _check_31_eu_node_active_has_cover_sni(conn: sqlite3.Connection) -> None:
         raise InvariantViolation(
             f"check 31: eu_nodes.node_id={row[0]!r} role={row[1]!r} "
             f"missing cover_sni={row[2]!r} or reality_pubkey={row[3]!r}"
+        )
+
+
+def _check_37_vantage_label_unique(conn: sqlite3.Connection) -> None:
+    """Defence-in-depth on the UNIQUE constraint."""
+    dup = conn.execute(
+        "SELECT label, COUNT(*) FROM probe_vantages "
+        "GROUP BY label HAVING COUNT(*) > 1 LIMIT 1"
+    ).fetchone()
+    if dup is not None:
+        raise InvariantViolation(
+            f"check 37: probe_vantages.label={dup[0]!r} shared by {dup[1]} rows"
+        )
+
+
+def _check_38_probe_results_no_orphan(conn: sqlite3.Connection) -> None:
+    """Every probe_results row references a real box + vantage + image."""
+    row = conn.execute(
+        "SELECT pr.id FROM probe_results pr "
+        "LEFT JOIN ru_boxes rb ON rb.box_id = pr.box_id "
+        "LEFT JOIN probe_vantages pv ON pv.vantage_id = pr.vantage_id "
+        "LEFT JOIN ru_images ri ON ri.image_version = pr.image_version "
+        "WHERE rb.box_id IS NULL OR pv.vantage_id IS NULL OR ri.image_version IS NULL "
+        "LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 38: probe_results.id={row[0]} orphans (box/vantage/image missing)"
+        )
+
+
+def _check_39_promoted_image_has_profile(conn: sqlite3.Connection) -> None:
+    """Every 'promoted' ru_image row has an image_profiles row."""
+    row = conn.execute(
+        "SELECT ri.image_version FROM ru_images ri "
+        "LEFT JOIN image_profiles ip ON ip.image_version = ri.image_version "
+        "WHERE ri.state='promoted' AND ip.image_version IS NULL LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 39: ru_images.image_version={row[0]!r} is promoted "
+            "but has no image_profiles row (T3 stale-profile risk)"
+        )
+
+
+def _check_40_active_vantage_distinct_region(conn: sqlite3.Connection) -> None:
+    """Warn (not raise) when two active vantages share (source_kind, region_hint).
+
+    Cosmetic rotation: two vantages with the same source_kind + region_hint
+    are not independent for fingerprint purposes. The operator may have a
+    legitimate reason (two separate VMs); spec I residual #6 documents the
+    decision to warn rather than raise.
+    """
+    import warnings
+
+    row = conn.execute(
+        "SELECT source_kind, region_hint, COUNT(*) FROM probe_vantages "
+        "WHERE state='active' AND region_hint IS NOT NULL "
+        "GROUP BY source_kind, region_hint HAVING COUNT(*) > 1 LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        warnings.warn(
+            f"check 40: {row[2]} active vantages share source_kind={row[0]!r} + "
+            f"region_hint={row[1]!r}; rotation may be cosmetic",
+            RuntimeWarning,
+            stacklevel=2,
         )
 
 
