@@ -112,6 +112,34 @@ class ProbeConfig:
 
 
 @dataclass(frozen=True)
+class TelegramConfig:
+    bot_token: str
+    chat_id: str
+
+
+@dataclass(frozen=True)
+class EmailConfig:
+    smtp_host: str
+    smtp_port: int
+    from_addr: str
+    to_addr: str
+    username: str
+    password: str
+
+
+@dataclass(frozen=True)
+class ObservabilityConfig:
+    alerter_sweep_interval_seconds: int
+    heartbeat_interval_seconds: int
+    heartbeat_breach_threshold: int
+    alert_dedupe_window_warn_seconds: int
+    alert_dedupe_window_crit_seconds: int
+    alert_dedupe_window_info_seconds: int
+    telegram: TelegramConfig | None
+    email: EmailConfig | None
+
+
+@dataclass(frozen=True)
 class Config:
     node: NodeConfig
     backup: BackupConfig
@@ -123,6 +151,7 @@ class Config:
     image: ImageConfig
     shard_manager: ShardManagerConfig
     probe: ProbeConfig
+    observability: ObservabilityConfig
     data_exit: DataExitConfig | None = None
 
 
@@ -245,6 +274,62 @@ def _load_shard_manager(data: dict) -> ShardManagerConfig:
     )
 
 
+def _load_observability(data: dict) -> ObservabilityConfig:
+    sec = data.get("observability", {})
+    tg = sec.get("telegram", {})
+    em = sec.get("email", {})
+
+    def _tg() -> TelegramConfig | None:
+        token = str(tg.get("bot_token", ""))
+        chat = str(tg.get("chat_id", ""))
+        if not token or not chat:
+            return None
+        return TelegramConfig(bot_token=token, chat_id=chat)
+
+    def _em() -> EmailConfig | None:
+        host = str(em.get("smtp_host", ""))
+        port = int(em.get("smtp_port", 587))
+        from_addr = str(em.get("from_addr", ""))
+        to_addr = str(em.get("to_addr", ""))
+        username = str(em.get("username", ""))
+        password = str(em.get("password", ""))
+        if not (host and from_addr and to_addr and username and password):
+            return None
+        return EmailConfig(
+            smtp_host=host, smtp_port=port, from_addr=from_addr,
+            to_addr=to_addr, username=username, password=password,
+        )
+
+    return ObservabilityConfig(
+        alerter_sweep_interval_seconds=_parse_interval_seconds(
+            "observability.alerter_sweep_interval",
+            sec.get("alerter_sweep_interval", 120),
+        ),
+        heartbeat_interval_seconds=_parse_interval_seconds(
+            "observability.heartbeat_interval",
+            sec.get("heartbeat_interval", 3600),
+        ),
+        heartbeat_breach_threshold=_require_positive(
+            "observability.heartbeat_breach_threshold",
+            sec.get("heartbeat_breach_threshold", 3),
+        ),
+        alert_dedupe_window_warn_seconds=_require_positive(
+            "observability.alert_dedupe_window_warn_seconds",
+            sec.get("alert_dedupe_window_warn_seconds", 3600),
+        ),
+        alert_dedupe_window_crit_seconds=_require_positive(
+            "observability.alert_dedupe_window_crit_seconds",
+            sec.get("alert_dedupe_window_crit_seconds", 900),
+        ),
+        alert_dedupe_window_info_seconds=_require_positive(
+            "observability.alert_dedupe_window_info_seconds",
+            sec.get("alert_dedupe_window_info_seconds", 21600),
+        ),
+        telegram=_tg(),
+        email=_em(),
+    )
+
+
 def _load_probe(data: dict) -> ProbeConfig:
     sec = data.get("probe", {})
     M = _require_positive("probe.soft_fail_window_M", sec.get("soft_fail_window_M", 4))
@@ -345,5 +430,6 @@ def load_config(path: Path | str) -> Config:
         image=_load_image(raw),
         shard_manager=_load_shard_manager(raw),
         probe=_load_probe(raw),
+        observability=_load_observability(raw),
         data_exit=_load_data_exit(raw),
     )

@@ -354,6 +354,70 @@ def test_load_config_probe_defaults(tmp_path):
     assert cfg.probe.min_distinct_vantages == 2
 
 
+def test_load_config_observability_section(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[observability]
+alerter_sweep_interval = "2m"
+heartbeat_interval = "1h"
+heartbeat_breach_threshold = 3
+
+[observability.telegram]
+bot_token = "abc"
+chat_id = "12345"
+
+[observability.email]
+smtp_host = "smtp.example.org"
+smtp_port = 587
+from_addr = "ops@example.org"
+to_addr = "operator@example.org"
+username = "ops@example.org"
+password = "app-pw"
+"""
+    )
+    cfg = load_config(p)
+    assert cfg.observability.alerter_sweep_interval_seconds == 120
+    assert cfg.observability.heartbeat_interval_seconds == 3600
+    assert cfg.observability.heartbeat_breach_threshold == 3
+    assert cfg.observability.telegram is not None
+    assert cfg.observability.telegram.bot_token == "abc"
+    assert cfg.observability.email is not None
+    assert cfg.observability.email.smtp_port == 587
+
+
+def test_load_config_observability_credentials_optional(tmp_path):
+    """Missing telegram/email leaves them as None — the active-mode refusal
+    happens in _cmd_serve, not the loader."""
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(_MIN_BASE_TOML)
+    cfg = load_config(p)
+    assert cfg.observability.telegram is None
+    assert cfg.observability.email is None
+
+
+def test_load_config_observability_partial_credentials_none(tmp_path):
+    """A credential section with one empty required field collapses to None."""
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[observability.telegram]
+bot_token = "abc"
+chat_id = ""
+"""
+    )
+    cfg = load_config(p)
+    assert cfg.observability.telegram is None
+
+
 def test_load_config_probe_rejects_N_above_M(tmp_path):
     from mthydra.controller.config import ConfigError, load_config
 

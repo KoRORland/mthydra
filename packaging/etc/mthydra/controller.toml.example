@@ -83,6 +83,31 @@ coverage_window_seconds       = 3600
 probe_vantage_ttl_days        = 14
 probe_audit_sweep_interval    = "5m"
 
+[observability]
+# Spec J — alerter + dead-man's-switch heartbeat. Both [observability.telegram]
+# and [observability.email] are REQUIRED on active nodes. The serve loop
+# refuses to start if either is missing.
+alerter_sweep_interval              = "2m"
+heartbeat_interval                  = "1h"
+heartbeat_breach_threshold          = 3
+alert_dedupe_window_warn_seconds    = 3600
+alert_dedupe_window_crit_seconds    = 900
+alert_dedupe_window_info_seconds    = 21600
+
+[observability.telegram]
+# Operator alert channel — NOT the user distribution channel (spec K).
+bot_token = ""
+chat_id   = ""
+
+[observability.email]
+# App password discipline: keep this file out of git in production.
+smtp_host = ""
+smtp_port = 587
+from_addr = ""
+to_addr   = ""
+username  = ""
+password  = ""
+
 [data_exit]
 listen_port = 443
 sing_box_socket = "/run/mthydra/sing-box.sock"

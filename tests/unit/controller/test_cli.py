@@ -307,8 +307,8 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
     from mthydra.controller.cli import _build_destination
     from mthydra.controller.config import (
         BackupConfig, Config, CoverPoolConfig, DescriptorConfig, GapMonitorConfig,
-        ImageConfig, NodeConfig, ObligationsConfig, ProbeConfig, RetentionConfig,
-        ShardManagerConfig, StandbyConfig,
+        ImageConfig, NodeConfig, ObligationsConfig, ObservabilityConfig,
+        ProbeConfig, RetentionConfig, ShardManagerConfig, StandbyConfig,
     )
 
     cfg = Config(
@@ -360,6 +360,16 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
             coverage_window_seconds=3600,
             probe_vantage_ttl_days=14,
             probe_audit_sweep_interval_seconds=300,
+        ),
+        observability=ObservabilityConfig(
+            alerter_sweep_interval_seconds=120,
+            heartbeat_interval_seconds=3600,
+            heartbeat_breach_threshold=3,
+            alert_dedupe_window_warn_seconds=3600,
+            alert_dedupe_window_crit_seconds=900,
+            alert_dedupe_window_info_seconds=21600,
+            telegram=None,
+            email=None,
         ),
     )
 
