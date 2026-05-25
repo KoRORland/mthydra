@@ -2107,3 +2107,94 @@ def test_cli_shard_stats_json(tmp_path, age_recipient, capsys):
     out = _json.loads(capsys.readouterr().out)
     assert out["total_active"] == 1
     assert sorted(out["unassigned_users"]) == ["u2", "u3"]
+
+
+def _make_live_box_in_shard(db, box_id, shard_id, target_size=2, members=None):
+    """Helper: insert a live box bound to an existing shard, with credential + reality_uuid."""
+    import json as _json
+    from mthydra.controller.state.credentials import issue_credential
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import insert_box, mark_live
+    members = members if members is not None else []
+    conn = connect(db)
+    # Ensure shard exists.
+    existing = conn.execute(
+        "SELECT 1 FROM shards WHERE shard_id=?", (shard_id,)
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO shards (shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+            "VALUES (?, ?, ?, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z')",
+            (shard_id, _json.dumps(members), target_size),
+        )
+        for u in members:
+            conn.execute(
+                "INSERT OR IGNORE INTO users (user_id, display_name, out_of_band_channel, "
+                "current_shard_id, added_at) "
+                "VALUES (?, NULL, 'email', ?, '2026-05-24T00:00:00Z')",
+                (u, shard_id),
+            )
+        conn.commit()
+    insert_box(conn, box_id, "p", "r", "10.0.0.1", f"sni-{box_id}.example",
+               "img-v1", "2026-05-24T00:00:00Z")
+    conn.execute("UPDATE ru_boxes SET shard_id=? WHERE box_id=?", (shard_id, box_id))
+    mark_live(conn, box_id, public_ip="10.0.0.1", at="2026-05-24T00:01:00Z")
+    issue_credential(conn, box_id, b"\x00" * 10, "2026-05-24T00:01:00Z", authority_generation=1)
+    conn.execute("UPDATE ru_boxes SET reality_uuid=? WHERE box_id=?",
+                 (f"uuid-{box_id}", box_id))
+    # Seed cover_domain_pool 'in_use' row for the SNI so mark_burned can find it.
+    conn.execute(
+        "INSERT INTO cover_domain_pool (domain, state, last_verified_at, verified_from_vantage, "
+        "assigned_box_id, added_at, entered_in_use_at) "
+        "VALUES (?, 'in_use', '2026-05-24T00:00:00Z', 'op', ?, '2026-05-24T00:00:00Z', "
+        "'2026-05-24T00:00:00Z')",
+        (f"sni-{box_id}.example", box_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_cli_ru_box_terminate_compromise_triggers_reshuffle(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    _make_live_box_in_shard(db, "b1", "s1", target_size=2, members=["u1", "u2"])
+    rc = run(["ru-box-terminate", "b1", "--reason", "compromise", "--db-path", str(db)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "compromise reshuffle" in out
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    retired_at = conn.execute(
+        "SELECT retired_at FROM shards WHERE shard_id='s1'"
+    ).fetchone()[0]
+    assert retired_at is not None
+    n_active = conn.execute(
+        "SELECT COUNT(*) FROM shards WHERE retired_at IS NULL"
+    ).fetchone()[0]
+    assert n_active == 1
+    audits = conn.execute(
+        "SELECT details_json FROM audit_log WHERE action='shard_reshuffle'"
+    ).fetchall()
+    assert len(audits) == 1
+    import json as _json
+    details = _json.loads(audits[0][0])
+    assert details["from"] == "s1"
+    assert details["reason"] == "compromise"
+
+
+def test_cli_ru_box_terminate_benign_reason_no_reshuffle(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    _make_live_box_in_shard(db, "b1", "s1", target_size=2, members=["u1", "u2"])
+    rc = run(["ru-box-terminate", "b1", "--reason", "aged_out", "--db-path", str(db)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "compromise reshuffle" not in out
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    retired_at = conn.execute(
+        "SELECT retired_at FROM shards WHERE shard_id='s1'"
+    ).fetchone()[0]
+    assert retired_at is None  # shard untouched
+    audits = conn.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE action='shard_reshuffle'"
+    ).fetchone()[0]
+    assert audits == 0

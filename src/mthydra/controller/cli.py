@@ -2060,7 +2060,10 @@ def _cmd_ru_box_mark_live(args) -> int:
 
 def _cmd_ru_box_terminate(args) -> int:
     import json as _json
+    import uuid as _uuid
 
+    from mthydra.controller.shard_manager.picker import pick_new_rosters
+    from mthydra.controller.state import shards as _shards
     from mthydra.controller.state.audit import log_event
     from mthydra.controller.state.burned import mark_burned
     from mthydra.controller.state.credentials import active_for_box, revoke_credential
@@ -2073,12 +2076,12 @@ def _cmd_ru_box_terminate(args) -> int:
         if rc is not None:
             return rc
         row = conn.execute(
-            "SELECT sni, state FROM ru_boxes WHERE box_id=?", (args.box_id,)
+            "SELECT sni, state, shard_id FROM ru_boxes WHERE box_id=?", (args.box_id,)
         ).fetchone()
         if row is None:
             print(f"ru-box-terminate: box {args.box_id!r} not found", file=sys.stderr)
             return 2
-        sni, prior_state = row
+        sni, prior_state, shard_id = row
         if prior_state == "terminated":
             print(f"ru-box-terminate: box {args.box_id!r} already terminated",
                   file=sys.stderr)
@@ -2097,7 +2100,53 @@ def _cmd_ru_box_terminate(args) -> int:
             details_json=_json.dumps({"reason": args.reason, "prior_state": prior_state},
                                      separators=(",", ":")),
         )
-        print(f"ru-box-terminate: {args.box_id} -> terminated; sni {sni!r} burned")
+
+        # Spec H H-D5: compromise terminate triggers immediate reshuffle of the
+        # affected shard. The shard_id was retained by the H-D2 trigger.
+        compromise_msg = ""
+        if args.reason == "compromise" and shard_id:
+            try:
+                shard = _shards.get_shard(conn, shard_id)
+            except LookupError:
+                shard = None
+            if shard is not None and shard.retired_at is None:
+                members = _json.loads(shard.members_json)
+                target_size = shard.target_size or 2
+                rosters = pick_new_rosters(
+                    current_members=members,
+                    unassigned=[],
+                    target_size=target_size,
+                )
+                if rosters:
+                    primary = rosters[0]
+                    new_sid = str(_uuid.uuid4())
+                    _shards.reshuffle(
+                        conn, shard_id,
+                        now=now,
+                        target_size=target_size,
+                        new_shard_id=new_sid,
+                        new_members=primary,
+                        reason="compromise",
+                    )
+                    for leftover in rosters[1:]:
+                        extra_sid = str(_uuid.uuid4())
+                        _shards.create_shard(
+                            conn, shard_id=extra_sid, members=leftover,
+                            target_size=target_size, at=now,
+                        )
+                        for u in leftover:
+                            conn.execute(
+                                "UPDATE users SET current_shard_id=? WHERE user_id=?",
+                                (extra_sid, u),
+                            )
+                        conn.commit()
+                    compromise_msg = f"; shard {shard_id} -> {new_sid} (compromise reshuffle)"
+                else:
+                    # Empty shard: retire it (covers the unlikely edge case).
+                    _shards.retire_shard(conn, shard_id, at=now)
+                    compromise_msg = f"; shard {shard_id} retired (empty)"
+
+        print(f"ru-box-terminate: {args.box_id} -> terminated; sni {sni!r} burned{compromise_msg}")
         return 0
     finally:
         conn.close()
