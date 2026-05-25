@@ -350,6 +350,11 @@ def check_all(
     if expected_schema_version >= 10:
         _check_43_distribution_log_triggers_present(conn)
 
+    # --- spec D2 checks (#44) — gated on schema v11+ ---
+
+    if expected_schema_version >= 11:
+        _check_44_live_canary_on_active_image(conn)
+
 
 def _check_29_reality_uuid_unique(conn: sqlite3.Connection) -> None:
     """No two ru_boxes share a reality_uuid (defence against accidental double-assign)."""
@@ -390,6 +395,23 @@ def _check_31_eu_node_active_has_cover_sni(conn: sqlite3.Connection) -> None:
         raise InvariantViolation(
             f"check 31: eu_nodes.node_id={row[0]!r} role={row[1]!r} "
             f"missing cover_sni={row[2]!r} or reality_pubkey={row[3]!r}"
+        )
+
+
+def _check_44_live_canary_on_active_image(conn: sqlite3.Connection) -> None:
+    """Every live ru_box with is_canary=1 references an image_version whose
+    ru_images.state is candidate or promoted. A live canary on a retired
+    image is unmonitored and means the operator ignored a rollback signal."""
+    row = conn.execute(
+        "SELECT rb.box_id, ri.state FROM ru_boxes rb "
+        "JOIN ru_images ri ON ri.image_version = rb.image_version "
+        "WHERE rb.state='live' AND rb.is_canary=1 "
+        "AND ri.state NOT IN ('candidate','promoted') LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        raise InvariantViolation(
+            f"check 44: live canary ru_boxes.box_id={row[0]!r} references "
+            f"an image whose state is {row[1]!r} (must be candidate or promoted)"
         )
 
 

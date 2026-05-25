@@ -857,3 +857,73 @@ def test_check_43_rejects_missing_distribution_log_triggers(tmp_db_path):
     conn.commit()
     with pytest.raises(InvariantViolation, match="check 43"):
         check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+# --- spec D2 checks (#44) ---
+
+
+def test_check_44_rejects_live_canary_on_retired_image(tmp_db_path):
+    conn = _seeded(tmp_db_path)
+    # Seed: retired image, canary box, marked live, with shard + cred + reality_uuid
+    # so earlier checks don't fire first.
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, "
+        "built_at, retired_at) "
+        "VALUES ('v_old', 'r', 'r', 'u', 'm', 'sha', 1, 'retired', ?, ?)",
+        (NOW, NOW),
+    )
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('s1', ?, 2, ?, ?)",
+        ('["u1"]', NOW, NOW),
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, shard_id, state, "
+        "image_version, created_at, reality_uuid, is_canary) "
+        "VALUES ('b-canary', 'p', 'r', 'sni-c', 's1', 'live', 'v_old', ?, "
+        "'uuid-c', 1)",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO onward_credentials (cred_id, box_id, credential, "
+        "issued_at, authority_generation) "
+        "VALUES ('c1', 'b-canary', X'aa', ?, 1)",
+        (NOW,),
+    )
+    conn.commit()
+    with pytest.raises(InvariantViolation, match="check 44"):
+        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_44_passes_live_canary_on_candidate_image(tmp_db_path):
+    """A live canary on a candidate image is the normal soak state."""
+    conn = _seeded(tmp_db_path)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, "
+        "built_at) "
+        "VALUES ('v_new', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', ?)",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('s1', ?, 2, ?, ?)",
+        ('["u1"]', NOW, NOW),
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, shard_id, state, "
+        "image_version, created_at, reality_uuid, is_canary) "
+        "VALUES ('b-canary', 'p', 'r', 'sni-c', 's1', 'live', 'v_new', ?, "
+        "'uuid-c', 1)",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT INTO onward_credentials (cred_id, box_id, credential, "
+        "issued_at, authority_generation) "
+        "VALUES ('c1', 'b-canary', X'aa', ?, 1)",
+        (NOW,),
+    )
+    conn.commit()
+    # Should NOT raise.
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
