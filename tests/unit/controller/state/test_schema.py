@@ -474,16 +474,17 @@ def test_v6_to_v7_migration_idempotent(tmp_path):
 
 # --- spec I schema v8 tests ---
 
-def test_schema_version_is_8(tmp_path):
+def test_schema_version_at_least_8(tmp_path):
+    """Superseded by test_schema_version_is_9. Kept to preserve numbering."""
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
 
-    assert SCHEMA_VERSION == 8
+    assert SCHEMA_VERSION >= 8
     db = tmp_path / "state.sqlite"
     conn = connect(db)
     apply_schema(conn)
     row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 8
+    assert row[0] >= 8
 
 
 def test_probe_vantages_table_present(tmp_path):
@@ -610,3 +611,81 @@ def test_v7_to_v8_migration_idempotent(tmp_path):
     migrate_v7_to_v8(conn)
     v2 = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
     assert v2 == 8
+
+
+# --- spec J schema v9 tests ---
+
+def test_schema_version_is_9(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+
+    assert SCHEMA_VERSION == 9
+    db = tmp_path / "state.sqlite"
+    conn = connect(db)
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 9
+
+
+def test_alert_log_table_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(alert_log)").fetchall()}
+    assert {"id", "attempted_at", "delivered_at", "sink", "severity",
+            "kind", "target", "dedupe_key", "payload", "error"} <= cols
+
+
+def test_v9_alert_log_append_only(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+        "kind, target, dedupe_key, payload) VALUES (?, ?, 'telegram', 'crit', "
+        "'test', NULL, 'k', 'p')",
+        ("2026-05-25T00:00:00Z", "2026-05-25T00:00:01Z"),
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE alert_log SET payload='changed' WHERE id=1")
+        conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM alert_log WHERE id=1")
+        conn.commit()
+
+
+def test_v9_alert_log_severity_check(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO alert_log (attempted_at, sink, severity, kind, "
+            "dedupe_key, payload) VALUES (?, 'telegram', 'bogus', 'k', 'd', 'p')",
+            ("2026-05-25T00:00:00Z",),
+        )
+        conn.commit()
+
+
+def test_v8_to_v9_migration_idempotent(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v8_to_v9
+
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute("UPDATE schema_version SET version=8 WHERE rowid=1")
+    conn.commit()
+    migrate_v8_to_v9(conn)
+    v = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
+    assert v == 9
+    migrate_v8_to_v9(conn)
+    assert conn.execute(
+        "SELECT version FROM schema_version WHERE rowid=1"
+    ).fetchone()[0] == 9

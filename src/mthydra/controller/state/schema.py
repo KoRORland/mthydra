@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -76,6 +76,22 @@ _TRIGGER_PROBE_RESULTS_NO_DELETE = """
     BEFORE DELETE ON probe_results
     BEGIN
       SELECT RAISE(ABORT, 'probe-results: append-only');
+    END
+    """
+
+_TRIGGER_ALERT_LOG_NO_UPDATE = """
+    CREATE TRIGGER IF NOT EXISTS alert_log_no_update
+    BEFORE UPDATE ON alert_log
+    BEGIN
+      SELECT RAISE(ABORT, 'alert-log: append-only');
+    END
+    """
+
+_TRIGGER_ALERT_LOG_NO_DELETE = """
+    CREATE TRIGGER IF NOT EXISTS alert_log_no_delete
+    BEFORE DELETE ON alert_log
+    BEGIN
+      SELECT RAISE(ABORT, 'alert-log: append-only');
     END
     """
 
@@ -371,6 +387,31 @@ _STATEMENTS: list[str] = [
     _TRIGGER_PROBE_VANTAGES_BURNED_NO_REVERT,
     _TRIGGER_PROBE_RESULTS_NO_UPDATE,
     _TRIGGER_PROBE_RESULTS_NO_DELETE,
+    # --- spec J additions: observability alert log ---
+    """
+    CREATE TABLE IF NOT EXISTS alert_log (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      attempted_at  TEXT NOT NULL,
+      delivered_at  TEXT,
+      sink          TEXT NOT NULL,
+      severity      TEXT NOT NULL CHECK (severity IN ('info','warn','crit','heartbeat')),
+      kind          TEXT NOT NULL,
+      target        TEXT,
+      dedupe_key    TEXT NOT NULL,
+      payload       TEXT NOT NULL,
+      error         TEXT
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_alert_log_dedupe
+      ON alert_log(dedupe_key, attempted_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_alert_log_attempted
+      ON alert_log(attempted_at DESC)
+    """,
+    _TRIGGER_ALERT_LOG_NO_UPDATE,
+    _TRIGGER_ALERT_LOG_NO_DELETE,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -534,6 +575,37 @@ def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
+    """Idempotent v8 → v9 migration: add alert_log + two indexes + two triggers."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS alert_log (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          attempted_at  TEXT NOT NULL,
+          delivered_at  TEXT,
+          sink          TEXT NOT NULL,
+          severity      TEXT NOT NULL CHECK (severity IN ('info','warn','crit','heartbeat')),
+          kind          TEXT NOT NULL,
+          target        TEXT,
+          dedupe_key    TEXT NOT NULL,
+          payload       TEXT NOT NULL,
+          error         TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_alert_log_dedupe
+          ON alert_log(dedupe_key, attempted_at DESC);
+        CREATE INDEX IF NOT EXISTS ix_alert_log_attempted
+          ON alert_log(attempted_at DESC);
+        """
+    )
+    conn.execute(_TRIGGER_ALERT_LOG_NO_UPDATE)
+    conn.execute(_TRIGGER_ALERT_LOG_NO_DELETE)
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (9, _now()),
+    )
+    conn.commit()
+
+
 def migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
     """Idempotent v7 → v8 migration: add probe_vantages, probe_results,
     image_profiles tables + four triggers + two indexes."""
@@ -646,4 +718,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v6_to_v7(conn)
         if current < 8:
             migrate_v7_to_v8(conn)
+        if current < 9:
+            migrate_v8_to_v9(conn)
     conn.commit()
