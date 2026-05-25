@@ -70,6 +70,19 @@ max_size                  = 3
 reshuffle_interval_days   = 14
 reshuffle_sweep_interval  = "1h"
 
+[probe]
+# Spec I — probe vantage harness (T3 Job 1/2, T7).
+# soft_fail_threshold_N hard|soft fails within the last soft_fail_window_M
+# probe cycles, across at least min_distinct_vantages distinct vantages,
+# triggers a kill-pending obligation. Hard fails are single-occurrence and
+# bypass the window.
+soft_fail_window_M            = 4
+soft_fail_threshold_N         = 3
+min_distinct_vantages         = 2
+coverage_window_seconds       = 3600
+probe_vantage_ttl_days        = 14
+probe_audit_sweep_interval    = "5m"
+
 [data_exit]
 listen_port = 443
 sing_box_socket = "/run/mthydra/sing-box.sock"

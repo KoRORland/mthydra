@@ -318,6 +318,58 @@ def test_load_config_shard_manager_defaults_when_section_missing(tmp_path):
     assert cfg.shard_manager.reshuffle_sweep_interval_seconds == 3600
 
 
+def test_load_config_probe_section(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[probe]
+soft_fail_window_M = 4
+soft_fail_threshold_N = 3
+min_distinct_vantages = 2
+coverage_window_seconds = 3600
+probe_vantage_ttl_days = 14
+probe_audit_sweep_interval = "5m"
+"""
+    )
+    cfg = load_config(p)
+    assert cfg.probe.soft_fail_window_M == 4
+    assert cfg.probe.soft_fail_threshold_N == 3
+    assert cfg.probe.min_distinct_vantages == 2
+    assert cfg.probe.coverage_window_seconds == 3600
+    assert cfg.probe.probe_vantage_ttl_days == 14
+    assert cfg.probe.probe_audit_sweep_interval_seconds == 300
+
+
+def test_load_config_probe_defaults(tmp_path):
+    from mthydra.controller.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(_MIN_BASE_TOML)
+    cfg = load_config(p)
+    assert cfg.probe.soft_fail_window_M == 4
+    assert cfg.probe.soft_fail_threshold_N == 3
+    assert cfg.probe.min_distinct_vantages == 2
+
+
+def test_load_config_probe_rejects_N_above_M(tmp_path):
+    from mthydra.controller.config import ConfigError, load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[probe]
+soft_fail_window_M = 2
+soft_fail_threshold_N = 5
+"""
+    )
+    with pytest.raises(ConfigError, match="threshold_N"):
+        load_config(p)
+
+
 def test_load_config_shard_manager_rejects_max_below_target(tmp_path):
     from mthydra.controller.config import ConfigError, load_config
 

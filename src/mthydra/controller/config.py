@@ -102,6 +102,16 @@ class ShardManagerConfig:
 
 
 @dataclass(frozen=True)
+class ProbeConfig:
+    soft_fail_window_M: int
+    soft_fail_threshold_N: int
+    min_distinct_vantages: int
+    coverage_window_seconds: int
+    probe_vantage_ttl_days: int
+    probe_audit_sweep_interval_seconds: int
+
+
+@dataclass(frozen=True)
 class Config:
     node: NodeConfig
     backup: BackupConfig
@@ -112,6 +122,7 @@ class Config:
     standby: StandbyConfig
     image: ImageConfig
     shard_manager: ShardManagerConfig
+    probe: ProbeConfig
     data_exit: DataExitConfig | None = None
 
 
@@ -234,6 +245,35 @@ def _load_shard_manager(data: dict) -> ShardManagerConfig:
     )
 
 
+def _load_probe(data: dict) -> ProbeConfig:
+    sec = data.get("probe", {})
+    M = _require_positive("probe.soft_fail_window_M", sec.get("soft_fail_window_M", 4))
+    N = _require_positive("probe.soft_fail_threshold_N", sec.get("soft_fail_threshold_N", 3))
+    if N > M:
+        raise ConfigError(
+            f"probe.soft_fail_threshold_N ({N}) must be <= soft_fail_window_M ({M})"
+        )
+    return ProbeConfig(
+        soft_fail_window_M=M,
+        soft_fail_threshold_N=N,
+        min_distinct_vantages=_require_positive(
+            "probe.min_distinct_vantages", sec.get("min_distinct_vantages", 2)
+        ),
+        coverage_window_seconds=_parse_interval_seconds(
+            "probe.coverage_window", sec.get("coverage_window", 3600),
+        ) if isinstance(sec.get("coverage_window"), str) else _require_positive(
+            "probe.coverage_window_seconds", sec.get("coverage_window_seconds", 3600)
+        ),
+        probe_vantage_ttl_days=_require_positive(
+            "probe.probe_vantage_ttl_days", sec.get("probe_vantage_ttl_days", 14)
+        ),
+        probe_audit_sweep_interval_seconds=_parse_interval_seconds(
+            "probe.probe_audit_sweep_interval",
+            sec.get("probe_audit_sweep_interval", 300),
+        ),
+    )
+
+
 def _load_image(data: dict) -> ImageConfig:
     sec = data.get("image", {})
     return ImageConfig(
@@ -304,5 +344,6 @@ def load_config(path: Path | str) -> Config:
         standby=_load_standby(raw),
         image=_load_image(raw),
         shard_manager=_load_shard_manager(raw),
+        probe=_load_probe(raw),
         data_exit=_load_data_exit(raw),
     )
