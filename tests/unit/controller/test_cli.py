@@ -1143,9 +1143,20 @@ def test_image_build_happy_path(tmp_path, age_recipient, monkeypatch):
         return "iv-stub"
     monkeypatch.setattr("mthydra.controller.cli.build_image", _stub_build_image)
 
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text('{"surface":":443"}')
     rc = run(["image-build", "--release", "v2.1.7",
+              "--profile-json", str(profile_path),
               "--db-path", str(db), "--config", str(cfg_path)])
     assert rc == 0
+    # Spec D2: profile pinned atomically with the image.
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT profile_json FROM image_profiles WHERE image_version='iv-stub'"
+    ).fetchone()
+    assert row is not None and '"surface"' in row[0]
+    conn.close()
     assert captured["upstream_release"] == "v2.1.7"
     assert captured["upstream_repo"] == "9seconds/mtg"
 
@@ -1158,10 +1169,47 @@ def test_image_build_refused_on_standby(tmp_path, age_recipient, capsys, monkeyp
     run(["init", "--role", "standby", "--db-path", str(db),
          "--age-recipient", age_recipient,
          "--provider-credential", "b2=id:secret"])
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text('{}')
     rc = run(["image-build", "--release", "v2.1.7",
+              "--profile-json", str(profile_path),
               "--db-path", str(db), "--config", str(cfg_path)])
     assert rc == 2
     assert "active-only" in capsys.readouterr().err.lower()
+
+
+def test_image_build_refuses_without_profile_json(tmp_path, age_recipient, capsys):
+    """Spec D2: --profile-json is mandatory."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    # argparse exits 2 with SystemExit.
+    import pytest as _pt
+    with _pt.raises(SystemExit) as exc:
+        run(["image-build", "--release", "v2.1.7",
+             "--db-path", str(db), "--config", str(cfg_path)])
+    assert exc.value.code == 2
+
+
+def test_image_build_refuses_empty_profile_json(tmp_path, age_recipient, capsys, monkeypatch):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    profile_path = tmp_path / "empty.json"
+    profile_path.write_text("   \n   ")
+    rc = run(["image-build", "--release", "v2.1.7",
+              "--profile-json", str(profile_path),
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 2
+    assert "non-empty" in capsys.readouterr().err
 
 
 def test_image_list_json(tmp_path, age_recipient, capsys):

@@ -286,6 +286,10 @@ def build_parser() -> argparse.ArgumentParser:
     ib.add_argument("--asset", default=None,
                      help="override asset filename (defaults to cfg.image.upstream_release_asset)")
     ib.add_argument("--notes", default=None)
+    ib.add_argument("--profile-json", required=True, dest="profile_json",
+                     help="path to known-good profile JSON file, or '-' to read stdin (spec D2 atomic pin)")
+    ib.add_argument("--profile-recorded-by", default="operator", dest="profile_recorded_by",
+                     help="who pinned the profile (default 'operator')")
     ib.add_argument("--db-path", default=DEFAULT_DB)
     ib.add_argument("--config", default="/etc/mthydra/controller.toml")
 
@@ -2019,12 +2023,27 @@ def _cmd_image_build(args) -> int:
 
     from mthydra.controller.config import ConfigError, load_config
     from mthydra.controller.state.db import connect
+    from mthydra.controller.state.image_profiles import pin as pin_profile
     from mthydra.controller.state.tokens import get_provider_credential
 
     try:
         cfg = load_config(args.config)
     except ConfigError as e:
         print(f"image-build: config error: {e}", file=sys.stderr)
+        return 2
+
+    # Spec D2: read the candidate profile JSON before doing any network work so
+    # we fail fast on a missing or unreadable file.
+    try:
+        if args.profile_json == "-":
+            profile_text = sys.stdin.read()
+        else:
+            profile_text = Path(args.profile_json).read_text()
+    except OSError as e:
+        print(f"image-build: cannot read --profile-json: {e}", file=sys.stderr)
+        return 2
+    if not profile_text.strip():
+        print("image-build: --profile-json must be non-empty", file=sys.stderr)
         return 2
 
     conn = connect(args.db_path)
@@ -2063,7 +2082,17 @@ def _cmd_image_build(args) -> int:
                 code = 2
             print(f"image-build: {e}", file=sys.stderr)
             return code
-        print(f"image-build: candidate {iv} registered (release={args.release})")
+        # Spec D2: atomically pin the known-good profile for this image.
+        pin_profile(
+            conn,
+            image_version=iv,
+            profile_json=profile_text,
+            recorded_by=args.profile_recorded_by,
+            at=_now(),
+            notes="auto-pinned at image-build time",
+        )
+        print(f"image-build: candidate {iv} registered with pinned profile "
+              f"(release={args.release}, profile_recorded_by={args.profile_recorded_by!r})")
         return 0
     finally:
         conn.close()
