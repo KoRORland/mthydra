@@ -510,6 +510,35 @@ def build_parser() -> argparse.ArgumentParser:
     pd.add_argument("--db-path", default=DEFAULT_DB)
     pd.add_argument("--json", action="store_true")
 
+    # ----- spec J: observability subcommands -----
+
+    obs_s = sub.add_parser("obs-status",
+                            help="one-screen snapshot dump (counts, obligations, anti-obligations)")
+    obs_s.add_argument("--db-path", default=DEFAULT_DB)
+    obs_s.add_argument("--json", action="store_true")
+
+    obs_ar = sub.add_parser("obs-alerts-recent",
+                             help="tail of alert_log; most-recent first")
+    obs_ar.add_argument("--limit", type=int, default=50)
+    obs_ar.add_argument("--severity",
+                         choices=["info", "warn", "crit", "heartbeat"],
+                         default=None)
+    obs_ar.add_argument("--db-path", default=DEFAULT_DB)
+    obs_ar.add_argument("--json", action="store_true")
+
+    obs_at = sub.add_parser("obs-alert-test",
+                             help="synthetic alert through configured sinks (deploy-time check)")
+    obs_at.add_argument("--severity", choices=["info", "warn", "crit"],
+                         default="warn")
+    obs_at.add_argument("--message", default=None)
+    obs_at.add_argument("--db-path", default=DEFAULT_DB)
+    obs_at.add_argument("--config", default="/etc/mthydra/controller.toml")
+
+    obs_hb = sub.add_parser("obs-heartbeat-now",
+                             help="force one immediate heartbeat email (debug SMTP)")
+    obs_hb.add_argument("--db-path", default=DEFAULT_DB)
+    obs_hb.add_argument("--config", default="/etc/mthydra/controller.toml")
+
     return p
 
 
@@ -811,6 +840,15 @@ def run(argv: list[str]) -> int:
         return _cmd_probe_evaluate(args)
     if args.cmd == "probe-due":
         return _cmd_probe_due(args)
+
+    if args.cmd == "obs-status":
+        return _cmd_obs_status(args)
+    if args.cmd == "obs-alerts-recent":
+        return _cmd_obs_alerts_recent(args)
+    if args.cmd == "obs-alert-test":
+        return _cmd_obs_alert_test(args, mode)
+    if args.cmd == "obs-heartbeat-now":
+        return _cmd_obs_heartbeat_now(args, mode)
 
     return 1
 
@@ -1213,6 +1251,16 @@ def _cmd_serve(args) -> int:
         return _serve_standby(args, cfg, mode)
     # else active — continue to existing active-path logic.
 
+    # Spec J J-D1: active mode refuses to start without both sink credentials.
+    if mode != "offline":
+        if cfg.observability.telegram is None or cfg.observability.email is None:
+            print(
+                "serve: refusing — [observability.telegram] and "
+                "[observability.email] are required for active mode",
+                file=sys.stderr,
+            )
+            return 2
+
     recipient_path = DEFAULT_RECIPIENT_FILE
     try:
         recipient = _read_recipient(recipient_path)
@@ -1260,6 +1308,8 @@ def _cmd_serve(args) -> int:
     from mthydra.controller.shard_manager.wheel import ShardReshuffleWheel
     from mthydra.controller.probe.audit_wheel import ProbeAuditWheel
     from mthydra.controller.probe.evaluator import ProbeConfigView
+    from mthydra.controller.observability.alerter import AlertSweep
+    from mthydra.controller.observability.heartbeat import ObsHeartbeatPublisher
 
     set_audit_mirror("/var/lib/mthydra/logs/audit.log")
 
@@ -1316,6 +1366,27 @@ def _cmd_serve(args) -> int:
         sweep_interval_seconds=cfg.probe.probe_audit_sweep_interval_seconds,
         mode=mode,
     )
+    tg_sink, em_sink = _build_alert_sinks(cfg, mode)
+    alerter = AlertSweep(
+        db_path=args.db_path,
+        telegram_sink=tg_sink,
+        email_sink=em_sink,
+        sweep_interval_seconds=cfg.observability.alerter_sweep_interval_seconds,
+        dedupe_window_seconds={
+            "warn": cfg.observability.alert_dedupe_window_warn_seconds,
+            "crit": cfg.observability.alert_dedupe_window_crit_seconds,
+            "info": cfg.observability.alert_dedupe_window_info_seconds,
+        },
+        staleness_alert_seconds=cfg.standby.staleness_alert_seconds,
+        mode=mode,
+    )
+    obs_heartbeat = ObsHeartbeatPublisher(
+        db_path=args.db_path,
+        email_sink=em_sink,
+        interval_seconds=cfg.observability.heartbeat_interval_seconds,
+        breach_threshold=cfg.observability.heartbeat_breach_threshold,
+        mode=mode,
+    )
 
     if mode != "offline":
         orch.arm()
@@ -1326,7 +1397,9 @@ def _cmd_serve(args) -> int:
         tracker.arm()
         shard_wheel.arm()
         probe_wheel.arm()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel + probe audit wheel armed", flush=True)
+        alerter.arm()
+        obs_heartbeat.arm()
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -1343,6 +1416,8 @@ def _cmd_serve(args) -> int:
         tracker.disarm()
         shard_wheel.disarm()
         probe_wheel.disarm()
+        alerter.disarm()
+        obs_heartbeat.disarm()
         print("serve: stopped", flush=True)
     return 0
 
@@ -3051,3 +3126,202 @@ def _cmd_probe_due(args) -> int:
         return 0
     finally:
         conn.close()
+
+
+# ----- spec J: observability subcommands -----
+
+
+def _build_alert_sinks(cfg, mode: str):
+    """Return (telegram_sink, email_sink). Both are DryRunSinks in offline mode
+    OR when the corresponding credential section is missing."""
+    from mthydra.controller.observability.sinks import (
+        DryRunSink, EmailAlertSink, TelegramAlertSink,
+    )
+    if mode == "offline":
+        return DryRunSink(label="telegram"), DryRunSink(label="email")
+    tg = cfg.observability.telegram
+    em = cfg.observability.email
+    tg_sink = (
+        TelegramAlertSink(bot_token=tg.bot_token, chat_id=tg.chat_id)
+        if tg is not None else DryRunSink(label="telegram")
+    )
+    em_sink = (
+        EmailAlertSink(
+            smtp_host=em.smtp_host, smtp_port=em.smtp_port,
+            from_addr=em.from_addr, to_addr=em.to_addr,
+            username=em.username, password=em.password,
+        )
+        if em is not None else DryRunSink(label="email")
+    )
+    return tg_sink, em_sink
+
+
+def _cmd_obs_status(args) -> int:
+    from mthydra.controller.observability.snapshot import collect_snapshot
+    from mthydra.controller.state.db import connect
+    conn = connect(args.db_path)
+    try:
+        snap = collect_snapshot(conn, now=_now())
+        if args.json:
+            import json as _json
+            print(_json.dumps({
+                "collected_at": snap.collected_at,
+                "summary_line": snap.summary_line,
+                "obligations_healthy": [
+                    {"obligation_id": o.obligation_id, "severity": o.severity}
+                    for o in snap.obligations_healthy
+                ],
+                "obligations_overdue": [
+                    {"obligation_id": o.obligation_id,
+                     "overdue_seconds": o.overdue_seconds,
+                     "severity": o.severity}
+                    for o in snap.obligations_overdue
+                ],
+                "anti_obligations": [
+                    {"obligation_id": a.obligation_id, "kind": a.kind,
+                     "target": a.target, "severity": a.severity}
+                    for a in snap.anti_obligations
+                ],
+                "eu_nodes": [
+                    {"node_id": n.node_id, "role": n.role,
+                     "heartbeat_age_seconds": n.heartbeat_age_seconds,
+                     "severity": n.severity}
+                    for n in snap.eu_nodes
+                ],
+                "counts": {
+                    "boxes_provisioning": snap.counts.boxes_provisioning,
+                    "boxes_live": snap.counts.boxes_live,
+                    "boxes_terminated": snap.counts.boxes_terminated,
+                    "cover_domains_in_use": snap.counts.cover_domains_in_use,
+                    "cover_domains_burned": snap.counts.cover_domains_burned,
+                    "active_vantages": snap.counts.active_vantages,
+                    "active_shards": snap.counts.active_shards,
+                },
+            }, sort_keys=True))
+        else:
+            print(f"collected: {snap.collected_at}")
+            print(snap.summary_line)
+            if snap.obligations_overdue:
+                print("OVERDUE:")
+                for o in snap.obligations_overdue:
+                    print(f"  [{o.severity}] {o.obligation_id} "
+                          f"overdue={o.overdue_seconds}s")
+            if snap.anti_obligations:
+                print("ANTI-OBLIGATIONS:")
+                for a in snap.anti_obligations:
+                    print(f"  [{a.severity}] {a.obligation_id}")
+            if snap.eu_nodes:
+                print("EU NODES:")
+                for n in snap.eu_nodes:
+                    print(f"  {n.node_id} role={n.role} "
+                          f"age={n.heartbeat_age_seconds}s "
+                          f"sev={n.severity}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_obs_alerts_recent(args) -> int:
+    from mthydra.controller.state import alert_log as _al
+    from mthydra.controller.state.db import connect
+    conn = connect(args.db_path)
+    try:
+        rows = _al.recent(conn, limit=args.limit, severity=args.severity)
+        if args.json:
+            import json as _json
+            print(_json.dumps([
+                {
+                    "id": r.id,
+                    "attempted_at": r.attempted_at,
+                    "delivered_at": r.delivered_at,
+                    "sink": r.sink, "severity": r.severity,
+                    "kind": r.kind, "target": r.target,
+                    "dedupe_key": r.dedupe_key,
+                    "error": r.error,
+                } for r in rows
+            ], sort_keys=True))
+        else:
+            for r in rows:
+                status = "OK" if r.delivered_at else "FAIL"
+                err = f" err={r.error!r}" if r.error else ""
+                print(f"#{r.id} {r.attempted_at} [{r.severity}] "
+                      f"{r.sink} {status} {r.kind} {r.target or ''}{err}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_obs_alert_test(args, mode: str) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.observability.sinks import AlertPayload
+    from mthydra.controller.state import alert_log as _al
+    from mthydra.controller.state.db import connect
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"obs-alert-test: config error: {e}", file=sys.stderr)
+        return 2
+    tg_sink, em_sink = _build_alert_sinks(cfg, mode)
+    severity = args.severity
+    routing = {"crit": ("telegram", "email"),
+               "warn": ("telegram",), "info": ()}.get(severity, ())
+    if not routing:
+        print(f"obs-alert-test: severity={severity!r} does not route to any sink",
+              file=sys.stderr)
+        return 2
+    now = _now()
+    body = args.message or f"synthetic alert at {now}"
+    payload = AlertPayload(
+        severity=severity, kind="operator_test", target=None,
+        dedupe_key=f"operator_test::{now}",
+        subject=f"mthydra alert test [{severity}]",
+        body=body,
+    )
+    conn = connect(args.db_path)
+    try:
+        for label in routing:
+            sink = tg_sink if label == "telegram" else em_sink
+            try:
+                res = sink(payload)
+                success = bool(getattr(res, "success", False))
+                err = getattr(res, "error", None)
+            except Exception as e:
+                success = False
+                err = repr(e)
+            _al.append(
+                conn, attempted_at=now,
+                delivered_at=now if success else None,
+                sink=label, severity=severity, kind="operator_test",
+                target=None, dedupe_key=payload.dedupe_key,
+                payload=f"{payload.subject}\n\n{payload.body}",
+                error=err,
+            )
+            print(f"obs-alert-test: {label} -> "
+                  f"{'OK' if success else 'FAIL ' + (err or '')}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_obs_heartbeat_now(args, mode: str) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.observability.heartbeat import ObsHeartbeatPublisher
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"obs-heartbeat-now: config error: {e}", file=sys.stderr)
+        return 2
+    _, em_sink = _build_alert_sinks(cfg, mode)
+    pub = ObsHeartbeatPublisher(
+        db_path=args.db_path,
+        email_sink=em_sink,
+        interval_seconds=cfg.observability.heartbeat_interval_seconds,
+        breach_threshold=cfg.observability.heartbeat_breach_threshold,
+        mode=mode,
+        clock=_now,
+    )
+    res = pub.run_once()
+    print(f"obs-heartbeat-now: "
+          f"{'OK' if res['success'] else 'FAIL'} "
+          f"consecutive_failures={res['consecutive_failures']}")
+    return 0 if res["success"] else 2

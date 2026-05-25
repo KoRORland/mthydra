@@ -55,6 +55,16 @@ v4 = ["149.154.160.0/20"]
 v6 = ["2001:b28:f23d::/48"]
 [data_exit.cover_sni]
 default = "www.example-cover-domain.invalid"
+[observability.telegram]
+bot_token = "test-token"
+chat_id = "12345"
+[observability.email]
+smtp_host = "smtp.example.org"
+smtp_port = 587
+from_addr = "ops@example.org"
+to_addr = "op@example.org"
+username = "ops@example.org"
+password = "app-pw"
 """
 
 _PROVISION_V2_ARGS = [
@@ -2415,3 +2425,172 @@ def test_cli_probe_due_json(tmp_path, age_recipient, capsys):
     import json as _json
     out = _json.loads(capsys.readouterr().out)
     assert out["kill_pending"] == ["probe_kill_pending::b1"]
+
+
+# ===== spec J: observability CLI =====
+
+
+def test_cli_obs_status_json(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    capsys.readouterr()
+    rc = run(["obs-status", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert "summary_line" in out
+    assert "counts" in out
+
+
+def test_cli_obs_alerts_recent_empty(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    capsys.readouterr()
+    rc = run(["obs-alerts-recent", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert out == []
+
+
+def test_cli_obs_alerts_recent_with_rows(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    from mthydra.controller.state.alert_log import append
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    for i in range(3):
+        append(conn, attempted_at=f"2026-05-25T0{i}:00:00Z",
+               delivered_at=f"2026-05-25T0{i}:00:01Z",
+               sink="telegram", severity="warn", kind="x",
+               target=None, dedupe_key=f"k{i}", payload="p", error=None)
+    conn.close()
+    capsys.readouterr()
+    rc = run(["obs-alerts-recent", "--limit", "2", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert len(out) == 2
+    assert out[0]["dedupe_key"] == "k2"
+
+
+def test_cli_obs_alert_test_offline_dispatches(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    cfg.write_text(cfg.read_text() + """
+[observability]
+alerter_sweep_interval = "2m"
+heartbeat_interval = "1h"
+heartbeat_breach_threshold = 3
+[observability.telegram]
+bot_token = ""
+chat_id = ""
+[observability.email]
+smtp_host = ""
+smtp_port = 587
+from_addr = ""
+to_addr = ""
+username = ""
+password = ""
+""")
+    rc = run([
+        "--mode", "offline",
+        "obs-alert-test", "--severity", "crit",
+        "--message", "deploy-time test",
+        "--db-path", str(db), "--config", str(cfg),
+    ])
+    assert rc == 0
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    n = conn.execute(
+        "SELECT COUNT(*) FROM alert_log WHERE kind='operator_test'"
+    ).fetchone()[0]
+    # crit -> two routes (telegram + email)
+    assert n == 2
+    conn.close()
+
+
+def test_cli_obs_alert_test_info_refuses(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    cfg.write_text(cfg.read_text() + """
+[observability]
+[observability.telegram]
+bot_token = ""
+chat_id = ""
+[observability.email]
+smtp_host = ""
+smtp_port = 587
+from_addr = ""
+to_addr = ""
+username = ""
+password = ""
+""")
+    rc = run([
+        "--mode", "offline",
+        "obs-alert-test", "--severity", "info",
+        "--db-path", str(db), "--config", str(cfg),
+    ])
+    assert rc == 2
+
+
+def test_cli_obs_heartbeat_now_offline_succeeds(tmp_path, age_recipient, capsys):
+    db = _h_init(tmp_path, age_recipient)
+    cfg = _h_cfg(tmp_path)
+    cfg.write_text(cfg.read_text() + """
+[observability]
+[observability.telegram]
+bot_token = ""
+chat_id = ""
+[observability.email]
+smtp_host = ""
+smtp_port = 587
+from_addr = ""
+to_addr = ""
+username = ""
+password = ""
+""")
+    rc = run([
+        "--mode", "offline",
+        "obs-heartbeat-now",
+        "--db-path", str(db), "--config", str(cfg),
+    ])
+    assert rc == 0
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    n = conn.execute(
+        "SELECT COUNT(*) FROM alert_log WHERE severity='heartbeat'"
+    ).fetchone()[0]
+    assert n == 1
+    conn.close()
+
+
+def test_serve_refuses_active_without_observability_credentials(
+    tmp_path, age_recipient, capsys, monkeypatch,
+):
+    """Spec J J-D1: active mode without both sinks configured -> exit 2."""
+    from mthydra.controller.cli import run as _run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(
+        "[node]\nrole='active'\nhostname='h'\n"
+        "[backup]\nfloor_interval_hours=24\non_change_debounce_seconds=30\n"
+        "endpoint='https://example'\nbucket='b'\naccess_key_id='k'\n"
+        "[backup.retention]\nkeep_daily=30\nkeep_monthly=12\nobject_lock_days=365\n"
+        "[gap_monitor]\npoll_interval_minutes=30\nalarm_threshold_hours=48\n"
+        "recipient_email='op@example.org'\n"
+        "[descriptor]\nrotation_interval_hours=1\nvalidity_window_hours=24\n"
+        "[obligations]\n[obligations.timers_hours]\n"
+        "[cover_pool]\nrotation_ttl_days=14\nreverify_after_days=30\n"
+        "freeze_threshold=2\nreverify_sweep_interval='1h'\n"
+        "rotation_sweep_interval='1h'\nreplenishment_interval_days=90\n"
+    )
+    _run(["init", "--db-path", str(db),
+          "--age-recipient", age_recipient,
+          "--provider-credential", "b2=id:secret"])
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(age_recipient + "\n")
+    monkeypatch.setattr("mthydra.controller.cli.DEFAULT_RECIPIENT_FILE",
+                        str(recipient_file))
+    capsys.readouterr()
+    rc = _run(["serve", "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "[observability.telegram]" in err
