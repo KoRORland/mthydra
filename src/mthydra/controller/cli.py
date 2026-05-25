@@ -546,6 +546,28 @@ def build_parser() -> argparse.ArgumentParser:
     obs_hb.add_argument("--db-path", default=DEFAULT_DB)
     obs_hb.add_argument("--config", default="/etc/mthydra/controller.toml")
 
+    # ----- spec D2: image canary + rollback subcommands -----
+
+    ipst = sub.add_parser("image-promote-status",
+                            help="read-only gate evaluation (does NOT promote; always exit 0)")
+    ipst.add_argument("image_version")
+    ipst.add_argument("--db-path", default=DEFAULT_DB)
+    ipst.add_argument("--config", default="/etc/mthydra/controller.toml")
+    ipst.add_argument("--json", action="store_true")
+
+    irb = sub.add_parser("image-rollback",
+                           help="retire <version>, re-promote --to <target>, flag live boxes")
+    irb.add_argument("image_version")
+    irb.add_argument("--to", required=True, dest="target_version")
+    irb.add_argument("--evidence", required=True)
+    irb.add_argument("--db-path", default=DEFAULT_DB)
+
+    rbcc = sub.add_parser("ru-box-canary-clear",
+                            help="demote a canary box to regular fleet")
+    rbcc.add_argument("box_id")
+    rbcc.add_argument("--reason", required=True)
+    rbcc.add_argument("--db-path", default=DEFAULT_DB)
+
     # ----- spec K: distribution channel subcommands -----
 
     uc_set = sub.add_parser("user-channels-set",
@@ -902,6 +924,13 @@ def run(argv: list[str]) -> int:
         return _cmd_obs_alert_test(args, mode)
     if args.cmd == "obs-heartbeat-now":
         return _cmd_obs_heartbeat_now(args, mode)
+
+    if args.cmd == "image-promote-status":
+        return _cmd_image_promote_status(args)
+    if args.cmd == "image-rollback":
+        return _cmd_image_rollback(args)
+    if args.cmd == "ru-box-canary-clear":
+        return _cmd_ru_box_canary_clear(args)
 
     if args.cmd == "user-channels-set":
         return _cmd_user_channels_set(args)
@@ -3727,6 +3756,173 @@ def _cmd_dist_log_recent(args) -> int:
                 err = f" err={r.error!r}" if r.error else ""
                 print(f"#{r.id} {r.attempted_at} {r.user_id} {r.channel} "
                       f"{r.kind} {status}{err}")
+        return 0
+    finally:
+        conn.close()
+
+
+# ----- spec D2: canary + rollback subcommands -----
+
+
+def _cmd_image_promote_status(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.image.gate import (
+        GateConfigView, evaluate_promotion_gate,
+    )
+    from mthydra.controller.state.db import connect
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"image-promote-status: config error: {e}", file=sys.stderr)
+        return 2
+
+    gate_cfg = GateConfigView(
+        min_canary_boxes=cfg.image.canary.min_boxes,
+        min_cycles_per_box=cfg.image.canary.min_cycles_per_box,
+        min_distinct_vantages=cfg.probe.min_distinct_vantages,
+    )
+    conn = connect(args.db_path)
+    try:
+        res = evaluate_promotion_gate(conn, args.image_version, cfg=gate_cfg)
+        if args.json:
+            import json as _json
+            print(_json.dumps({
+                "image_version": res.image_version,
+                "passed": res.passed,
+                "reasons": list(res.reasons),
+                "canary_box_ids": list(res.canary_box_ids),
+                "canary_probe_rows": res.canary_probe_rows,
+                "canary_distinct_vantages": res.canary_distinct_vantages,
+                "pending_kills": list(res.pending_kills),
+            }, sort_keys=True))
+        else:
+            verdict = "PASSED" if res.passed else "FAILED"
+            print(f"image-promote-status: {args.image_version} -> {verdict}")
+            print(f"  canary cohort: {list(res.canary_box_ids)}")
+            print(f"  probe rows: {res.canary_probe_rows}")
+            print(f"  distinct vantages: {res.canary_distinct_vantages}")
+            if res.pending_kills:
+                print(f"  pending kills: {list(res.pending_kills)}")
+            for reason in res.reasons:
+                print(f"  reason: {reason}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_image_rollback(args) -> int:
+    import json as _json
+
+    from mthydra.controller.state.audit import log_event
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import set_obligation
+    from mthydra.controller.state.ru_images import (
+        get_image, list_live_boxes_for_image, retire,
+    )
+
+    if args.image_version == args.target_version:
+        print("image-rollback: --to must differ from the rolled-back version",
+              file=sys.stderr)
+        return 2
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "image-rollback")
+        if rc is not None:
+            return rc
+        try:
+            src = get_image(conn, args.image_version)
+        except LookupError as e:
+            print(f"image-rollback: {e}", file=sys.stderr)
+            return 2
+        try:
+            target = get_image(conn, args.target_version)
+        except LookupError as e:
+            print(f"image-rollback: {e}", file=sys.stderr)
+            return 2
+        # Target must have been promoted at some point (i.e. promoted_at IS NOT NULL).
+        if target.promoted_at is None:
+            print(
+                f"image-rollback: target {args.target_version!r} was never promoted; "
+                "use image-promote for new candidates",
+                file=sys.stderr,
+            )
+            return 2
+        # Source must currently be the promoted one (we're rolling IT back).
+        if src.state != "promoted":
+            print(
+                f"image-rollback: {args.image_version!r} is not in 'promoted' state "
+                f"(current state={src.state!r})",
+                file=sys.stderr,
+            )
+            return 2
+
+        now = _now()
+        # Step 1: retire the bad image.
+        retire(conn, args.image_version, at=now, reason=f"rollback: {args.evidence}")
+        # Step 2: re-promote the target (it's currently 'retired').
+        cur = conn.execute(
+            "UPDATE ru_images SET state='promoted', promoted_at=?, retired_at=NULL "
+            "WHERE image_version=? AND state='retired'",
+            (now, args.target_version),
+        )
+        if cur.rowcount == 0:
+            print(
+                f"image-rollback: target {args.target_version!r} is not "
+                "currently retired (rollback only re-promotes previously retired images)",
+                file=sys.stderr,
+            )
+            return 2
+        # Step 3: emit per-box rollback_pending obligations.
+        live_box_ids = list_live_boxes_for_image(conn, args.image_version)
+        for box_id in live_box_ids:
+            set_obligation(
+                conn,
+                obligation_id=f"image_rollback_pending::{box_id}",
+                last_proven_at=now, proven_by="operator",
+                next_due_at=now,
+                details=_json.dumps({
+                    "rolled_back_image": args.image_version,
+                    "restored_image": args.target_version,
+                    "evidence": args.evidence,
+                }),
+            )
+        log_event(
+            conn, ts=now, actor="operator", action="image_rollback",
+            target=args.image_version,
+            details_json=_json.dumps({
+                "to": args.target_version,
+                "evidence": args.evidence,
+                "live_boxes_flagged": live_box_ids,
+            }),
+        )
+        conn.commit()
+        print(
+            f"image-rollback: {args.image_version} -> retired; "
+            f"{args.target_version} -> promoted; "
+            f"flagged {len(live_box_ids)} live box(es) for replacement"
+        )
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_ru_box_canary_clear(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import clear_canary_flag
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "ru-box-canary-clear")
+        if rc is not None:
+            return rc
+        try:
+            clear_canary_flag(conn, args.box_id, at=_now(), reason=args.reason)
+        except (LookupError, ValueError) as e:
+            print(f"ru-box-canary-clear: {e}", file=sys.stderr)
+            return 2
+        print(f"ru-box-canary-clear: {args.box_id} -> regular fleet")
         return 0
     finally:
         conn.close()

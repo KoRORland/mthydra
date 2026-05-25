@@ -3004,3 +3004,237 @@ def test_provision_seed_without_canary_marks_zero(tmp_path, age_recipient, monke
     ).fetchone()
     assert row[0] == 0
     conn.close()
+
+
+# ===== spec D2: image-promote-status, image-rollback, ru-box-canary-clear =====
+
+
+def _seed_canary_cohort_for_image(conn, image_version):
+    """Helper: pin profile, attest 2 vantages, provision + live one canary,
+    record 4 passing probe rows (2 per vantage). Returns the canary box_id."""
+    from mthydra.controller.state.image_profiles import pin
+    from mthydra.controller.state.probe_results import record
+    from mthydra.controller.state.probe_vantages import add_candidate, attest_active
+    from mthydra.controller.state.ru_boxes import insert_box, mark_live
+    pin(conn, image_version=image_version, profile_json='{}',
+        recorded_by="op", at="2026-05-25T00:00:00Z")
+    add_candidate(conn, vantage_id="vk", label="kz1", source_kind="x",
+                  at="2026-05-25T00:00:00Z")
+    attest_active(conn, "vk", at="2026-05-25T00:00:00Z")
+    add_candidate(conn, vantage_id="vb", label="by1", source_kind="x",
+                  at="2026-05-25T00:00:00Z")
+    attest_active(conn, "vb", at="2026-05-25T00:00:00Z")
+    insert_box(conn, "b-canary", "p", "r", "10.0.0.1", "sni-canary",
+               image_version, "2026-05-25T00:00:00Z", is_canary=True)
+    mark_live(conn, "b-canary", public_ip="10.0.0.1",
+              at="2026-05-25T00:01:00Z")
+    for i, vid in enumerate(["vk", "vk", "vb", "vb"]):
+        record(conn, box_id="b-canary", vantage_id=vid,
+               cycle_at=f"2026-05-25T0{i + 2}:00:00Z",
+               check_type="surface_scan", status="pass",
+               evidence_json=None, image_version=image_version,
+               recorded_at=f"2026-05-25T0{i + 2}:00:01Z")
+    return "b-canary"
+
+
+def test_image_promote_status_failing_gate(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import insert_candidate
+    conn = connect(db)
+    insert_candidate(
+        conn, image_version="iv1", upstream_release="v",
+        upstream_repo="r", binary_url="x", manifest_url="x",
+        binary_sha256="x", binary_size_bytes=1, built_at="2026-05-25T00:00:00Z",
+    )
+    conn.close()
+    capsys.readouterr()
+    rc = run(["image-promote-status", "iv1", "--json",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    # Always exit 0 (read-only).
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert out["passed"] is False
+    assert any("image_profiles row missing" in r for r in out["reasons"])
+
+
+def test_image_promote_status_passing_gate(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import insert_candidate
+    conn = connect(db)
+    insert_candidate(
+        conn, image_version="iv1", upstream_release="v",
+        upstream_repo="r", binary_url="x", manifest_url="x",
+        binary_sha256="x", binary_size_bytes=1, built_at="2026-05-25T00:00:00Z",
+    )
+    _seed_canary_cohort_for_image(conn, "iv1")
+    conn.close()
+    capsys.readouterr()
+    rc = run(["image-promote-status", "iv1", "--json",
+              "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert out["passed"] is True
+    assert out["canary_probe_rows"] == 4
+    assert out["canary_distinct_vantages"] == 2
+
+
+def test_image_rollback_happy_path(tmp_path, age_recipient, capsys):
+    """Spec D2: rollback retires source, re-promotes target, emits per-box anti."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import insert_box, mark_live
+    from mthydra.controller.state.ru_images import insert_candidate, promote
+    conn = connect(db)
+    # Two images: iv0 (previously promoted, then retired) + iv1 (currently promoted).
+    insert_candidate(conn, image_version="iv0", upstream_release="v0",
+                     upstream_repo="r", binary_url="x", manifest_url="x",
+                     binary_sha256="x", binary_size_bytes=1,
+                     built_at="2026-05-25T00:00:00Z")
+    promote(conn, "iv0", at="2026-05-25T00:01:00Z", evidence="iv0 first")
+    insert_candidate(conn, image_version="iv1", upstream_release="v1",
+                     upstream_repo="r", binary_url="x", manifest_url="x",
+                     binary_sha256="x2", binary_size_bytes=1,
+                     built_at="2026-05-25T01:00:00Z")
+    promote(conn, "iv1", at="2026-05-25T01:01:00Z", evidence="iv1 promo")
+    # Two live boxes on iv1 to be flagged.
+    insert_box(conn, "b1", "p", "r", "10.0.0.1", "sni-b1", "iv1",
+               "2026-05-25T01:02:00Z")
+    insert_box(conn, "b2", "p", "r", "10.0.0.2", "sni-b2", "iv1",
+               "2026-05-25T01:02:00Z")
+    mark_live(conn, "b1", public_ip="10.0.0.1", at="2026-05-25T01:03:00Z")
+    mark_live(conn, "b2", public_ip="10.0.0.2", at="2026-05-25T01:03:00Z")
+    conn.close()
+    rc = run(["image-rollback", "iv1",
+              "--to", "iv0",
+              "--evidence", "iv1 regressed on TLS handshake",
+              "--db-path", str(db)])
+    assert rc == 0
+    conn = connect(db)
+    # iv1 retired, iv0 re-promoted.
+    iv1_state, iv0_state = (
+        conn.execute(
+            "SELECT state FROM ru_images WHERE image_version=?", (v,)
+        ).fetchone()[0]
+        for v in ("iv1", "iv0")
+    )
+    assert iv1_state == "retired"
+    assert iv0_state == "promoted"
+    # Per-box rollback_pending rows.
+    pending = {
+        r[0] for r in conn.execute(
+            "SELECT obligation_id FROM obligation_clocks "
+            "WHERE obligation_id LIKE 'image_rollback_pending::%'"
+        ).fetchall()
+    }
+    assert pending == {
+        "image_rollback_pending::b1",
+        "image_rollback_pending::b2",
+    }
+    conn.close()
+
+
+def test_image_rollback_refuses_target_never_promoted(tmp_path, age_recipient, capsys):
+    """Spec D2: --to must reference a previously-promoted image."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_images import insert_candidate, promote
+    conn = connect(db)
+    insert_candidate(conn, image_version="iv_candidate",
+                     upstream_release="v", upstream_repo="r",
+                     binary_url="x", manifest_url="x",
+                     binary_sha256="x", binary_size_bytes=1,
+                     built_at="2026-05-25T00:00:00Z")
+    insert_candidate(conn, image_version="iv_promo",
+                     upstream_release="v2", upstream_repo="r",
+                     binary_url="x", manifest_url="x",
+                     binary_sha256="x2", binary_size_bytes=1,
+                     built_at="2026-05-25T00:00:00Z")
+    promote(conn, "iv_promo", at="2026-05-25T00:01:00Z", evidence="x")
+    conn.close()
+    rc = run(["image-rollback", "iv_promo",
+              "--to", "iv_candidate",
+              "--evidence", "x",
+              "--db-path", str(db)])
+    assert rc == 2
+    assert "never promoted" in capsys.readouterr().err
+
+
+def test_image_rollback_refuses_same_source_and_target(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["image-rollback", "iv1", "--to", "iv1",
+              "--evidence", "x", "--db-path", str(db)])
+    assert rc == 2
+
+
+def test_ru_box_canary_clear_demotes_and_audits(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import insert_box
+    conn = connect(db)
+    insert_box(conn, "b1", "p", "r", "10.0.0.1", "sni-b1",
+               "v1", "2026-05-25T00:00:00Z", is_canary=True)
+    conn.close()
+    rc = run(["ru-box-canary-clear", "b1", "--reason", "soak done",
+              "--db-path", str(db)])
+    assert rc == 0
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT is_canary FROM ru_boxes WHERE box_id='b1'"
+    ).fetchone()
+    assert row[0] == 0
+    audits = conn.execute(
+        "SELECT action, target FROM audit_log WHERE action='ru_box_canary_clear'"
+    ).fetchall()
+    assert audits == [("ru_box_canary_clear", "b1")]
+    conn.close()
+
+
+def test_ru_box_canary_clear_refuses_non_canary(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import insert_box
+    conn = connect(db)
+    insert_box(conn, "b1", "p", "r", "10.0.0.1", "sni-b1",
+               "v1", "2026-05-25T00:00:00Z", is_canary=False)
+    conn.close()
+    rc = run(["ru-box-canary-clear", "b1", "--reason", "x",
+              "--db-path", str(db)])
+    assert rc == 2
