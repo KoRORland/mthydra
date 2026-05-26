@@ -587,6 +587,30 @@ def build_parser() -> argparse.ArgumentParser:
     rbcc.add_argument("--reason", required=True)
     rbcc.add_argument("--db-path", default=DEFAULT_DB)
 
+    # ----- spec I2: per-(box, vantage) probe credentials -----
+
+    pci = sub.add_parser("probe-credential-issue",
+                          help="issue a probe credential for a (box, vantage) pair")
+    pci.add_argument("--box", required=True, dest="box_id")
+    pci.add_argument("--vantage", required=True, dest="vantage_id")
+    pci.add_argument("--evidence", default=None,
+                      help="operator-attested rationale (recorded in audit)")
+    pci.add_argument("--db-path", default=DEFAULT_DB)
+
+    pcl = sub.add_parser("probe-credential-list",
+                          help="list probe credentials")
+    pcl.add_argument("--box", default=None, dest="box_id")
+    pcl.add_argument("--vantage", default=None, dest="vantage_id")
+    pcl.add_argument("--include-revoked", action="store_true")
+    pcl.add_argument("--db-path", default=DEFAULT_DB)
+    pcl.add_argument("--json", action="store_true")
+
+    pcr = sub.add_parser("probe-credential-revoke",
+                          help="revoke a probe credential by id")
+    pcr.add_argument("cred_id")
+    pcr.add_argument("--reason", required=True)
+    pcr.add_argument("--db-path", default=DEFAULT_DB)
+
     # ----- spec M: append-only log compaction -----
 
     cl = sub.add_parser("compact-logs",
@@ -972,6 +996,12 @@ def run(argv: list[str]) -> int:
         return _cmd_ru_box_canary_clear(args)
     if args.cmd == "compact-logs":
         return _cmd_compact_logs(args)
+    if args.cmd == "probe-credential-issue":
+        return _cmd_probe_credential_issue(args)
+    if args.cmd == "probe-credential-list":
+        return _cmd_probe_credential_list(args)
+    if args.cmd == "probe-credential-revoke":
+        return _cmd_probe_credential_revoke(args)
 
     if args.cmd == "user-channels-set":
         return _cmd_user_channels_set(args)
@@ -4092,6 +4122,128 @@ def _cmd_obs_alert_ack_list(args) -> int:
             for r in rows:
                 print(f"#{r.id} {r.dedupe_key} by={r.acked_by} "
                       f"expires={r.expires_at} ev={r.evidence!r}")
+        return 0
+    finally:
+        conn.close()
+
+
+# ----- spec I2: probe credential subcommands -----
+
+
+def _cmd_probe_credential_issue(args) -> int:
+    import uuid as _uuid
+
+    from mthydra.descriptor.authority import sign_onward_credential
+    from mthydra.controller.state.authority import current_authority
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_credentials import issue
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "probe-credential-issue")
+        if rc is not None:
+            return rc
+        # Authority must be the same one used for onward credentials.
+        try:
+            auth = current_authority(conn)
+        except LookupError as e:
+            print(f"probe-credential-issue: {e}", file=sys.stderr)
+            return 2
+        # Validate the box + vantage exist.
+        if conn.execute(
+            "SELECT 1 FROM ru_boxes WHERE box_id=?", (args.box_id,)
+        ).fetchone() is None:
+            print(f"probe-credential-issue: unknown box {args.box_id!r}",
+                  file=sys.stderr)
+            return 2
+        vrow = conn.execute(
+            "SELECT state FROM probe_vantages WHERE vantage_id=?",
+            (args.vantage_id,),
+        ).fetchone()
+        if vrow is None:
+            print(f"probe-credential-issue: unknown vantage {args.vantage_id!r}",
+                  file=sys.stderr)
+            return 2
+        if vrow[0] != "active":
+            print(
+                f"probe-credential-issue: vantage {args.vantage_id!r} is in "
+                f"state={vrow[0]!r}; only 'active' vantages may hold credentials",
+                file=sys.stderr,
+            )
+            return 2
+        cred_id = str(_uuid.uuid4())
+        now = _now()
+        blob = sign_onward_credential(
+            auth.privkey_pem,
+            box_id=f"{args.box_id}|probe|{args.vantage_id}",
+            issued_at=now,
+            authority_generation=auth.generation,
+        )
+        try:
+            issue(
+                conn, cred_id=cred_id, box_id=args.box_id,
+                vantage_id=args.vantage_id,
+                authority_generation=auth.generation,
+                credential=blob, issued_at=now,
+                evidence=args.evidence,
+            )
+        except sqlite3.IntegrityError as e:
+            print(f"probe-credential-issue: {e}", file=sys.stderr)
+            return 2
+        print(f"probe-credential-issue: {cred_id} issued "
+              f"(box={args.box_id}, vantage={args.vantage_id})")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_probe_credential_list(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_credentials import list_all
+    conn = connect(args.db_path)
+    try:
+        rows = list_all(
+            conn, box_id=args.box_id, vantage_id=args.vantage_id,
+            include_revoked=args.include_revoked,
+        )
+        if args.json:
+            import base64 as _b64
+            import json as _json
+            print(_json.dumps([
+                {
+                    "cred_id": r.cred_id,
+                    "box_id": r.box_id,
+                    "vantage_id": r.vantage_id,
+                    "credential_b64": _b64.b64encode(r.credential).decode("ascii"),
+                    "issued_at": r.issued_at,
+                    "revoked_at": r.revoked_at,
+                    "authority_generation": r.authority_generation,
+                } for r in rows
+            ], sort_keys=True))
+        else:
+            for r in rows:
+                status = "REVOKED" if r.revoked_at else "active"
+                print(f"{r.cred_id}\t{status}\tbox={r.box_id}\t"
+                      f"vantage={r.vantage_id}\tauth_gen={r.authority_generation}\t"
+                      f"issued={r.issued_at}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_probe_credential_revoke(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.probe_credentials import revoke
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "probe-credential-revoke")
+        if rc is not None:
+            return rc
+        try:
+            revoke(conn, args.cred_id, at=_now(), reason=args.reason)
+        except (LookupError, ValueError) as e:
+            print(f"probe-credential-revoke: {e}", file=sys.stderr)
+            return 2
+        print(f"probe-credential-revoke: {args.cred_id} -> revoked")
         return 0
     finally:
         conn.close()

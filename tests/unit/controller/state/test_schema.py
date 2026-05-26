@@ -1036,14 +1036,15 @@ def test_v11_to_v12_migration_idempotent(tmp_path):
 
 # --- spec J2 schema v13 tests ---
 
-def test_schema_version_is_13(tmp_path):
+def test_schema_version_at_least_13(tmp_path):
+    """Superseded by test_schema_version_is_14. Kept to preserve numbering."""
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
-    assert SCHEMA_VERSION == 13
+    assert SCHEMA_VERSION >= 13
     conn = connect(tmp_path / "state.sqlite")
     apply_schema(conn)
     row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 13
+    assert row[0] >= 13
 
 
 def test_v13_alert_acks_table_present(tmp_path):
@@ -1108,3 +1109,123 @@ def test_v12_to_v13_migration_idempotent(tmp_path):
     assert conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 13
     migrate_v12_to_v13(conn)
     assert conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 13
+
+
+# --- spec I2 schema v14 tests ---
+
+def test_schema_version_is_14(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+    assert SCHEMA_VERSION == 14
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 14
+
+
+def test_v14_probe_credentials_table_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    cols = {r[1] for r in conn.execute(
+        "PRAGMA table_info(probe_credentials)"
+    ).fetchall()}
+    assert {"cred_id", "box_id", "vantage_id", "credential",
+            "issued_at", "revoked_at", "authority_generation"} <= cols
+
+
+def test_v14_probe_credentials_unique_active_index(tmp_path):
+    """The partial UNIQUE index refuses a second active credential for the
+    same (box, vantage, authority_generation)."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO credential_authority (generation, privkey_pem, pubkey_pem, created_at) "
+        "VALUES (1, 'p', 'pk', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'live', 'v1', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('vk', 'kz', 'cloud-cis', 'active', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO probe_credentials (cred_id, box_id, vantage_id, credential, "
+        "issued_at, authority_generation) VALUES ('c1', 'b1', 'vk', X'aa', "
+        "'2026-05-26T00:00:00Z', 1)"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO probe_credentials (cred_id, box_id, vantage_id, credential, "
+            "issued_at, authority_generation) VALUES ('c2', 'b1', 'vk', X'bb', "
+            "'2026-05-26T01:00:00Z', 1)"
+        )
+        conn.commit()
+
+
+def test_v14_probe_credentials_allow_after_revocation(tmp_path):
+    """After the active one is revoked, a fresh insert for the same tuple is allowed."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO credential_authority (generation, privkey_pem, pubkey_pem, created_at) "
+        "VALUES (1, 'p', 'pk', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'live', 'v1', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('vk', 'kz', 'cloud-cis', 'active', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO probe_credentials (cred_id, box_id, vantage_id, credential, "
+        "issued_at, authority_generation) VALUES ('c1', 'b1', 'vk', X'aa', "
+        "'2026-05-26T00:00:00Z', 1)"
+    )
+    conn.execute(
+        "UPDATE probe_credentials SET revoked_at='2026-05-26T01:00:00Z' "
+        "WHERE cred_id='c1'"
+    )
+    conn.execute(
+        "INSERT INTO probe_credentials (cred_id, box_id, vantage_id, credential, "
+        "issued_at, authority_generation) VALUES ('c2', 'b1', 'vk', X'bb', "
+        "'2026-05-26T01:01:00Z', 1)"
+    )
+    conn.commit()
+    n = conn.execute(
+        "SELECT COUNT(*) FROM probe_credentials WHERE box_id='b1' AND vantage_id='vk'"
+    ).fetchone()[0]
+    assert n == 2
+
+
+def test_v13_to_v14_migration_idempotent(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v13_to_v14
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute("UPDATE schema_version SET version=13 WHERE rowid=1")
+    conn.commit()
+    migrate_v13_to_v14(conn)
+    assert conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 14
+    migrate_v13_to_v14(conn)
+    assert conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 14

@@ -3445,3 +3445,152 @@ def test_cli_obs_alert_ack_list_include_expired(tmp_path, age_recipient, capsys)
     out = _json.loads(capsys.readouterr().out)
     keys = {r["dedupe_key"] for r in out}
     assert "short" in keys
+
+
+# ===== spec I2: probe-credential CLI =====
+
+
+def test_cli_probe_credential_issue_happy(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    from mthydra.controller.state.db import connect
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    # authority-migrate-placeholder: the test bootstrap inserts a real
+    # authority, so we don't need to migrate. Seed a box + vantage.
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'live', 'v1', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('vk', 'kz', 'cloud-cis', 'active', '2026-05-26T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    rc = run(["probe-credential-issue", "--box", "b1", "--vantage", "vk",
+              "--evidence", "initial cred", "--db-path", str(db)])
+    assert rc == 0
+    conn = connect(db)
+    n = conn.execute(
+        "SELECT COUNT(*) FROM probe_credentials WHERE box_id='b1' AND vantage_id='vk'"
+    ).fetchone()[0]
+    assert n == 1
+    conn.close()
+
+
+def test_cli_probe_credential_issue_unknown_box(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    from mthydra.controller.state.db import connect
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('vk', 'kz', 'cloud-cis', 'active', '2026-05-26T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    rc = run(["probe-credential-issue", "--box", "ghost", "--vantage", "vk",
+              "--db-path", str(db)])
+    assert rc == 2
+    assert "unknown box" in capsys.readouterr().err
+
+
+def test_cli_probe_credential_issue_refuses_non_active_vantage(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    from mthydra.controller.state.db import connect
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'live', 'v1', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('vk', 'kz', 'cloud-cis', 'candidate', '2026-05-26T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    rc = run(["probe-credential-issue", "--box", "b1", "--vantage", "vk",
+              "--db-path", str(db)])
+    assert rc == 2
+    assert "candidate" in capsys.readouterr().err
+
+
+def test_cli_probe_credential_list_and_revoke(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    from mthydra.controller.state.db import connect
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'live', 'v1', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('vk', 'kz', 'cloud-cis', 'active', '2026-05-26T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    run(["probe-credential-issue", "--box", "b1", "--vantage", "vk",
+         "--db-path", str(db)])
+    capsys.readouterr()
+    rc = run(["probe-credential-list", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    assert len(out) == 1
+    cred_id = out[0]["cred_id"]
+    # Revoke.
+    rc = run(["probe-credential-revoke", cred_id, "--reason", "rotation",
+              "--db-path", str(db)])
+    assert rc == 0
+    # Default list excludes revoked.
+    capsys.readouterr()
+    run(["probe-credential-list", "--json", "--db-path", str(db)])
+    out = _json.loads(capsys.readouterr().out)
+    assert out == []
+    # --include-revoked shows it.
+    capsys.readouterr()
+    run(["probe-credential-list", "--include-revoked", "--json",
+         "--db-path", str(db)])
+    out = _json.loads(capsys.readouterr().out)
+    assert len(out) == 1
+    assert out[0]["revoked_at"] is not None
+
+
+def test_cli_probe_credential_revoke_missing(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["probe-credential-revoke", "nope", "--reason", "x",
+              "--db-path", str(db)])
+    assert rc == 2

@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -508,6 +508,34 @@ _STATEMENTS: list[str] = [
     CREATE INDEX IF NOT EXISTS ix_ru_boxes_canary
       ON ru_boxes(image_version) WHERE is_canary = 1
     """,
+    # --- spec I2 additions: per-(box, vantage) probe credentials ---
+    """
+    CREATE TABLE IF NOT EXISTS probe_credentials (
+      cred_id              TEXT PRIMARY KEY,
+      box_id               TEXT NOT NULL,
+      vantage_id           TEXT NOT NULL,
+      credential           BLOB NOT NULL,
+      issued_at            TEXT NOT NULL,
+      revoked_at           TEXT,
+      authority_generation INTEGER NOT NULL,
+      FOREIGN KEY (box_id) REFERENCES ru_boxes(box_id),
+      FOREIGN KEY (vantage_id) REFERENCES probe_vantages(vantage_id),
+      FOREIGN KEY (authority_generation) REFERENCES credential_authority(generation)
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ix_probe_credentials_active
+      ON probe_credentials(box_id, vantage_id, authority_generation)
+      WHERE revoked_at IS NULL
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_probe_credentials_box
+      ON probe_credentials(box_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_probe_credentials_vantage
+      ON probe_credentials(vantage_id)
+    """,
     # --- spec J2 additions: operator alert acks ---
     """
     CREATE TABLE IF NOT EXISTS alert_acks (
@@ -684,6 +712,38 @@ def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
         (6, _now()),
+    )
+    conn.commit()
+
+
+def migrate_v13_to_v14(conn: sqlite3.Connection) -> None:
+    """Idempotent v13 → v14 migration: add probe_credentials table + indexes."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS probe_credentials (
+          cred_id              TEXT PRIMARY KEY,
+          box_id               TEXT NOT NULL,
+          vantage_id           TEXT NOT NULL,
+          credential           BLOB NOT NULL,
+          issued_at            TEXT NOT NULL,
+          revoked_at           TEXT,
+          authority_generation INTEGER NOT NULL,
+          FOREIGN KEY (box_id) REFERENCES ru_boxes(box_id),
+          FOREIGN KEY (vantage_id) REFERENCES probe_vantages(vantage_id),
+          FOREIGN KEY (authority_generation) REFERENCES credential_authority(generation)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_probe_credentials_active
+          ON probe_credentials(box_id, vantage_id, authority_generation)
+          WHERE revoked_at IS NULL;
+        CREATE INDEX IF NOT EXISTS ix_probe_credentials_box
+          ON probe_credentials(box_id);
+        CREATE INDEX IF NOT EXISTS ix_probe_credentials_vantage
+          ON probe_credentials(vantage_id);
+        """
+    )
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (14, _now()),
     )
     conn.commit()
 
@@ -952,4 +1012,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v11_to_v12(conn)
         if current < 13:
             migrate_v12_to_v13(conn)
+        if current < 14:
+            migrate_v13_to_v14(conn)
     conn.commit()
