@@ -3238,3 +3238,98 @@ def test_ru_box_canary_clear_refuses_non_canary(tmp_path, age_recipient, capsys)
     rc = run(["ru-box-canary-clear", "b1", "--reason", "x",
               "--db-path", str(db)])
     assert rc == 2
+
+
+# ===== spec M: compact-logs CLI =====
+
+
+def test_cli_compact_logs_dry_run_default(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    from mthydra.controller.state.db import connect
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    conn = connect(db)
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+            "kind, target, dedupe_key, payload) "
+            "VALUES (?, ?, 'telegram', 'warn', 'k', NULL, ?, 'p')",
+            (f"2026-05-2{i}T00:00:00Z", f"2026-05-2{i}T00:00:01Z", f"d{i}"),
+        )
+    conn.commit()
+    conn.close()
+    capsys.readouterr()
+    # Default = dry-run; no --evidence required.
+    rc = run(["compact-logs", "--table", "alert_log",
+              "--before", "2026-05-22T00:00:00Z",
+              "--db-path", str(db)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "would delete 2 row(s)" in out
+    # Rows still present.
+    conn = connect(db)
+    n = conn.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0]
+    assert n == 3
+    conn.close()
+
+
+def test_cli_compact_logs_real_run_requires_evidence(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["compact-logs", "--table", "alert_log",
+              "--before", "2026-05-22T00:00:00Z",
+              "--no-dry-run",
+              "--db-path", str(db)])
+    assert rc == 2
+    assert "--evidence required" in capsys.readouterr().err
+
+
+def test_cli_compact_logs_real_run_deletes(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    from mthydra.controller.state.db import connect
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    conn = connect(db)
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+            "kind, target, dedupe_key, payload) "
+            "VALUES (?, ?, 'telegram', 'warn', 'k', NULL, ?, 'p')",
+            (f"2026-05-2{i}T00:00:00Z", f"2026-05-2{i}T00:00:01Z", f"d{i}"),
+        )
+    conn.commit()
+    conn.close()
+    rc = run(["compact-logs", "--table", "alert_log",
+              "--before", "2026-05-22T00:00:00Z",
+              "--no-dry-run",
+              "--evidence", "monthly retention purge",
+              "--db-path", str(db)])
+    assert rc == 0
+    conn = connect(db)
+    n = conn.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0]
+    assert n == 1
+    conn.close()
+
+
+def test_cli_compact_logs_table_all_iterates(tmp_path, age_recipient, capsys):
+    """--table all loops over alert_log + probe_results + distribution_log."""
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    capsys.readouterr()
+    rc = run(["compact-logs", "--table", "all",
+              "--before", "2026-05-22T00:00:00Z",
+              "--db-path", str(db)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    for t in ("alert_log", "probe_results", "distribution_log"):
+        assert t in out

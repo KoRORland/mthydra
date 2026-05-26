@@ -568,6 +568,21 @@ def build_parser() -> argparse.ArgumentParser:
     rbcc.add_argument("--reason", required=True)
     rbcc.add_argument("--db-path", default=DEFAULT_DB)
 
+    # ----- spec M: append-only log compaction -----
+
+    cl = sub.add_parser("compact-logs",
+                          help="delete rows older than --before from append-only logs")
+    cl.add_argument("--table", required=True,
+                     choices=["alert_log", "probe_results", "distribution_log", "all"])
+    cl.add_argument("--before", required=True,
+                     help="ISO timestamp; rows with the table's natural ts column "
+                          "strictly less than this are deleted")
+    cl.add_argument("--no-dry-run", action="store_true",
+                     help="actually delete rows (default is dry-run COUNT only)")
+    cl.add_argument("--evidence", default=None,
+                     help="operator-attested rationale (recorded in audit_log)")
+    cl.add_argument("--db-path", default=DEFAULT_DB)
+
     # ----- spec K: distribution channel subcommands -----
 
     uc_set = sub.add_parser("user-channels-set",
@@ -931,6 +946,8 @@ def run(argv: list[str]) -> int:
         return _cmd_image_rollback(args)
     if args.cmd == "ru-box-canary-clear":
         return _cmd_ru_box_canary_clear(args)
+    if args.cmd == "compact-logs":
+        return _cmd_compact_logs(args)
 
     if args.cmd == "user-channels-set":
         return _cmd_user_channels_set(args)
@@ -3923,6 +3940,51 @@ def _cmd_ru_box_canary_clear(args) -> int:
             print(f"ru-box-canary-clear: {e}", file=sys.stderr)
             return 2
         print(f"ru-box-canary-clear: {args.box_id} -> regular fleet")
+        return 0
+    finally:
+        conn.close()
+
+
+# ----- spec M: log compaction -----
+
+
+def _cmd_compact_logs(args) -> int:
+    from mthydra.controller.state.compactor import (
+        compact_alert_log, compact_distribution_log, compact_probe_results,
+    )
+    from mthydra.controller.state.db import connect
+
+    dry_run = not args.no_dry_run
+    if not dry_run and not args.evidence:
+        print("compact-logs: --evidence required when running without --dry-run",
+              file=sys.stderr)
+        return 2
+
+    fns = {
+        "alert_log": compact_alert_log,
+        "probe_results": compact_probe_results,
+        "distribution_log": compact_distribution_log,
+    }
+    targets = (
+        list(fns.keys()) if args.table == "all" else [args.table]
+    )
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "compact-logs")
+        if rc is not None:
+            return rc
+        for t in targets:
+            try:
+                res = fns[t](
+                    conn, before=args.before, dry_run=dry_run,
+                    actor=args.evidence or "operator (dry-run)",
+                )
+            except RuntimeError as e:
+                print(f"compact-logs: {e}", file=sys.stderr)
+                return 2
+            verb = "would delete" if res.dry_run else "deleted"
+            print(f"compact-logs: {t} {verb} {res.deleted} row(s) "
+                  f"older than {args.before}")
         return 0
     finally:
         conn.close()

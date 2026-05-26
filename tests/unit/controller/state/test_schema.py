@@ -793,16 +793,17 @@ def test_v9_to_v10_migration_idempotent(tmp_path):
 
 # --- spec D2 schema v11 tests ---
 
-def test_schema_version_is_11(tmp_path):
+def test_schema_version_at_least_11(tmp_path):
+    """Superseded by test_schema_version_is_12. Kept to preserve numbering."""
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
 
-    assert SCHEMA_VERSION == 11
+    assert SCHEMA_VERSION >= 11
     db = tmp_path / "state.sqlite"
     conn = connect(db)
     apply_schema(conn)
     row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 11
+    assert row[0] >= 11
 
 
 def test_v11_ru_boxes_is_canary_column_default_0(tmp_path):
@@ -907,3 +908,126 @@ def test_v10_to_v11_migration_idempotent(tmp_path):
     assert conn.execute(
         "SELECT version FROM schema_version WHERE rowid=1"
     ).fetchone()[0] == 11
+
+
+# --- spec M schema v12 tests ---
+
+def test_schema_version_is_12(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+    assert SCHEMA_VERSION == 12
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 12
+
+
+def test_v12_compactor_marker_table_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    cols = {r[1] for r in conn.execute(
+        "PRAGMA table_info(compactor_marker)"
+    ).fetchall()}
+    assert {"table_name", "acquired_at", "acquired_by"} <= cols
+
+
+def test_v12_no_delete_still_refuses_without_marker(tmp_path):
+    """The triggers still block DELETE when no marker is present."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, added_at) "
+        "VALUES ('u1', NULL, 'email', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+        "kind, target, dedupe_key, payload) VALUES (?, ?, 'telegram', 'crit', "
+        "'k', NULL, 'd', 'p')",
+        ("2026-05-26T00:00:00Z", "2026-05-26T00:00:01Z"),
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM alert_log")
+        conn.commit()
+
+
+def test_v12_no_delete_relieved_when_marker_present(tmp_path):
+    """With a compactor_marker row for the table, DELETE is allowed."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+        "kind, target, dedupe_key, payload) VALUES (?, ?, 'telegram', 'crit', "
+        "'k', NULL, 'd', 'p')",
+        ("2026-05-26T00:00:00Z", "2026-05-26T00:00:01Z"),
+    )
+    conn.execute(
+        "INSERT INTO compactor_marker (table_name, acquired_at, acquired_by) "
+        "VALUES ('alert_log', ?, 'test')",
+        ("2026-05-26T00:00:02Z",),
+    )
+    conn.commit()
+    # Now DELETE should succeed.
+    conn.execute("DELETE FROM alert_log")
+    conn.commit()
+    n = conn.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0]
+    assert n == 0
+
+
+def test_v12_marker_does_not_relieve_other_tables(tmp_path):
+    """A marker for alert_log must NOT relieve probe_results or distribution_log."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    # Seed probe_results so the trigger has something to fire on.
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, image_version, created_at) "
+        "VALUES ('b1', 'p', 'r', 'sni-b1', 'live', 'v1', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, added_at) "
+        "VALUES ('vk', 'kz', 'cloud-cis', 'active', '2026-05-26T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO probe_results (box_id, vantage_id, cycle_at, check_type, status, "
+        "image_version, recorded_at) VALUES ('b1', 'vk', ?, 'surface_scan', 'pass', 'v1', ?)",
+        ("2026-05-26T00:00:00Z", "2026-05-26T00:00:01Z"),
+    )
+    conn.execute(
+        "INSERT INTO compactor_marker (table_name, acquired_at, acquired_by) "
+        "VALUES ('alert_log', ?, 'test')",
+        ("2026-05-26T00:00:02Z",),
+    )
+    conn.commit()
+    # Trying to DELETE probe_results with only an alert_log marker must still fail.
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM probe_results")
+        conn.commit()
+
+
+def test_v11_to_v12_migration_idempotent(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v11_to_v12
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute("UPDATE schema_version SET version=11 WHERE rowid=1")
+    conn.commit()
+    migrate_v11_to_v12(conn)
+    v = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
+    assert v == 12
+    migrate_v11_to_v12(conn)
+    assert conn.execute(
+        "SELECT version FROM schema_version WHERE rowid=1"
+    ).fetchone()[0] == 12

@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -74,8 +74,9 @@ _TRIGGER_PROBE_RESULTS_NO_UPDATE = """
 _TRIGGER_PROBE_RESULTS_NO_DELETE = """
     CREATE TRIGGER IF NOT EXISTS probe_results_no_delete
     BEFORE DELETE ON probe_results
+    WHEN NOT EXISTS (SELECT 1 FROM compactor_marker WHERE table_name='probe_results')
     BEGIN
-      SELECT RAISE(ABORT, 'probe-results: append-only');
+      SELECT RAISE(ABORT, 'probe-results: append-only (spec M: acquire compactor_marker first)');
     END
     """
 
@@ -90,8 +91,9 @@ _TRIGGER_ALERT_LOG_NO_UPDATE = """
 _TRIGGER_ALERT_LOG_NO_DELETE = """
     CREATE TRIGGER IF NOT EXISTS alert_log_no_delete
     BEFORE DELETE ON alert_log
+    WHEN NOT EXISTS (SELECT 1 FROM compactor_marker WHERE table_name='alert_log')
     BEGIN
-      SELECT RAISE(ABORT, 'alert-log: append-only');
+      SELECT RAISE(ABORT, 'alert-log: append-only (spec M: acquire compactor_marker first)');
     END
     """
 
@@ -106,8 +108,9 @@ _TRIGGER_DISTRIBUTION_LOG_NO_UPDATE = """
 _TRIGGER_DISTRIBUTION_LOG_NO_DELETE = """
     CREATE TRIGGER IF NOT EXISTS distribution_log_no_delete
     BEFORE DELETE ON distribution_log
+    WHEN NOT EXISTS (SELECT 1 FROM compactor_marker WHERE table_name='distribution_log')
     BEGIN
-      SELECT RAISE(ABORT, 'distribution-log: append-only');
+      SELECT RAISE(ABORT, 'distribution-log: append-only (spec M: acquire compactor_marker first)');
     END
     """
 
@@ -129,6 +132,14 @@ _STATEMENTS: list[str] = [
       version    INTEGER NOT NULL,
       applied_at TEXT    NOT NULL,
       CHECK (rowid = 1)
+    )
+    """,
+    # --- spec M: log compactor sentinel — created early so triggers can reference ---
+    """
+    CREATE TABLE IF NOT EXISTS compactor_marker (
+      table_name  TEXT PRIMARY KEY,
+      acquired_at TEXT NOT NULL,
+      acquired_by TEXT NOT NULL
     )
     """,
     """
@@ -643,6 +654,34 @@ def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v11_to_v12(conn: sqlite3.Connection) -> None:
+    """Idempotent v11 → v12 migration: add compactor_marker table; replace the
+    three *_no_delete triggers with sentinel-aware variants (spec M-D1).
+
+    SQLite does not allow ALTER TRIGGER; we DROP IF EXISTS + CREATE.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS compactor_marker (
+          table_name  TEXT PRIMARY KEY,
+          acquired_at TEXT NOT NULL,
+          acquired_by TEXT NOT NULL
+        );
+        DROP TRIGGER IF EXISTS alert_log_no_delete;
+        DROP TRIGGER IF EXISTS probe_results_no_delete;
+        DROP TRIGGER IF EXISTS distribution_log_no_delete;
+        """
+    )
+    conn.execute(_TRIGGER_ALERT_LOG_NO_DELETE)
+    conn.execute(_TRIGGER_PROBE_RESULTS_NO_DELETE)
+    conn.execute(_TRIGGER_DISTRIBUTION_LOG_NO_DELETE)
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (12, _now()),
+    )
+    conn.commit()
+
+
 def migrate_v10_to_v11(conn: sqlite3.Connection) -> None:
     """Idempotent v10 → v11 migration: ru_boxes.is_canary + partial index +
     image_profiles retired-immutability trigger."""
@@ -850,4 +889,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v9_to_v10(conn)
         if current < 11:
             migrate_v10_to_v11(conn)
+        if current < 12:
+            migrate_v11_to_v12(conn)
     conn.commit()
