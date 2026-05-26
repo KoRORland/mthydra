@@ -409,6 +409,27 @@ Boot each canary VM with the cloud-init output. Within ~10 minutes, the RU agent
 mthydra-controller ru-box-list --json | jq '.[] | select(.is_canary==1)'
 ```
 
+**Shortcut: `mthydra-ops ru-provision`** automates the full provision → VM-create → mark-live cycle. With `--provider hetzner` it talks to the Hetzner Cloud API directly; with `--provider manual` it prints the cloud-init and the exact `ru-box-mark-live` command to run after the VM boots elsewhere.
+
+```bash
+# Hetzner end-to-end (note: --canary flag for soak cohort)
+export HCLOUD_TOKEN="hetzner-cloud-api-token-here"
+mthydra-ops ru-provision \
+    --provider hetzner --region fsn1 \
+    --canary \
+    --hcloud-server-type cx22 --hcloud-location fsn1 \
+    --hcloud-image ubuntu-24.04 \
+    --hcloud-ssh-keys my-throwaway-key \
+    --agent-source-url "https://b2.example/agent/v0.1.0.tar.gz" \
+    --agent-source-sha256 "<sha256>" \
+    --descriptor-refresh-url "https://b2.example/descriptors/current"
+
+# Manual mode (boot the VM yourself, then follow the printed mark-live command)
+mthydra-ops ru-provision --provider manual --region fsn1 --canary ...
+```
+
+Exit codes: 2 = bad args; 4 = controller too old (no `box_id` line on stderr); 5 = Hetzner create failed (DB row orphaned in `provisioning` — the script prints the cleanup command); 6 = VM is up but `ru-box-mark-live` failed (split-brain — script prints the recovery commands).
+
 ### §3.4 — Run the soak (manual probe collection)
 
 For each canary box, you must collect probe results from **at least `cfg.probe.min_distinct_vantages` (default 2) distinct Russia-approximating vantages**, with **at least `cfg.image.canary.min_cycles_per_box` (default 4) cycles each**.

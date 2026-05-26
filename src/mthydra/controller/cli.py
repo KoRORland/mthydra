@@ -2437,6 +2437,10 @@ def _cmd_provision_seed(args) -> int:
             print(seed.to_json_pretty().decode("utf-8"))
         else:
             print(seed.to_cloud_init().decode("utf-8"))
+        # Print box_id to stderr so callers (mthydra-ops ru-provision) can
+        # parse it without parsing the cloud-init YAML or racing on
+        # ru-box-list. Stdout still carries the chosen format unchanged.
+        print(f"provision-seed: created box_id={seed.box_id}", file=sys.stderr)
         return 0
     finally:
         conn.close()

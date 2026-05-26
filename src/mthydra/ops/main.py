@@ -68,6 +68,17 @@ def _run_controller(*args: str, check: bool = True, capture: bool = False) -> su
     )
 
 
+def _run_controller_capture_both(*args: str) -> subprocess.CompletedProcess:
+    """Capture both stdout and stderr. ru-provision uses stderr to extract
+    the box_id printed by provision-seed."""
+    cmd = [_CONTROLLER_BIN, *args]
+    _say(f"$ {' '.join(cmd)}")
+    return subprocess.run(
+        cmd, check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+
+
 def _confirm(question: str, default_no: bool = True) -> bool:
     """Interactive y/N. In non-TTY context, refuse unless --yes was passed."""
     if not sys.stdin.isatty():
@@ -669,6 +680,150 @@ def cmd_alert_summary(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# ru-provision  —  runbook §3.3 + §5 (the unified one-shot RU node setup)
+# ---------------------------------------------------------------------------
+
+
+_BOX_ID_RE = None  # lazily compiled
+
+
+def _extract_box_id(stderr_text: str) -> str | None:
+    """Pull the box_id out of provision-seed's stderr line.
+
+    Format: 'provision-seed: created box_id=<uuid>'
+    """
+    import re
+    global _BOX_ID_RE
+    if _BOX_ID_RE is None:
+        _BOX_ID_RE = re.compile(r"provision-seed: created box_id=(\S+)")
+    for line in stderr_text.splitlines():
+        m = _BOX_ID_RE.search(line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def cmd_ru_provision(args) -> int:
+    """One-shot RU node provisioning: provision-seed → VM create → mark-live.
+
+    Two provider modes:
+      --provider hetzner: calls Hetzner Cloud API, marks live with the
+        synchronously-assigned IPv4.
+      --provider manual: prints cloud-init to stdout and instructs the
+        operator to mark-live manually after the VM boots.
+    """
+    if args.provider == "hetzner":
+        if not args.hcloud_token:
+            _err("--hcloud-token (or HCLOUD_TOKEN env) required for --provider hetzner")
+            return 2
+        if not args.hcloud_ssh_keys:
+            _err("--hcloud-ssh-keys required for --provider hetzner")
+            return 2
+
+    # Step 1: provision-seed. provider tag stays on the spec G side (it goes
+    # into ru_boxes.provider for inventory); the Hetzner-side server-type +
+    # location are separate.
+    provision_args = [
+        "provision-seed",
+        "--provider", args.provider_tag or args.provider,
+        "--region", args.region,
+        "--format", "cloud-init",
+        "--ttl-seconds", str(args.ttl_seconds),
+        "--db-path", args.db_path,
+        "--config", args.config,
+        "--agent-source-url", args.agent_source_url,
+        "--agent-source-sha256", args.agent_source_sha256,
+        "--descriptor-refresh-url", args.descriptor_refresh_url,
+    ]
+    if args.is_canary:
+        provision_args.append("--canary")
+
+    try:
+        res = _run_controller_capture_both(*provision_args)
+    except subprocess.CalledProcessError as e:
+        _err(f"provision-seed failed: {e.stderr.strip() if e.stderr else e}")
+        return e.returncode
+
+    cloud_init = res.stdout
+    box_id = _extract_box_id(res.stderr)
+    if not box_id:
+        _err(
+            "provision-seed succeeded but stderr did not contain "
+            "'provision-seed: created box_id=...' — older controller? "
+            "Fall back to manual marking via ru-box-list."
+        )
+        return 4
+
+    _say(f"box_id minted: {box_id}")
+
+    # Step 2: bring up the VM.
+    if args.provider == "manual":
+        _say("--provider manual: writing cloud-init to stdout. Boot a VM with "
+              "this as user-data, then run:")
+        print(cloud_init)
+        _say(
+            f"After boot, mark live with:\n"
+            f"  mthydra-controller ru-box-mark-live {box_id} "
+            f"--public-ip <VM-IP> --db-path {args.db_path}"
+        )
+        return 0
+
+    if args.provider == "hetzner":
+        from mthydra.ops.hetzner import HetznerError, create_server
+        _say(f"creating Hetzner server (type={args.hcloud_server_type} "
+              f"image={args.hcloud_image} location={args.hcloud_location})")
+        try:
+            srv = create_server(
+                token=args.hcloud_token,
+                name=args.hcloud_name or f"mthydra-ru-{box_id[:8]}",
+                server_type=args.hcloud_server_type,
+                location=args.hcloud_location,
+                image=args.hcloud_image,
+                ssh_keys=list(args.hcloud_ssh_keys),
+                user_data=cloud_init,
+            )
+        except HetznerError as e:
+            _err(f"Hetzner create failed: {e}")
+            _err(
+                f"DB row {box_id} is now orphaned in 'provisioning' state. "
+                f"Clean up with:\n"
+                f"  mthydra-controller ru-box-terminate {box_id} "
+                f"--reason hetzner_create_failed --db-path {args.db_path}"
+            )
+            return 5
+        _say(f"hetzner server #{srv.server_id} ({srv.name}) up at {srv.public_ipv4}")
+
+        # Step 3: mark live.
+        try:
+            _run_controller(
+                "ru-box-mark-live", box_id,
+                "--public-ip", srv.public_ipv4,
+                "--db-path", args.db_path,
+            )
+        except subprocess.CalledProcessError as e:
+            _err(f"ru-box-mark-live failed: {e}")
+            _err(
+                f"Hetzner server #{srv.server_id} ({srv.public_ipv4}) is RUNNING "
+                f"but the DB row {box_id} is still 'provisioning'. Either retry "
+                f"mark-live manually, or terminate both:\n"
+                f"  mthydra-controller ru-box-mark-live {box_id} "
+                f"--public-ip {srv.public_ipv4} --db-path {args.db_path}\n"
+                f"  # OR clean up:\n"
+                f"  hcloud server delete {srv.server_id}\n"
+                f"  mthydra-controller ru-box-terminate {box_id} "
+                f"--reason mark_live_failed --db-path {args.db_path}"
+            )
+            return 6
+
+        _say(f"ru-provision complete. box_id={box_id} ip={srv.public_ipv4} "
+              f"(hetzner #{srv.server_id})")
+        return 0
+
+    _err(f"unknown --provider {args.provider!r}")
+    return 2
+
+
+# ---------------------------------------------------------------------------
 # main parser
 # ---------------------------------------------------------------------------
 
@@ -774,6 +929,43 @@ def build_parser() -> argparse.ArgumentParser:
     al.add_argument("--db-path", default=_DEFAULT_DB)
     al.add_argument("--config", default=_DEFAULT_CONFIG)
 
+    rp = sub.add_parser(
+        "ru-provision",
+        help="one-shot RU node setup: provision-seed → VM create → mark-live",
+    )
+    rp.add_argument("--provider", required=True,
+                     choices=["hetzner", "manual"],
+                     help="'hetzner' uses the Hetzner Cloud API; "
+                          "'manual' prints cloud-init and exits")
+    rp.add_argument("--provider-tag", default=None,
+                     help="value stored in ru_boxes.provider (defaults to "
+                          "--provider)")
+    rp.add_argument("--region", required=True,
+                     help="value stored in ru_boxes.region (e.g. fsn1)")
+    rp.add_argument("--canary", action="store_true", dest="is_canary",
+                     help="mark the box as is_canary=1 (spec D2 soak cohort)")
+    rp.add_argument("--ttl-seconds", type=int, default=3600,
+                     help="image_signed_url_ttl_seconds (cloud-init download window)")
+    rp.add_argument("--db-path", default=_DEFAULT_DB)
+    rp.add_argument("--config", default=_DEFAULT_CONFIG)
+    rp.add_argument("--agent-source-url", required=True)
+    rp.add_argument("--agent-source-sha256", required=True)
+    rp.add_argument("--descriptor-refresh-url", required=True)
+    # Hetzner-specific.
+    rp.add_argument("--hcloud-token",
+                     default=os.environ.get("HCLOUD_TOKEN"),
+                     help="Hetzner Cloud API token (or HCLOUD_TOKEN env)")
+    rp.add_argument("--hcloud-server-type", default="cx22",
+                     help="Hetzner server type (default cx22)")
+    rp.add_argument("--hcloud-location", default="fsn1",
+                     help="Hetzner datacenter (default fsn1)")
+    rp.add_argument("--hcloud-image", default="ubuntu-24.04",
+                     help="Hetzner base image (default ubuntu-24.04)")
+    rp.add_argument("--hcloud-ssh-keys", nargs="*", default=[],
+                     help="Hetzner SSH key names or IDs to register on the new server")
+    rp.add_argument("--hcloud-name", default=None,
+                     help="server name (default: 'mthydra-ru-<box_id_prefix>')")
+
     return p
 
 
@@ -788,6 +980,7 @@ _DISPATCH: dict[str, object] = {
     "user-onboard": cmd_user_onboard,
     "rotate-vantage": cmd_rotate_vantage,
     "alert-summary": cmd_alert_summary,
+    "ru-provision": cmd_ru_provision,
 }
 
 
