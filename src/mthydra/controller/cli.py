@@ -546,6 +546,25 @@ def build_parser() -> argparse.ArgumentParser:
     obs_hb.add_argument("--db-path", default=DEFAULT_DB)
     obs_hb.add_argument("--config", default="/etc/mthydra/controller.toml")
 
+    # ----- spec J2: operator alert acks -----
+
+    oaa = sub.add_parser("obs-alert-ack",
+                           help="suppress alert dispatch for one dedupe_key until --expires-in")
+    oaa.add_argument("dedupe_key")
+    oaa.add_argument("--evidence", required=True,
+                      help="operator-attested reason for the ack (recorded in audit + alert_acks)")
+    oaa.add_argument("--expires-in", default="24h",
+                      dest="expires_in",
+                      help="duration; max 7d (default 24h). Format: <N>{s,m,h,d}")
+    oaa.add_argument("--acked-by", default="operator", dest="acked_by")
+    oaa.add_argument("--db-path", default=DEFAULT_DB)
+
+    oaal = sub.add_parser("obs-alert-ack-list",
+                            help="list alert acks; default shows only active ones")
+    oaal.add_argument("--include-expired", action="store_true")
+    oaal.add_argument("--db-path", default=DEFAULT_DB)
+    oaal.add_argument("--json", action="store_true")
+
     # ----- spec D2: image canary + rollback subcommands -----
 
     ipst = sub.add_parser("image-promote-status",
@@ -573,7 +592,8 @@ def build_parser() -> argparse.ArgumentParser:
     cl = sub.add_parser("compact-logs",
                           help="delete rows older than --before from append-only logs")
     cl.add_argument("--table", required=True,
-                     choices=["alert_log", "probe_results", "distribution_log", "all"])
+                     choices=["alert_log", "probe_results", "distribution_log",
+                              "alert_acks", "all"])
     cl.add_argument("--before", required=True,
                      help="ISO timestamp; rows with the table's natural ts column "
                           "strictly less than this are deleted")
@@ -939,6 +959,10 @@ def run(argv: list[str]) -> int:
         return _cmd_obs_alert_test(args, mode)
     if args.cmd == "obs-heartbeat-now":
         return _cmd_obs_heartbeat_now(args, mode)
+    if args.cmd == "obs-alert-ack":
+        return _cmd_obs_alert_ack(args)
+    if args.cmd == "obs-alert-ack-list":
+        return _cmd_obs_alert_ack_list(args)
 
     if args.cmd == "image-promote-status":
         return _cmd_image_promote_status(args)
@@ -3950,7 +3974,8 @@ def _cmd_ru_box_canary_clear(args) -> int:
 
 def _cmd_compact_logs(args) -> int:
     from mthydra.controller.state.compactor import (
-        compact_alert_log, compact_distribution_log, compact_probe_results,
+        compact_alert_acks, compact_alert_log, compact_distribution_log,
+        compact_probe_results,
     )
     from mthydra.controller.state.db import connect
 
@@ -3964,6 +3989,7 @@ def _cmd_compact_logs(args) -> int:
         "alert_log": compact_alert_log,
         "probe_results": compact_probe_results,
         "distribution_log": compact_distribution_log,
+        "alert_acks": compact_alert_acks,
     }
     targets = (
         list(fns.keys()) if args.table == "all" else [args.table]
@@ -3985,6 +4011,87 @@ def _cmd_compact_logs(args) -> int:
             verb = "would delete" if res.dry_run else "deleted"
             print(f"compact-logs: {t} {verb} {res.deleted} row(s) "
                   f"older than {args.before}")
+        return 0
+    finally:
+        conn.close()
+
+
+# ----- spec J2: operator alert acks -----
+
+
+_DURATION_MAX_SECONDS = 7 * 86400
+
+
+def _parse_duration_seconds(spec: str) -> int:
+    """Parse e.g. '24h', '7d', '300s'. Refuses > 7d. Refuses unknown suffix."""
+    if not spec or spec[-1] not in {"s", "m", "h", "d"}:
+        raise ValueError(f"duration must end with s/m/h/d (got {spec!r})")
+    try:
+        n = int(spec[:-1])
+    except ValueError as e:
+        raise ValueError(f"duration: invalid number {spec!r}") from e
+    if n <= 0:
+        raise ValueError(f"duration must be positive (got {spec!r})")
+    mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}[spec[-1]]
+    secs = n * mult
+    if secs > _DURATION_MAX_SECONDS:
+        raise ValueError(
+            f"duration {spec!r} exceeds 7d cap"
+        )
+    return secs
+
+
+def _cmd_obs_alert_ack(args) -> int:
+    from datetime import datetime, timedelta, timezone
+
+    from mthydra.controller.state.alert_acks import ack
+    from mthydra.controller.state.db import connect
+
+    try:
+        secs = _parse_duration_seconds(args.expires_in)
+    except ValueError as e:
+        print(f"obs-alert-ack: {e}", file=sys.stderr)
+        return 2
+    now = _now()
+    expires = (
+        datetime.fromisoformat(now.replace("Z", "+00:00"))
+        + timedelta(seconds=secs)
+    ).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn = connect(args.db_path)
+    try:
+        ack(
+            conn, dedupe_key=args.dedupe_key, acked_by=args.acked_by,
+            evidence=args.evidence, at=now, expires_at=expires,
+        )
+        print(f"obs-alert-ack: {args.dedupe_key} acked until {expires}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_obs_alert_ack_list(args) -> int:
+    from mthydra.controller.state.alert_acks import list_active, list_all
+    from mthydra.controller.state.db import connect
+
+    conn = connect(args.db_path)
+    try:
+        rows = list_all(conn) if args.include_expired else list_active(conn, now=_now())
+        if args.json:
+            import json as _json
+            print(_json.dumps([
+                {
+                    "id": r.id,
+                    "dedupe_key": r.dedupe_key,
+                    "acked_at": r.acked_at,
+                    "acked_by": r.acked_by,
+                    "expires_at": r.expires_at,
+                    "evidence": r.evidence,
+                } for r in rows
+            ], sort_keys=True))
+        else:
+            for r in rows:
+                print(f"#{r.id} {r.dedupe_key} by={r.acked_by} "
+                      f"expires={r.expires_at} ev={r.evidence!r}")
         return 0
     finally:
         conn.close()

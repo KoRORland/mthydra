@@ -28,6 +28,9 @@ _CUTOFF_COL: dict[str, str] = {
     "alert_log": "attempted_at",
     "probe_results": "cycle_at",
     "distribution_log": "attempted_at",
+    # Spec J2: alert_acks are forensic-relevant only while active; once
+    # expired they may be compacted.
+    "alert_acks": "expires_at",
 }
 
 
@@ -122,6 +125,12 @@ def compact_distribution_log(
 ) -> CompactionResult:
     return _compact(conn, "distribution_log", before=before,
                      dry_run=dry_run, actor=actor)
+
+
+def compact_alert_acks(
+    conn: sqlite3.Connection, *, before: str, dry_run: bool, actor: str,
+) -> CompactionResult:
+    return _compact(conn, "alert_acks", before=before, dry_run=dry_run, actor=actor)
 
 
 def _now() -> str:

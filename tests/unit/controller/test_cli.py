@@ -3333,3 +3333,115 @@ def test_cli_compact_logs_table_all_iterates(tmp_path, age_recipient, capsys):
     out = capsys.readouterr().out
     for t in ("alert_log", "probe_results", "distribution_log"):
         assert t in out
+
+
+# ===== spec J2: obs-alert-ack CLI =====
+
+
+def test_cli_obs_alert_ack_default_24h(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["obs-alert-ack", "probe_kill_pending::b1",
+              "--evidence", "aware, replacing box",
+              "--db-path", str(db)])
+    assert rc == 0
+    from mthydra.controller.state.alert_acks import list_active
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    active = list_active(conn, now="2030-01-01T00:00:00Z")
+    # Default 24h => expires long before 2030; should be empty.
+    assert active == []
+    # But active in the near future:
+    active_now = list_active(conn, now="2026-05-26T01:00:00Z")
+    assert any(a.dedupe_key == "probe_kill_pending::b1" for a in active_now)
+    conn.close()
+
+
+def test_cli_obs_alert_ack_custom_expires(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["obs-alert-ack", "k",
+              "--evidence", "ev",
+              "--expires-in", "5d",
+              "--db-path", str(db)])
+    assert rc == 0
+
+
+def test_cli_obs_alert_ack_refuses_excessive_duration(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["obs-alert-ack", "k",
+              "--evidence", "ev",
+              "--expires-in", "30d",
+              "--db-path", str(db)])
+    assert rc == 2
+    assert "7d cap" in capsys.readouterr().err
+
+
+def test_cli_obs_alert_ack_refuses_bad_suffix(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    rc = run(["obs-alert-ack", "k",
+              "--evidence", "ev",
+              "--expires-in", "5w",
+              "--db-path", str(db)])
+    assert rc == 2
+
+
+def test_cli_obs_alert_ack_list_active_only(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    # Two acks: one short-lived (will expire by listing time), one not.
+    run(["obs-alert-ack", "long",
+         "--evidence", "ev", "--expires-in", "7d",
+         "--db-path", str(db)])
+    run(["obs-alert-ack", "short",
+         "--evidence", "ev", "--expires-in", "1s",
+         "--db-path", str(db)])
+    # Wait for the 1s ack to expire — list_active uses _now() which advances.
+    import time
+    time.sleep(2)
+    capsys.readouterr()
+    rc = run(["obs-alert-ack-list", "--json", "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    keys = {r["dedupe_key"] for r in out}
+    assert "long" in keys
+    assert "short" not in keys
+
+
+def test_cli_obs_alert_ack_list_include_expired(tmp_path, age_recipient, capsys):
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    run(["obs-alert-ack", "short",
+         "--evidence", "ev", "--expires-in", "1s",
+         "--db-path", str(db)])
+    import time
+    time.sleep(2)
+    capsys.readouterr()
+    rc = run(["obs-alert-ack-list", "--include-expired", "--json",
+              "--db-path", str(db)])
+    assert rc == 0
+    import json as _json
+    out = _json.loads(capsys.readouterr().out)
+    keys = {r["dedupe_key"] for r in out}
+    assert "short" in keys

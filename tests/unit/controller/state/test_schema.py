@@ -912,14 +912,15 @@ def test_v10_to_v11_migration_idempotent(tmp_path):
 
 # --- spec M schema v12 tests ---
 
-def test_schema_version_is_12(tmp_path):
+def test_schema_version_at_least_12(tmp_path):
+    """Superseded by test_schema_version_is_13. Kept to preserve numbering."""
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION >= 12
     conn = connect(tmp_path / "state.sqlite")
     apply_schema(conn)
     row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 12
+    assert row[0] >= 12
 
 
 def test_v12_compactor_marker_table_present(tmp_path):
@@ -1031,3 +1032,79 @@ def test_v11_to_v12_migration_idempotent(tmp_path):
     assert conn.execute(
         "SELECT version FROM schema_version WHERE rowid=1"
     ).fetchone()[0] == 12
+
+
+# --- spec J2 schema v13 tests ---
+
+def test_schema_version_is_13(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+    assert SCHEMA_VERSION == 13
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    assert row[0] == 13
+
+
+def test_v13_alert_acks_table_present(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(alert_acks)").fetchall()}
+    assert {"id", "dedupe_key", "acked_at", "acked_by",
+            "expires_at", "evidence"} <= cols
+
+
+def test_v13_alert_acks_append_only(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO alert_acks (dedupe_key, acked_at, acked_by, expires_at, evidence) "
+        "VALUES ('k', ?, 'op', ?, 'ev')",
+        ("2026-05-26T00:00:00Z", "2026-05-26T01:00:00Z"),
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE alert_acks SET evidence='changed' WHERE id=1")
+        conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM alert_acks")
+        conn.commit()
+
+
+def test_v13_alert_acks_delete_relieved_by_compactor_marker(tmp_path):
+    """Spec M compactor can also delete from alert_acks."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute(
+        "INSERT INTO alert_acks (dedupe_key, acked_at, acked_by, expires_at, evidence) "
+        "VALUES ('k', ?, 'op', ?, 'ev')",
+        ("2026-05-26T00:00:00Z", "2026-05-26T01:00:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO compactor_marker (table_name, acquired_at, acquired_by) "
+        "VALUES ('alert_acks', ?, 'test')",
+        ("2026-05-26T00:00:02Z",),
+    )
+    conn.commit()
+    conn.execute("DELETE FROM alert_acks")
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM alert_acks").fetchone()[0] == 0
+
+
+def test_v12_to_v13_migration_idempotent(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, migrate_v12_to_v13
+    conn = connect(tmp_path / "state.sqlite")
+    apply_schema(conn)
+    conn.execute("UPDATE schema_version SET version=12 WHERE rowid=1")
+    conn.commit()
+    migrate_v12_to_v13(conn)
+    assert conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 13
+    migrate_v12_to_v13(conn)
+    assert conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 13

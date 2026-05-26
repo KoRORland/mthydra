@@ -207,6 +207,56 @@ def test_offline_mode_dispatches_via_dryrun(db):
     conn.close()
 
 
+def test_alerter_skips_dispatch_when_acked(db):
+    """Spec J2: an active ack on the dedupe_key suppresses dispatch entirely."""
+    conn = connect(db)
+    set_obligation(conn,
+                   obligation_id="probe_kill_pending::b1",
+                   last_proven_at=NOW, proven_by="x",
+                   next_due_at=NOW, details=None)
+    from mthydra.controller.state.alert_acks import ack
+    ack(conn, dedupe_key="probe_kill_pending::b1",
+        acked_by="op", evidence="working on it",
+        at=NOW, expires_at=MUCH_LATER)
+    conn.close()
+    tg = DryRunSink(label="telegram")
+    em = DryRunSink(label="email")
+    sw = _sweep(db, tg=tg, em=em)
+    res = sw.run_once()
+    assert res["dispatched"] == 0
+    assert res["acked"] == 1
+    assert tg.calls == []
+    assert em.calls == []
+    # Audit row reflects alert_acked, not alert_deduped/dispatched.
+    conn = connect(db)
+    actions = {
+        r[0] for r in conn.execute(
+            "SELECT action FROM audit_log "
+            "WHERE target='probe_kill_pending::b1'"
+        ).fetchall()
+    }
+    assert "alert_acked" in actions
+    conn.close()
+
+
+def test_alerter_dispatches_when_ack_expired(db):
+    """Once the ack window passes, alerter resumes normal dispatch + dedupe."""
+    conn = connect(db)
+    set_obligation(conn,
+                   obligation_id="probe_kill_pending::b1",
+                   last_proven_at=NOW, proven_by="x",
+                   next_due_at=NOW, details=None)
+    from mthydra.controller.state.alert_acks import ack
+    ack(conn, dedupe_key="probe_kill_pending::b1",
+        acked_by="op", evidence="working on it",
+        at=NOW, expires_at="2026-05-25T12:00:30Z")
+    conn.close()
+    sw = _sweep(db, clock="2026-05-25T13:00:00Z")
+    res = sw.run_once()
+    assert res["dispatched"] == 2  # crit -> two sinks
+    assert res["acked"] == 0
+
+
 def test_arm_and_disarm_production(db):
     sw = AlertSweep(
         db_path=db,

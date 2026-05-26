@@ -27,6 +27,7 @@ from mthydra.controller.observability.snapshot import (
     Snapshot,
     collect_snapshot,
 )
+from mthydra.controller.state import alert_acks as _aa
 from mthydra.controller.state import alert_log as _al
 from mthydra.controller.state.audit import log_event
 from mthydra.controller.state.db import connect
@@ -109,9 +110,22 @@ class AlertSweep:
             decisions = _build_decisions(snap, self.staleness_alert_seconds)
             dispatched = 0
             deduped = 0
+            acked = 0
             for sev, dedupe_key, kind, target, subject, body in decisions:
                 sinks = _ROUTING.get(sev, ())
                 if not sinks:
+                    continue
+                # Spec J2: operator-acked alerts skip dispatch (and skip
+                # alert_log too — no attempt was made).
+                if _aa.is_acked(conn, dedupe_key, now=now):
+                    acked += 1
+                    log_event(
+                        conn, ts=now, actor="alerter",
+                        action="alert_acked",
+                        target=dedupe_key, details_json=json.dumps({
+                            "severity": sev, "kind": kind,
+                        }),
+                    )
                     continue
                 if self._is_deduped(conn, dedupe_key, sev, now):
                     deduped += 1
@@ -158,6 +172,7 @@ class AlertSweep:
                 )
             self._heartbeat(conn, now, dispatched, deduped)
             return {"dispatched": dispatched, "deduped": deduped,
+                    "acked": acked,
                     "decisions": len(decisions)}
         finally:
             conn.close()

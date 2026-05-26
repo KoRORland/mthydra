@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -94,6 +94,23 @@ _TRIGGER_ALERT_LOG_NO_DELETE = """
     WHEN NOT EXISTS (SELECT 1 FROM compactor_marker WHERE table_name='alert_log')
     BEGIN
       SELECT RAISE(ABORT, 'alert-log: append-only (spec M: acquire compactor_marker first)');
+    END
+    """
+
+_TRIGGER_ALERT_ACKS_NO_UPDATE = """
+    CREATE TRIGGER IF NOT EXISTS alert_acks_no_update
+    BEFORE UPDATE ON alert_acks
+    BEGIN
+      SELECT RAISE(ABORT, 'alert-acks: append-only');
+    END
+    """
+
+_TRIGGER_ALERT_ACKS_NO_DELETE = """
+    CREATE TRIGGER IF NOT EXISTS alert_acks_no_delete
+    BEFORE DELETE ON alert_acks
+    WHEN NOT EXISTS (SELECT 1 FROM compactor_marker WHERE table_name='alert_acks')
+    BEGIN
+      SELECT RAISE(ABORT, 'alert-acks: append-only (spec M: acquire compactor_marker first)');
     END
     """
 
@@ -491,6 +508,23 @@ _STATEMENTS: list[str] = [
     CREATE INDEX IF NOT EXISTS ix_ru_boxes_canary
       ON ru_boxes(image_version) WHERE is_canary = 1
     """,
+    # --- spec J2 additions: operator alert acks ---
+    """
+    CREATE TABLE IF NOT EXISTS alert_acks (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      dedupe_key  TEXT NOT NULL,
+      acked_at    TEXT NOT NULL,
+      acked_by    TEXT NOT NULL,
+      expires_at  TEXT NOT NULL,
+      evidence    TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_alert_acks_dedupe_expires
+      ON alert_acks(dedupe_key, expires_at DESC)
+    """,
+    _TRIGGER_ALERT_ACKS_NO_UPDATE,
+    _TRIGGER_ALERT_ACKS_NO_DELETE,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -650,6 +684,31 @@ def migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
         (6, _now()),
+    )
+    conn.commit()
+
+
+def migrate_v12_to_v13(conn: sqlite3.Connection) -> None:
+    """Idempotent v12 → v13 migration: add alert_acks table + index + triggers."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS alert_acks (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          dedupe_key  TEXT NOT NULL,
+          acked_at    TEXT NOT NULL,
+          acked_by    TEXT NOT NULL,
+          expires_at  TEXT NOT NULL,
+          evidence    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_alert_acks_dedupe_expires
+          ON alert_acks(dedupe_key, expires_at DESC);
+        """
+    )
+    conn.execute(_TRIGGER_ALERT_ACKS_NO_UPDATE)
+    conn.execute(_TRIGGER_ALERT_ACKS_NO_DELETE)
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (13, _now()),
     )
     conn.commit()
 
@@ -891,4 +950,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v10_to_v11(conn)
         if current < 12:
             migrate_v11_to_v12(conn)
+        if current < 13:
+            migrate_v12_to_v13(conn)
     conn.commit()
