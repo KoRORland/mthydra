@@ -518,8 +518,8 @@ def test_gen_age_key_refuses_if_age_keygen_missing(monkeypatch, capsys):
 
 def _ru_provision_argv(tmp_path, **overrides) -> list[str]:
     defaults = {
-        "--provider": "manual",
-        "--region": "fsn1",
+        "--provider": "selectel",
+        "--region": "ru-moscow-1",
         "--db-path": str(tmp_path / "state.sqlite"),
         "--config": str(tmp_path / "controller.toml"),
         "--agent-source-url": "https://files/agent.bin",
@@ -538,7 +538,7 @@ def _ru_provision_argv(tmp_path, **overrides) -> list[str]:
 
 @pytest.fixture
 def fake_run_both(monkeypatch):
-    """Monkeypatches _run_controller_capture_both in addition to _run_controller."""
+    """Monkeypatches _run_controller_capture_both alongside _run_controller."""
     fake_both = _FakeRun()
     monkeypatch.setattr(ops_main, "_run_controller_capture_both", fake_both)
     return fake_both
@@ -553,78 +553,60 @@ def test_extract_box_id_missing():
     assert ops_main._extract_box_id("nothing here") is None
 
 
-def test_ru_provision_manual_emits_cloud_init(tmp_path, fake_run, fake_run_both, capsys):
+def test_ru_provision_emits_cloud_init_and_recipe(
+    tmp_path, fake_run, fake_run_both, capsys,
+):
     fake_run_both.queue(
         stdout="#cloud-config\nfoo: bar\n",
         stderr="provision-seed: created box_id=b-abc\n",
     )
-    argv = _ru_provision_argv(tmp_path)
-    rc = ops_main.main(argv)
+    rc = ops_main.main(_ru_provision_argv(tmp_path))
     assert rc == 0
-    # provision-seed was called once
+    # provision-seed was called once with the provider tag we passed
     assert len(fake_run_both.calls) == 1
-    assert fake_run_both.calls[0][0] == "provision-seed"
-    # No call to _run_controller (mark-live is operator-side in manual mode)
+    call = fake_run_both.calls[0]
+    assert call[0] == "provision-seed"
+    assert "selectel" in call
+    assert "ru-moscow-1" in call
+    # No mark-live: the operator runs it after booting the VM
     assert fake_run.calls == []
     out = capsys.readouterr().out
     assert "#cloud-config" in out
+    # The mark-live recipe references the minted box_id
+    # (it's on stderr — _say uses stderr)
 
 
-def test_ru_provision_hetzner_creates_then_marks_live(
-    tmp_path, fake_run, fake_run_both, monkeypatch
+def test_ru_provision_prints_mark_live_recipe(
+    tmp_path, fake_run, fake_run_both, capsys,
 ):
     fake_run_both.queue(
-        stdout="#cloud-config\nx: 1\n",
-        stderr="provision-seed: created box_id=b-xyz\n",
+        stdout="#cloud-config\n",
+        stderr="provision-seed: created box_id=b-abc\n",
     )
-    # mark-live succeeds
-    fake_run.queue()
+    ops_main.main(_ru_provision_argv(tmp_path))
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "ru-box-mark-live b-abc" in combined
+    # Cordoned-env reminder is present so the operator doesn't reach for Hetzner
+    assert "Hetzner" in combined or "Selectel" in combined
 
-    def fake_create_server(**kwargs):
-        from mthydra.ops.hetzner import HetznerServerResult
-        return HetznerServerResult(
-            server_id=42, name=kwargs["name"],
-            public_ipv4="203.0.113.9", location=kwargs["location"],
-        )
-    monkeypatch.setattr("mthydra.ops.hetzner.create_server", fake_create_server)
 
-    argv = _ru_provision_argv(
-        tmp_path,
-        **{
-            "--provider": "hetzner",
-            "--hcloud-token": "tk",
-            "--hcloud-ssh-keys": "my-key",
-        },
+def test_ru_provision_writes_cloud_init_to_file_when_requested(
+    tmp_path, fake_run, fake_run_both,
+):
+    fake_run_both.queue(
+        stdout="#cloud-config\nfoo: bar\n",
+        stderr="provision-seed: created box_id=b-abc\n",
     )
-    rc = ops_main.main(argv)
+    out_file = tmp_path / "seed.cloud-init"
+    rc = ops_main.main(
+        _ru_provision_argv(tmp_path, **{"--cloud-init-out": str(out_file)})
+    )
     assert rc == 0
-    # mark-live was called with --public-ip
-    assert any(
-        c[0] == "ru-box-mark-live" and "203.0.113.9" in c
-        for c in fake_run.calls
-    )
-
-
-def test_ru_provision_hetzner_requires_token(tmp_path, fake_run_both, capsys):
-    argv = _ru_provision_argv(
-        tmp_path,
-        **{"--provider": "hetzner", "--hcloud-ssh-keys": "my-key"},
-    )
-    rc = ops_main.main(argv)
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "--hcloud-token" in err
-
-
-def test_ru_provision_hetzner_requires_ssh_keys(tmp_path, fake_run_both, capsys):
-    argv = _ru_provision_argv(
-        tmp_path,
-        **{"--provider": "hetzner", "--hcloud-token": "tk"},
-    )
-    rc = ops_main.main(argv)
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "--hcloud-ssh-keys" in err
+    assert out_file.exists()
+    assert "#cloud-config" in out_file.read_text()
+    import stat
+    assert stat.S_IMODE(out_file.stat().st_mode) == 0o600
 
 
 def test_ru_provision_provision_seed_failure_propagates(
@@ -645,62 +627,6 @@ def test_ru_provision_missing_box_id_in_stderr(
     assert "older controller" in capsys.readouterr().err
 
 
-def test_ru_provision_hetzner_create_failure_warns_about_orphan(
-    tmp_path, fake_run, fake_run_both, monkeypatch, capsys,
-):
-    fake_run_both.queue(
-        stdout="#cloud-config\n",
-        stderr="provision-seed: created box_id=b-orph\n",
-    )
-
-    def boom(**kwargs):
-        from mthydra.ops.hetzner import HetznerError
-        raise HetznerError("401 unauthorized")
-    monkeypatch.setattr("mthydra.ops.hetzner.create_server", boom)
-
-    argv = _ru_provision_argv(
-        tmp_path,
-        **{"--provider": "hetzner", "--hcloud-token": "tk",
-           "--hcloud-ssh-keys": "k"},
-    )
-    rc = ops_main.main(argv)
-    assert rc == 5
-    err = capsys.readouterr().err
-    assert "orphaned" in err
-    assert "b-orph" in err
-
-
-def test_ru_provision_mark_live_failure_warns_about_split_brain(
-    tmp_path, fake_run, fake_run_both, monkeypatch, capsys,
-):
-    fake_run_both.queue(
-        stdout="#cloud-config\n",
-        stderr="provision-seed: created box_id=b-split\n",
-    )
-    # mark-live fails
-    fake_run.queue(returncode=9)
-
-    def fake_create_server(**kwargs):
-        from mthydra.ops.hetzner import HetznerServerResult
-        return HetznerServerResult(
-            server_id=77, name=kwargs["name"],
-            public_ipv4="198.51.100.1", location="fsn1",
-        )
-    monkeypatch.setattr("mthydra.ops.hetzner.create_server", fake_create_server)
-
-    argv = _ru_provision_argv(
-        tmp_path,
-        **{"--provider": "hetzner", "--hcloud-token": "tk",
-           "--hcloud-ssh-keys": "k"},
-    )
-    rc = ops_main.main(argv)
-    assert rc == 6
-    err = capsys.readouterr().err
-    assert "still 'provisioning'" in err or "still" in err
-    assert "b-split" in err
-    assert "198.51.100.1" in err
-
-
 def test_ru_provision_canary_flag_threaded_through(
     tmp_path, fake_run, fake_run_both,
 ):
@@ -708,7 +634,6 @@ def test_ru_provision_canary_flag_threaded_through(
         stdout="#cloud-config\n",
         stderr="provision-seed: created box_id=b-canary\n",
     )
-    argv = _ru_provision_argv(tmp_path) + ["--canary"]
-    rc = ops_main.main(argv)
+    rc = ops_main.main(_ru_provision_argv(tmp_path) + ["--canary"])
     assert rc == 0
     assert "--canary" in fake_run_both.calls[0]

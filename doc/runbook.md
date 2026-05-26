@@ -409,26 +409,25 @@ Boot each canary VM with the cloud-init output. Within ~10 minutes, the RU agent
 mthydra-controller ru-box-list --json | jq '.[] | select(.is_canary==1)'
 ```
 
-**Shortcut: `mthydra-ops ru-provision`** automates the full provision → VM-create → mark-live cycle. With `--provider hetzner` it talks to the Hetzner Cloud API directly; with `--provider manual` it prints the cloud-init and the exact `ru-box-mark-live` command to run after the VM boots elsewhere.
+**Shortcut: `mthydra-ops ru-provision`** mints the provision seed, prints the cloud-init bundle and the exact `ru-box-mark-live` command you'll run after the VM boots. It deliberately does **not** call any provider API: RU boxes must run on hosters reachable from inside Russia's filtered network — Hetzner / AWS / GCP / DO **do not operate there**. Use Selectel, Timeweb, FirstVDS, VK Cloud, Reg.ru, or a CIS-adjacent provider, and boot the VM through their console or CLI yourself.
 
 ```bash
-# Hetzner end-to-end (note: --canary flag for soak cohort)
-export HCLOUD_TOKEN="hetzner-cloud-api-token-here"
 mthydra-ops ru-provision \
-    --provider hetzner --region fsn1 \
+    --provider selectel --region ru-moscow-1 \
     --canary \
-    --hcloud-server-type cx22 --hcloud-location fsn1 \
-    --hcloud-image ubuntu-24.04 \
-    --hcloud-ssh-keys my-throwaway-key \
+    --cloud-init-out /tmp/canary-1-seed.cloud-init \
     --agent-source-url "https://b2.example/agent/v0.1.0.tar.gz" \
     --agent-source-sha256 "<sha256>" \
     --descriptor-refresh-url "https://b2.example/descriptors/current"
-
-# Manual mode (boot the VM yourself, then follow the printed mark-live command)
-mthydra-ops ru-provision --provider manual --region fsn1 --canary ...
+# → writes cloud-init to the file (mode 0600) and prints, on stderr:
+#     box_id minted: b-<uuid>
+#     Next steps:
+#       1. Boot a VM on Selectel/Timeweb/... with this cloud-init as user-data
+#       2. mthydra-controller ru-box-mark-live b-<uuid> --public-ip <VM-IP> ...
+#       3. ru-box-list to confirm the agent called home
 ```
 
-Exit codes: 2 = bad args; 4 = controller too old (no `box_id` line on stderr); 5 = Hetzner create failed (DB row orphaned in `provisioning` — the script prints the cleanup command); 6 = VM is up but `ru-box-mark-live` failed (split-brain — script prints the recovery commands).
+`--provider` and `--region` are free-text tags stored in `ru_boxes.provider` / `ru_boxes.region` for inventory. Exit codes: 2 = bad args; 4 = controller too old (no `box_id` line on stderr) — fall back to the raw `provision-seed` form above and read `ru-box-list` for the box_id.
 
 ### §3.4 — Run the soak (manual probe collection)
 
