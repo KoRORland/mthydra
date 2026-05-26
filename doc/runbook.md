@@ -2,6 +2,8 @@
 
 > **Audience:** The single operator of a private mthydra deployment. This document is the **complete, ordered set of procedures** for standing up, running, and recovering an mthydra fleet. If you are not the operator, you should not be reading this — but if you must, treat every checklist as load-bearing rather than optional.
 >
+> **Tooling note:** Many of the longer procedures here have a shortcut via the `mthydra-ops` helper (shipped in the same wheel as `mthydra-controller`). Wherever a procedure has a one-shot equivalent, it is called out with **`→ mthydra-ops <subcommand>`**. The shortcuts orchestrate the underlying `mthydra-controller` commands in the documented order; the long-form procedures remain authoritative if you need to do anything non-default. Run `mthydra-ops --help` for the full list of subcommands.
+>
 > **Reading this document:** Each procedure is numbered. The numbered order is the order to execute. Where a procedure references another (`see §X.Y`), do the referenced one first if you haven't already. Bracketed comments like `[A-D5]` reference a locked decision in a spec — you can look it up in `doc/specs/` if you want to know why a step is the way it is, but you don't need to read the spec to follow the procedure.
 >
 > **What you need before you start:**
@@ -37,6 +39,8 @@ This procedure brings an empty machine to a running active controller. Follow st
 
 ### §1.1 — Provision the EU active host
 
+**→ `mthydra-ops setup-host`** (idempotent; runs the steps below as root)
+
 You need one EU VPS that will become the active controller. Recommend Ubuntu 24.04 LTS (the only OS tested by spec F).
 
 ```bash
@@ -53,6 +57,8 @@ chown mthydra:mthydra /var/lib/mthydra /var/log/mthydra
 - `/var/lib/mthydra` is owned by `mthydra:mthydra`.
 
 ### §1.2 — Generate the operator age key (LOCAL, NOT ON THE EU HOST)
+
+**→ `mthydra-ops gen-age-key`** (warns if invoked on a host with a server-looking hostname)
 
 The age key encrypts every controller state backup. **It must never live on any deployed machine.** Generate it on your laptop:
 
@@ -101,6 +107,8 @@ mthydra-controller --help    # smoke test
 **Verify:** `mthydra-controller --help` prints the subcommand list. If not, the install is broken — STOP, don't proceed.
 
 ### §1.5 — Bootstrap controller state
+
+**→ `mthydra-ops bootstrap`** combines §1.5 (init), §1.6 (authority migration), and §1.7 (write controller.toml from a template) into one command. See `mthydra-ops bootstrap --help` for the full argument list; you'll need all the credentials from §1.3 + the bot tokens from §1.7.
 
 The bootstrap creates the SQLite state file with all schema migrations applied. Once it succeeds, the file's contents are the operator's responsibility — refuse to bootstrap a second time over an existing file.
 
@@ -155,6 +163,8 @@ chown mthydra:mthydra /etc/mthydra/controller.toml
 **Verify:** `mthydra-controller startup-check --db-path /var/lib/mthydra/state.sqlite --config /etc/mthydra/controller.toml` exits 0.
 
 ### §1.8 — Confirm both alert sinks work BEFORE serve
+
+**→ `mthydra-ops preflight`** (runs obs-alert-test crit + obs-heartbeat-now + startup-check; refuses to declare success if any of them fail)
 
 This is the single most important pre-flight check. If either sink is broken, you must NOT proceed.
 
@@ -263,6 +273,8 @@ The **single load-bearing metric** of mthydra is "time since each obligation was
 
 ### §2.1 — Check obligation status (run weekly minimum, ideally daily)
 
+**→ `mthydra-ops daily-check`** (one command; exits non-zero if any overdue obligation or crit anti-obligation, suitable for `cron` with email-on-failure)
+
 ```bash
 mthydra-controller obs-status --json | jq '.obligations_overdue[] | .obligation_id'
 ```
@@ -335,6 +347,8 @@ mthydra-controller upstream-check \
 **When a new release appears**, the controller emits a `t4_upstream_release_available::v<ver>` obligation. Treat any evasion-motivated release as a prompt to run §3.2 within 7 days.
 
 ### §3.2 — Build a candidate image
+
+**→ `mthydra-ops image-build-template > /tmp/profile.json`** prints a JSON skeleton with the right field names; edit, then pass to `mthydra-controller image-build --profile-json /tmp/profile.json`.
 
 **Before building**, capture a known-good profile for the new release. This profile is the reference every probe compares against (T3 §269). For the MVP, the profile is a JSON blob the operator writes. Minimal content:
 
@@ -518,6 +532,8 @@ Meet the user in person or on a Signal/WhatsApp call. Confirm:
 
 ### §5.2 — Add user to the controller
 
+**→ `mthydra-ops user-onboard alice --out-of-band signal:+1... --chat-id 12345 --email alice@example.org`** runs user-add + user-channels-set + dist-test in one shot.
+
 ```bash
 # 1. Register the user.
 mthydra-controller user-add alice \
@@ -664,6 +680,8 @@ The controller generates a fresh Ed25519-signed credential; the operator pulls t
 Rotate via `probe-credential-revoke` + `probe-credential-issue` together.
 
 ### §7.5 — Burn a compromised vantage
+
+**→ `mthydra-ops rotate-vantage --old <id> --new <id> --new-label <label> --burn-reason "..." --attest-evidence "..."`** runs vantage-burn + vantage-add + vantage-attest-active atomically.
 
 If you suspect a vantage's egress IP is in a fingerprint list, or it has otherwise become correlatable:
 
@@ -880,7 +898,7 @@ mthydra-controller obligation-proven t2_dryrun_caseA \
 - Rotate `[observability.email].password` (Gmail/Outlook app passwords expire; regenerate, update, run §1.8).
 - §7.1 review: are vantages still routing through plausibly-Russian transit? Re-attest those that drifted (§7.2) or burn them (§7.5).
 - §10.1 OR §10.2 dry-run (alternate months; you should exercise both within 6 months).
-- `mthydra-controller compact-logs --table all --before $(date -u -d '30 days ago' -Iseconds | sed 's/+00:00/Z/') --no-dry-run --evidence "monthly retention purge"` — compact rows older than 30 days. **First run as a dry-run** (omit `--no-dry-run`) to see the row counts.
+- `mthydra-controller compact-logs --table all --before $(date -u -d '30 days ago' -Iseconds | sed 's/+00:00/Z/') --no-dry-run --evidence "monthly retention purge"` — compact rows older than 30 days. **First run as a dry-run** (omit `--no-dry-run`) to see the row counts. **→ `mthydra-ops monthly-compact`** does the dry-run + (optional) real run in one shot.
 
 ### §11.4 — Quarterly
 

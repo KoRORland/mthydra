@@ -25,6 +25,7 @@ dev = [
 [project.scripts]
 # mthydra-backup-monitor ships in the separate mthydra-backup-monitor wheel (plan §16.1)
 mthydra-controller = "mthydra.controller.__main__:main"
+mthydra-ops = "mthydra.ops.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
