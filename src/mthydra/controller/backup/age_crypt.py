@@ -71,7 +71,12 @@ def encrypt_file(input_path: Path | str, recipient: str, out: Path | str) -> Non
             ["age", "-r", recipient, "-o", str(out), str(input_path)],
             check=True,
             capture_output=True,
+            # Bound the call so a hung age (e.g. a stuck agent/HSM) cannot wedge
+            # the backup pipeline forever. Generous enough for large DB snapshots.
+            timeout=300,
         )
+    except subprocess.TimeoutExpired as e:
+        raise AgeError("age timed out after 300s") from e
     except subprocess.CalledProcessError as e:
         raise AgeError(f"age failed: {e.stderr.decode(errors='replace')}") from e
     except FileNotFoundError as e:
