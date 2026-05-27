@@ -13,3 +13,9 @@ build/
 .coverage
 htmlcov/
 .claude/
+
+# Real configs/env files hold secrets (SMTP passwords, bot tokens, B2 key).
+# Only the committed *.example templates belong in git.
+controller.toml
+controller.env
+backup-monitor.env

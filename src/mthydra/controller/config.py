@@ -1,4 +1,11 @@
-"""TOML config loader. Non-secret operator-authored policy, lives in git."""
+"""TOML config loader for operator-authored policy.
+
+SECURITY: a real controller.toml is NOT safe to commit. Besides policy
+knobs it carries secrets — SMTP passwords and Telegram bot tokens under
+[observability.*] / [distribution.*], and the B2 access_key_id under
+[backup]. Only the redacted controller.toml.example belongs in git; real
+configs are .gitignored and written 0600 by `mthydra-ops bootstrap`.
+"""
 from __future__ import annotations
 
 import tomllib
