@@ -13,6 +13,9 @@ build/
 .coverage
 htmlcov/
 .claude/
+.opencode/
+*.ipynb
+.ipynb
 
 # Real configs/env files hold secrets (SMTP passwords, bot tokens, B2 key).
 # Only the committed *.example templates belong in git.
