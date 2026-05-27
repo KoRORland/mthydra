@@ -34,6 +34,28 @@ def test_adopt_replaces_existing_and_preserves_old(tmp_path):
     assert len(preadopt) == 1
 
 
+def test_adopt_fsyncs_live_file_and_parent_dir(tmp_path, monkeypatch):
+    """L4: adoption fsyncs the new live DB and its directory for crash durability."""
+    import mthydra.controller.restore.adopt as adopt_mod
+    live = tmp_path / "state.sqlite"
+    _seed(live)
+    restored = tmp_path / "restored.sqlite"
+    _seed(restored)
+
+    fsynced: list[int] = []
+    real_fsync = adopt_mod.os.fsync
+    monkeypatch.setattr(adopt_mod.os, "fsync",
+                        lambda fd: (fsynced.append(fd), real_fsync(fd))[0])
+
+    adopt_restored_state(
+        live_path=live, restored_path=restored, case=None,
+        rotate_published_subset=False, at="2026-05-18T05:00:00Z",
+    )
+    # At least two fsyncs attempted: the live DB file and the parent directory.
+    assert len(fsynced) >= 2
+    assert live.exists()
+
+
 def test_adopt_case_b_inserts_new_authority(tmp_path):
     live = tmp_path / "state.sqlite"
     _seed(live)

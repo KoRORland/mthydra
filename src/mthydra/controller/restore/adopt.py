@@ -1,6 +1,7 @@
 """Replace live state with a restored snapshot — spec A §7.2."""
 from __future__ import annotations
 
+import os
 import secrets
 import shutil
 from pathlib import Path
@@ -12,6 +13,29 @@ from mthydra.controller.state.db import connect
 
 class AdoptError(RuntimeError):
     pass
+
+
+def _fsync_path(path: Path) -> None:
+    """Best-effort fsync of a file or directory.
+
+    fsyncing the directory is what makes the rename durable; without it a power
+    loss right after a restore could lose the just-adopted state the operator
+    now relies on. Best-effort: platforms that cannot fsync a directory fd are
+    skipped rather than failing the adoption.
+    """
+    flags = os.O_RDONLY
+    if path.is_dir() and hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def _fresh_pem() -> tuple[str, str]:
@@ -109,3 +133,9 @@ def adopt_restored_state(
             )
     finally:
         conn.close()
+
+    # L4: make the install durable before reporting success — fsync the new
+    # live DB and its parent directory so the rename survives a crash/power loss
+    # immediately after a restore.
+    _fsync_path(live_path)
+    _fsync_path(live_path.parent)
