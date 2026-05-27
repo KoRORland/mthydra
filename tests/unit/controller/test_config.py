@@ -111,6 +111,55 @@ def test_load_rejects_negative_interval(tmp_path):
         load_config(p)
 
 
+def _minimal_toml(**backup_overrides) -> str:
+    backup = {
+        "floor_interval_hours": 24,
+        "on_change_debounce_seconds": 30,
+    }
+    backup.update(backup_overrides)
+    return f"""
+        [node]
+        role = "active"
+        hostname = "x"
+        [backup]
+        floor_interval_hours = {backup['floor_interval_hours']}
+        on_change_debounce_seconds = {backup['on_change_debounce_seconds']}
+        endpoint = "https://x"
+        bucket = "x"
+        access_key_id = "x"
+        [backup.retention]
+        keep_daily = 1
+        keep_monthly = 1
+        object_lock_days = 1
+        [gap_monitor]
+        poll_interval_minutes = 30
+        alarm_threshold_hours = 48
+        recipient_email = "op@x"
+        [obligations.timers_hours]
+        """
+
+
+def test_load_rejects_zero_for_positive_only_field(tmp_path):
+    """M9: floor_interval_hours must be >=1; 0 would busy-loop the floor timer."""
+    p = _write(tmp_path / "c.toml", _minimal_toml(floor_interval_hours=0))
+    with pytest.raises(ConfigError, match="positive.*floor_interval_hours|floor_interval_hours.*positive"):
+        load_config(p)
+
+
+def test_load_allows_zero_for_non_negative_field(tmp_path):
+    """0 is still legal where it is meaningful (e.g. no debounce)."""
+    p = _write(tmp_path / "c.toml", _minimal_toml(on_change_debounce_seconds=0))
+    cfg = load_config(p)
+    assert cfg.backup.on_change_debounce_seconds == 0
+
+
+def test_load_rejects_bool_for_int_field(tmp_path):
+    """L1: a boolean must not silently coerce to 1."""
+    p = _write(tmp_path / "c.toml", _minimal_toml(floor_interval_hours="true"))
+    with pytest.raises(ConfigError, match="floor_interval_hours"):
+        load_config(p)
+
+
 def test_load_cover_pool_config(tmp_path):
     from mthydra.controller.config import load_config
 

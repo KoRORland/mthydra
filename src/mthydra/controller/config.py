@@ -198,21 +198,33 @@ _VALID_ROLES = {"active", "standby"}
 _INTERVAL_SUFFIXES = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
-def _require_positive(name: str, value: int) -> int:
-    if not isinstance(value, int) or value < 0:
-        raise ConfigError(f"{name}: must be a non-negative integer (got {value!r})")
+def _require_positive(name: str, value: int, *, positive: bool = False) -> int:
+    """Validate an integer config value.
+
+    `positive=True` requires >=1 (for sizes, counts, windows and any value used
+    as a divisor or scheduler interval, where 0 means a degenerate config or a
+    busy loop). Default requires >=0. Booleans are rejected even though bool is
+    a subclass of int, so `true` can't silently become 1.
+    """
+    floor = 1 if positive else 0
+    if not isinstance(value, int) or isinstance(value, bool) or value < floor:
+        kind = "a positive (>=1)" if positive else "a non-negative"
+        raise ConfigError(f"{name}: must be {kind} integer (got {value!r})")
     return value
 
 
 def _parse_interval_seconds(name: str, value: object) -> int:
+    # A scheduler interval of 0/negative is never valid: it would busy-loop.
+    if isinstance(value, bool):
+        raise ConfigError(f"{name}: must be an interval, not a boolean (got {value!r})")
     if isinstance(value, int):
-        return _require_positive(name, value)
+        return _require_positive(name, value, positive=True)
     if isinstance(value, str) and len(value) >= 2 and value[-1] in _INTERVAL_SUFFIXES:
         try:
             n = int(value[:-1])
         except ValueError as e:
             raise ConfigError(f"{name}: invalid interval {value!r}") from e
-        return _require_positive(name, n) * _INTERVAL_SUFFIXES[value[-1]]
+        return _require_positive(name, n, positive=True) * _INTERVAL_SUFFIXES[value[-1]]
     raise ConfigError(f"{name}: must be int or 'Nh'/'Nm'/'Nd'/'Ns' string (got {value!r})")
 
 
@@ -290,10 +302,10 @@ def _load_data_exit(data: dict) -> DataExitConfig | None:
 def _load_shard_manager(data: dict) -> ShardManagerConfig:
     sec = data.get("shard_manager", {})
     target_size = _require_positive(
-        "shard_manager.target_size", sec.get("target_size", 2)
+        "shard_manager.target_size", sec.get("target_size", 2), positive=True
     )
     max_size = _require_positive(
-        "shard_manager.max_size", sec.get("max_size", 3)
+        "shard_manager.max_size", sec.get("max_size", 3), positive=True
     )
     if max_size < target_size:
         raise ConfigError(
@@ -413,8 +425,8 @@ def _load_observability(data: dict) -> ObservabilityConfig:
 
 def _load_probe(data: dict) -> ProbeConfig:
     sec = data.get("probe", {})
-    M = _require_positive("probe.soft_fail_window_M", sec.get("soft_fail_window_M", 4))
-    N = _require_positive("probe.soft_fail_threshold_N", sec.get("soft_fail_threshold_N", 3))
+    M = _require_positive("probe.soft_fail_window_M", sec.get("soft_fail_window_M", 4), positive=True)
+    N = _require_positive("probe.soft_fail_threshold_N", sec.get("soft_fail_threshold_N", 3), positive=True)
     if N > M:
         raise ConfigError(
             f"probe.soft_fail_threshold_N ({N}) must be <= soft_fail_window_M ({M})"
@@ -423,12 +435,12 @@ def _load_probe(data: dict) -> ProbeConfig:
         soft_fail_window_M=M,
         soft_fail_threshold_N=N,
         min_distinct_vantages=_require_positive(
-            "probe.min_distinct_vantages", sec.get("min_distinct_vantages", 2)
+            "probe.min_distinct_vantages", sec.get("min_distinct_vantages", 2), positive=True
         ),
         coverage_window_seconds=_parse_interval_seconds(
             "probe.coverage_window", sec.get("coverage_window", 3600),
         ) if isinstance(sec.get("coverage_window"), str) else _require_positive(
-            "probe.coverage_window_seconds", sec.get("coverage_window_seconds", 3600)
+            "probe.coverage_window_seconds", sec.get("coverage_window_seconds", 3600), positive=True
         ),
         probe_vantage_ttl_days=_require_positive(
             "probe.probe_vantage_ttl_days", sec.get("probe_vantage_ttl_days", 14)
@@ -445,11 +457,11 @@ def _load_image(data: dict) -> ImageConfig:
     canary_sec = sec.get("canary", {})
     canary = ImageCanaryConfig(
         min_boxes=_require_positive(
-            "image.canary.min_boxes", canary_sec.get("min_boxes", 1)
+            "image.canary.min_boxes", canary_sec.get("min_boxes", 1), positive=True
         ),
         min_cycles_per_box=_require_positive(
             "image.canary.min_cycles_per_box",
-            canary_sec.get("min_cycles_per_box", 4),
+            canary_sec.get("min_cycles_per_box", 4), positive=True
         ),
     )
     return ImageConfig(
@@ -492,7 +504,7 @@ def load_config(path: Path | str) -> Config:
     return Config(
         node=NodeConfig(role=role, hostname=str(node["hostname"])),
         backup=BackupConfig(
-            floor_interval_hours=_require_positive("backup.floor_interval_hours", backup["floor_interval_hours"]),
+            floor_interval_hours=_require_positive("backup.floor_interval_hours", backup["floor_interval_hours"], positive=True),
             on_change_debounce_seconds=_require_positive(
                 "backup.on_change_debounce_seconds", backup["on_change_debounce_seconds"]
             ),
@@ -508,7 +520,7 @@ def load_config(path: Path | str) -> Config:
             ),
         ),
         gap_monitor=GapMonitorConfig(
-            poll_interval_minutes=_require_positive("gap_monitor.poll_interval_minutes", gap["poll_interval_minutes"]),
+            poll_interval_minutes=_require_positive("gap_monitor.poll_interval_minutes", gap["poll_interval_minutes"], positive=True),
             alarm_threshold_hours=_require_positive("gap_monitor.alarm_threshold_hours", gap["alarm_threshold_hours"]),
             recipient_email=str(gap["recipient_email"]),
         ),
