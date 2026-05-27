@@ -119,26 +119,30 @@ def cmd_setup_host(args: argparse.Namespace) -> int:
         ("/var/log/mthydra", f"{user}:{user}", "0755"),
     ]
 
-    steps = [
-        f"apt update && apt install -y {' '.join(pkgs)}",
-        f"adduser --system --group --no-create-home {user} || true",
+    # List-form (shell=False) so there is no shell to inject into. Each step is
+    # (argv, allow_fail); adduser is allowed to fail (idempotent re-run when the
+    # user already exists), replacing the old `|| true`.
+    steps: list[tuple[list[str], bool]] = [
+        (["apt", "update"], False),
+        (["apt", "install", "-y", *pkgs], False),
+        (["adduser", "--system", "--group", "--no-create-home", user], True),
     ]
     for path, owner, mode in dirs:
-        steps.append(f"mkdir -p {path}")
-        steps.append(f"chown {owner} {path}")
-        steps.append(f"chmod {mode} {path}")
+        steps.append((["mkdir", "-p", path], False))
+        steps.append((["chown", owner, path], False))
+        steps.append((["chmod", mode, path], False))
 
     if args.dry_run:
         _say("DRY-RUN. Steps that WOULD be executed:")
-        for s in steps:
-            print(f"  $ {s}")
+        for argv, _ in steps:
+            print(f"  $ {' '.join(argv)}")
         return 0
 
-    for s in steps:
-        _say(f"$ {s}")
-        rc = subprocess.call(s, shell=True)  # noqa: S602 — operator-supplied root flow
-        if rc != 0:
-            _err(f"step failed (rc={rc}): {s}")
+    for argv, allow_fail in steps:
+        _say(f"$ {' '.join(argv)}")
+        rc = subprocess.run(argv).returncode
+        if rc != 0 and not allow_fail:
+            _err(f"step failed (rc={rc}): {' '.join(argv)}")
             return rc
 
     _say("setup-host: complete. Next: mthydra-ops gen-age-key (on laptop, not here).")
