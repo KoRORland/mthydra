@@ -6,6 +6,7 @@ the descriptor refresh loop, terminates the box on persistent failure.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 import threading
@@ -32,6 +33,27 @@ TPROXY_PORT = 12345
 
 def _terminate(reason: str) -> None:
     shutdown_mod.terminate_box(reason)
+
+
+def _atomic_write_bytes(path: str, data: bytes) -> None:
+    """Write `data` to `path` atomically.
+
+    sing-box reads its config as a separate process and is told to reload via
+    SIGHUP; a plain write_bytes() truncates-then-writes, so a concurrent read
+    (or a crash mid-write) could see a partial/empty config. Write to a temp
+    file in the same directory, fsync, then os.replace — readers always observe
+    either the old file or the complete new one. (An in-process lock cannot
+    protect a separate-process reader; atomic replace can.)
+    """
+    p = Path(path)
+    tmp = p.with_name(f".{p.name}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, p)
 
 
 def main() -> int:
@@ -71,11 +93,11 @@ def main() -> int:
     descriptor_payload = json.loads(blob[2:2 + n])
 
     mtg_toml = config_gen.render_mtg_config(s, sing_box_socks_port=TPROXY_PORT)
-    Path(MTG_CONFIG_PATH).write_bytes(mtg_toml)
+    _atomic_write_bytes(MTG_CONFIG_PATH, mtg_toml)
     sing_box_json = config_gen.render_sing_box_config(
         s, descriptor_payload, tproxy_port=TPROXY_PORT,
     )
-    Path(SING_BOX_CONFIG_PATH).write_bytes(sing_box_json)
+    _atomic_write_bytes(SING_BOX_CONFIG_PATH, sing_box_json)
 
     # 5. Install iptables rules.
     try:
@@ -105,7 +127,7 @@ def main() -> int:
         new_json = config_gen.render_sing_box_config(
             s, payload, tproxy_port=TPROXY_PORT,
         )
-        Path(SING_BOX_CONFIG_PATH).write_bytes(new_json)
+        _atomic_write_bytes(SING_BOX_CONFIG_PATH, new_json)
         # SIGHUP via systemctl. For tests, this is mocked.
         import subprocess
         subprocess.run(["systemctl", "kill", "-s", "HUP", "mthydra-sing-box"])
