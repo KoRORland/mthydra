@@ -26,6 +26,7 @@ class _FakeRun:
 
     def __init__(self):
         self.calls: list[list[str]] = []
+        self.envs: list[dict | None] = []
         self.responses: list[subprocess.CompletedProcess] = []
         self.raise_on: set[int] = set()
 
@@ -36,8 +37,9 @@ class _FakeRun:
             )
         )
 
-    def __call__(self, *args, check=True, capture=False):
+    def __call__(self, *args, check=True, capture=False, env=None):
         self.calls.append(list(args))
+        self.envs.append(env)
         if not self.responses:
             self.responses.append(
                 subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
@@ -70,7 +72,6 @@ def _bootstrap_args(tmp_path, **overrides):
         "--hostname": "eu1.example.com",
         "--operator-email": "op@example.org",
         "--b2-key-id": "id",
-        "--b2-app-key": "secret",
         "--b2-bucket": "b",
         "--b2-endpoint": "https://b2.example",
         "--obs-tg-bot-token": "tg-op-token",
@@ -95,7 +96,8 @@ def _bootstrap_args(tmp_path, **overrides):
     return argv, db, cfg
 
 
-def test_bootstrap_calls_init_then_migrate_then_writes_toml(tmp_path, fake_run):
+def test_bootstrap_calls_init_then_migrate_then_writes_toml(tmp_path, fake_run, monkeypatch):
+    monkeypatch.setenv("B2_APPLICATION_KEY", "secret")
     argv, db, cfg = _bootstrap_args(tmp_path)
     rc = ops_main.main(argv)
     assert rc == 0
@@ -104,6 +106,12 @@ def test_bootstrap_calls_init_then_migrate_then_writes_toml(tmp_path, fake_run):
     assert "--age-recipient" in fake_run.calls[0]
     assert "age1abc" in fake_run.calls[0]
     assert fake_run.calls[1][0] == "authority-migrate-placeholder"
+    # H3: the B2 secret is NOT on argv; it travels via the child env instead.
+    init_argv = fake_run.calls[0]
+    assert "secret" not in " ".join(init_argv)
+    assert "--provider-credential-env" in init_argv
+    assert "b2=MTHYDRA_INIT_B2_CREDENTIAL" in init_argv
+    assert fake_run.envs[0]["MTHYDRA_INIT_B2_CREDENTIAL"] == "id:secret"
     # controller.toml landed with our values substituted.
     assert cfg.exists()
     body = cfg.read_text()
@@ -117,6 +125,15 @@ def test_bootstrap_calls_init_then_migrate_then_writes_toml(tmp_path, fake_run):
     assert mode == 0o600
 
 
+def test_bootstrap_requires_b2_app_key_env(tmp_path, fake_run, monkeypatch):
+    monkeypatch.delenv("B2_APPLICATION_KEY", raising=False)
+    argv, db, cfg = _bootstrap_args(tmp_path)
+    rc = ops_main.main(argv)
+    assert rc == 2
+    assert not fake_run.calls  # bailed before any subprocess
+    assert not cfg.exists()
+
+
 def test_bootstrap_refuses_existing_db_without_force(tmp_path, fake_run):
     argv, db, cfg = _bootstrap_args(tmp_path)
     db.write_text("x")
@@ -125,7 +142,8 @@ def test_bootstrap_refuses_existing_db_without_force(tmp_path, fake_run):
     assert not fake_run.calls  # never reached subprocess
 
 
-def test_bootstrap_propagates_init_failure(tmp_path, fake_run):
+def test_bootstrap_propagates_init_failure(tmp_path, fake_run, monkeypatch):
+    monkeypatch.setenv("B2_APPLICATION_KEY", "secret")
     argv, db, cfg = _bootstrap_args(tmp_path)
     fake_run.queue(returncode=7)  # init fails
     rc = ops_main.main(argv)
@@ -133,7 +151,8 @@ def test_bootstrap_propagates_init_failure(tmp_path, fake_run):
     assert not cfg.exists()  # toml not written
 
 
-def test_bootstrap_propagates_migrate_failure(tmp_path, fake_run):
+def test_bootstrap_propagates_migrate_failure(tmp_path, fake_run, monkeypatch):
+    monkeypatch.setenv("B2_APPLICATION_KEY", "secret")
     argv, db, cfg = _bootstrap_args(tmp_path)
     fake_run.queue(returncode=0)   # init ok
     fake_run.queue(returncode=4)   # migrate fails

@@ -111,6 +111,39 @@ def test_init_subcommand_runs(tmp_path):
     assert db.exists()
 
 
+def test_init_provider_credential_env_reads_secret_from_environment(tmp_path, monkeypatch):
+    """--provider-credential-env keeps the secret off argv (H3)."""
+    from mthydra.controller.state.tokens import get_provider_credential
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    db = tmp_path / "state.sqlite"
+    monkeypatch.setenv("MY_B2_CRED", "ID:SECRET-FROM-ENV")
+    exit_code = run([
+        "init",
+        "--db-path", str(db),
+        "--age-recipient-file", str(recipient_file),
+        "--provider-credential-env", "b2=MY_B2_CRED",
+    ])
+    assert exit_code == 0
+    conn = connect(db)
+    assert get_provider_credential(conn, "b2") == "ID:SECRET-FROM-ENV"
+
+
+def test_init_provider_credential_env_missing_var_errors(tmp_path, monkeypatch):
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    db = tmp_path / "state.sqlite"
+    monkeypatch.delenv("NOPE_VAR", raising=False)
+    exit_code = run([
+        "init",
+        "--db-path", str(db),
+        "--age-recipient-file", str(recipient_file),
+        "--provider-credential-env", "b2=NOPE_VAR",
+    ])
+    assert exit_code != 0
+    assert not db.exists()
+
+
 def test_init_subcommand_fails_if_db_exists(tmp_path):
     db = tmp_path / "state.sqlite"
     db.write_bytes(b"")

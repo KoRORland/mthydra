@@ -56,8 +56,17 @@ def _err(msg: str) -> None:
     print(f"[mthydra-ops] ERROR: {msg}", file=sys.stderr, flush=True)
 
 
-def _run_controller(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
-    """Invoke mthydra-controller. Reraises CalledProcessError on non-zero."""
+def _run_controller(
+    *args: str,
+    check: bool = True,
+    capture: bool = False,
+    env: dict | None = None,
+) -> subprocess.CompletedProcess:
+    """Invoke mthydra-controller. Reraises CalledProcessError on non-zero.
+
+    `env`, when given, replaces the child environment — used to pass secrets
+    (e.g. the B2 app key) out of band so they never appear on argv / `ps`.
+    """
     cmd = [_CONTROLLER_BIN, *args]
     _say(f"$ {' '.join(cmd)}")
     return subprocess.run(
@@ -65,6 +74,7 @@ def _run_controller(*args: str, check: bool = True, capture: bool = False) -> su
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.PIPE if capture else None,
         text=True,
+        env=env,
     )
 
 
@@ -305,17 +315,26 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
         _err(f"DB already exists at {db_path}; pass --force only if you know what that does")
         return 2
 
-    # Step 1: init
+    # B2 app key is a secret: read from the environment so it never lands on
+    # argv (where `ps` would expose it) — neither ours nor the controller's.
+    b2_app_key = os.environ.get("B2_APPLICATION_KEY")
+    if not b2_app_key:
+        _err("B2_APPLICATION_KEY must be set in the environment "
+             "(kept off argv to avoid `ps` credential leak)")
+        return 2
+
+    # Step 1: init. The credential is handed to the controller via the child
+    # environment, not argv, using --provider-credential-env.
     _say("step 1/3: init controller state")
+    child_env = {**os.environ, "MTHYDRA_INIT_B2_CREDENTIAL": f"{args.b2_key_id}:{b2_app_key}"}
     init_args = [
         "init",
         "--db-path", str(db_path),
         "--age-recipient", args.age_recipient,
-        "--provider-credential",
-        f"b2={args.b2_key_id}:{args.b2_app_key}",
+        "--provider-credential-env", "b2=MTHYDRA_INIT_B2_CREDENTIAL",
     ]
     try:
-        _run_controller(*init_args)
+        _run_controller(*init_args, env=child_env)
     except subprocess.CalledProcessError as e:
         _err(f"init failed: {e}")
         return e.returncode
@@ -811,8 +830,10 @@ def build_parser() -> argparse.ArgumentParser:
     bs.add_argument("--hostname", required=True)
     bs.add_argument("--operator-email", required=True,
                      help="recipient for [gap_monitor].recipient_email")
-    bs.add_argument("--b2-key-id", required=True)
-    bs.add_argument("--b2-app-key", required=True)
+    bs.add_argument("--b2-key-id", required=True,
+                     help="B2 key id (identifier, not secret). The matching "
+                          "application key (secret) is read from the "
+                          "B2_APPLICATION_KEY environment variable.")
     bs.add_argument("--b2-bucket", required=True)
     bs.add_argument("--b2-endpoint", required=True)
     bs.add_argument("--obs-tg-bot-token", required=True)

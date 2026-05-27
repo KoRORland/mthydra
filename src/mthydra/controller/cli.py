@@ -47,6 +47,25 @@ def _parse_kv(items: list[str]) -> dict[str, str]:
     return out
 
 
+def _parse_kv_env(items: list[str]) -> dict[str, str]:
+    """Like _parse_kv but the value names an env var holding the secret.
+
+    Keeps provider secrets off argv (which is world-readable via `ps`).
+    Each item is PROVIDER=ENVVAR; the credential is read from os.environ.
+    """
+    out: dict[str, str] = {}
+    for raw in (items or []):
+        if "=" not in raw:
+            raise ValueError(f"expected PROVIDER=ENVVAR, got {raw!r}")
+        provider, envvar = raw.split("=", 1)
+        if envvar not in os.environ:
+            raise ValueError(
+                f"--provider-credential-env {raw!r}: ${envvar} is not set in the environment"
+            )
+        out[provider] = os.environ[envvar]
+    return out
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mthydra-controller")
     p.add_argument(
@@ -73,7 +92,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="PROVIDER=CREDENTIAL",
-        help="provider credential (repeatable)",
+        help="provider credential (repeatable). WARNING: visible in `ps`; "
+             "prefer --provider-credential-env for secrets",
+    )
+    init_p.add_argument(
+        "--provider-credential-env",
+        action="append",
+        default=[],
+        metavar="PROVIDER=ENVVAR",
+        help="provider credential read from the named env var, keeping the "
+             "secret off argv (repeatable)",
     )
     init_p.add_argument(
         "--role",
@@ -690,10 +718,16 @@ def run(argv: list[str]) -> int:
     if args.cmd == "init":
         recipient = args.age_recipient or _read_recipient(args.age_recipient_file)
         try:
+            provider_credentials = _parse_kv(args.provider_credential)
+            provider_credentials.update(_parse_kv_env(args.provider_credential_env))
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        try:
             init_state(
                 db_path=args.db_path,
                 age_recipient=recipient,
-                provider_credentials=_parse_kv(args.provider_credential),
+                provider_credentials=provider_credentials,
                 obligation_timer_hours={
                     "backup_restore_dryrun": 720,
                     "t2_dryrun_caseA": 720,
