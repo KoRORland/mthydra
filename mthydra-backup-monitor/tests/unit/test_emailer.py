@@ -1,4 +1,5 @@
 """Tests for the SMTP gap-alarm emailer."""
+import ssl
 from unittest.mock import MagicMock, patch
 
 from mthydra_backup_monitor.emailer import EmailConfig, send_gap_alarm
@@ -22,6 +23,11 @@ def test_send_gap_alarm_uses_smtp_ssl():
             stuck_since="2026-05-18T01:00:00Z",
             now_iso="2026-05-20T02:00:00Z",
         )
+    # H1: SMTP_SSL must be given a verifying context (cert + hostname checked).
+    ctx = smtp_cls.call_args.kwargs.get("context")
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.check_hostname is True
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
     instance.login.assert_called_once_with("alerter@example.com", "apppw")
     instance.send_message.assert_called_once()
     msg = instance.send_message.call_args[0][0]

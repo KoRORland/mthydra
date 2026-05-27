@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import smtplib
+import ssl
 from dataclasses import dataclass
 from email.message import EmailMessage
 
@@ -22,7 +23,10 @@ def _send(cfg: EmailConfig, subject: str, body: str) -> None:
     msg["From"] = cfg.from_addr
     msg["To"] = cfg.to_addr
     msg.set_content(body)
-    with smtplib.SMTP_SSL(cfg.host, cfg.port) as smtp:
+    # Explicit verifying context: SMTP_SSL(context=None) falls back to
+    # ssl._create_stdlib_context() which does NOT validate the cert or
+    # hostname, leaving SMTP AUTH (the app password) open to active MITM.
+    with smtplib.SMTP_SSL(cfg.host, cfg.port, context=ssl.create_default_context()) as smtp:
         smtp.login(cfg.username, cfg.app_password)
         smtp.send_message(msg)
 

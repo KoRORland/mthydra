@@ -10,6 +10,7 @@ stdlib only: smtplib + email.message.EmailMessage + urllib.request.
 from __future__ import annotations
 
 import json
+import ssl
 from collections.abc import Callable
 from email.message import EmailMessage
 
@@ -103,7 +104,10 @@ class EmailDistributionSink:
         smtp = None
         try:
             smtp = self._smtp_factory(self._host, self._port)
-            smtp.starttls()
+            # Explicit verifying context: starttls(context=None) uses an
+            # unverified stdlib context (no cert/hostname check), exposing the
+            # app password to active MITM.
+            smtp.starttls(context=ssl.create_default_context())
             smtp.login(self._user, self._pw)
             smtp.send_message(msg)
         except Exception as e:

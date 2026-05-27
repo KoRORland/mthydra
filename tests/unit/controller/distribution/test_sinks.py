@@ -58,9 +58,11 @@ class _FakeSMTP:
         self.sent = []
         self.quit_called = False
         self.fail_on = None
+        self.starttls_context = None
 
-    def starttls(self):
+    def starttls(self, context=None):
         self.starttls_called = True
+        self.starttls_context = context
         if self.fail_on == "starttls":
             raise RuntimeError("tls fail")
 
@@ -98,6 +100,11 @@ def test_email_success_full_lifecycle():
                body="payload")
     assert res.success
     assert fake.starttls_called
+    # H1: STARTTLS must use a verifying context (cert + hostname checked).
+    import ssl
+    assert isinstance(fake.starttls_context, ssl.SSLContext)
+    assert fake.starttls_context.check_hostname is True
+    assert fake.starttls_context.verify_mode == ssl.CERT_REQUIRED
     assert fake.login_user == "dist@example.org"
     assert len(fake.sent) == 1
     msg = fake.sent[0]
