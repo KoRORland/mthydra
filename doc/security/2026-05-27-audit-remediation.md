@@ -22,10 +22,26 @@ fabricated. Verdicts and the plan below reflect the *verified* state of the code
 | M9 | `_require_positive` accepts 0 | **REAL** (`value < 0`). | **FIX** (`positive=` kwarg for must-be-≥1) |
 | M8 | `shutdown(wait=False)` abandons jobs | **ACCEPTED.** 14 wheels; ticks are short + idempotent and re-derive state next boot; `wait=True` risks shutdown hangs. | **WON'T FIX** (documented) |
 | M3 | no TLS cert pinning on urlopen sites | **PARTIAL.** Verifying contexts added via H1; full HPKP pinning out of scope. | partial |
-| M4/M5/M6/M10/M11/M12 | various | not in scope of this pass; not clearly-correct low-risk. | DEFER |
+| M4 | `seed.py:102-105` error leaks box_id | **FALSE POSITIVE.** Those lines are cloud-init YAML, not a credential error; no box_id leak there. | NONE |
+| M11 | `burned.py:log_event` outside txn | **FALSE POSITIVE.** burned.py has no `log_event`; audit logging lives in state/audit.py. | NONE |
+| M12 | `_cmd_serve` skips startup checks | **REAL.** Active serve armed all wheels with no validation. | **FIX** (gate on local startup checks) |
+| L1 | bool accepted as int | **REAL.** Fixed alongside M9 (bool rejected in `_require_positive`). | **FIXED** (in M9 commit) |
+| M5/M6/M8/M10 | DB conns under lock / S3 lost-update / shutdown(wait=False) / unlocked _mirror_path | **DEFERRED.** Need design judgment (connection refactor, S3 CAS, shutdown semantics); M8 is accepted design (idempotent short ticks; wait=True risks shutdown hangs). | DEFER |
 | L5/L6 | `backup-monitor/state.py` locking/umask | **FALSE POSITIVE.** No `state.py` exists. | NONE |
 | L8 | `backup-monitor/Dockerfile` runs as root | **FALSE POSITIVE.** No Dockerfile exists. | NONE |
-| L1–L4, L7 | misc | DEFER (low impact / N/A — no network server, so L7 rate-limiting N/A). | DEFER |
+| L2/L3/L4 | substring CIDR match / adopt TOCTOU / no fsync | **DEFERRED** (low impact, operator-only). | DEFER |
+| L7 | no rate limiting on seed/refresh | **N/A.** Controller has no network server; B2 pull is anonymous static-object GET. | NONE |
+
+## Outcome
+
+12 commits, one fix per finding. **All Critical and High findings fixed**
+(C1, H1–H5), C2 hardened (downgraded — not actually injectable), plus
+Mediums M1, M2, M7, M9, M12 and Low L1. Full suite green: **1041 passed**
+(deterministic ordering). False positives identified: C2-as-RCE, M4, M11,
+L5, L6, L8. Notably the report's *fixes* were wrong twice — M1 (a
+threading.Lock cannot protect a separate-process reader; used atomic
+os.replace) and C1 (described a `status==304` branch that doesn't exist;
+real path was urllib raising HTTPError on 304).
 
 ## Fix plan (commit-per-step, TDD where logic changes)
 

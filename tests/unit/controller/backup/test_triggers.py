@@ -48,14 +48,38 @@ class FakePipeline:
 # Fake timer factory for deterministic debounce tests (no real sleep needed)
 # ---------------------------------------------------------------------------
 
+class _FakeTimer:
+    """Deterministic stand-in for threading.Timer — no real thread.
+
+    Using a real Timer made is_alive() race with cancel()'s thread teardown,
+    so the debounce test flaked (a just-cancelled timer briefly stayed alive).
+    Here 'alive' is purely started-and-not-cancelled.
+    """
+
+    def __init__(self, delay: float, fn) -> None:
+        self.delay = delay
+        self.function = fn
+        self.started = False
+        self.cancelled = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    def is_alive(self) -> bool:
+        return self.started and not self.cancelled
+
+
 class FakeTimerFactory:
     """Collects timers so tests can fire them manually."""
 
     def __init__(self) -> None:
-        self.timers: list[threading.Timer] = []
+        self.timers: list[_FakeTimer] = []
 
-    def __call__(self, delay: float, fn) -> threading.Timer:
-        t = threading.Timer(delay, fn)
+    def __call__(self, delay: float, fn) -> _FakeTimer:
+        t = _FakeTimer(delay, fn)
         self.timers.append(t)
         return t
 
