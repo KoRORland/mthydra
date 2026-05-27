@@ -46,6 +46,30 @@ def install(
         _run([tool, "-t", "mangle", "-A", "OUTPUT", "-j", _CHAIN])
 
 
+def _rule_present(out: str, cidr: str, port: int) -> bool:
+    """True iff some rule line routes exactly `cidr` to exactly `port`.
+
+    Token-exact, not substring: `-d 10.0.0.0/8` must not satisfy a query for
+    `10.0.0.0/16` (or vice-versa), and `--on-port 123456` must not satisfy a
+    query for port 12345. The destination CIDR and the on-port must also be on
+    the *same* rule line.
+    """
+    port_s = str(port)
+    for line in out.splitlines():
+        toks = line.split()
+        has_dst = any(
+            toks[i] == "-d" and i + 1 < len(toks) and toks[i + 1] == cidr
+            for i in range(len(toks))
+        )
+        has_port = any(
+            toks[i] == "--on-port" and i + 1 < len(toks) and toks[i + 1] == port_s
+            for i in range(len(toks))
+        )
+        if has_dst and has_port:
+            return True
+    return False
+
+
 def verify_installed(
     dc_cidrs_v4: list[str], dc_cidrs_v6: list[str], *, tproxy_port: int,
 ) -> bool:
@@ -58,7 +82,7 @@ def verify_installed(
         except IptablesError:
             return False
         for cidr in cidrs:
-            if cidr not in out or str(tproxy_port) not in out:
+            if not _rule_present(out, cidr, tproxy_port):
                 return False
     return True
 

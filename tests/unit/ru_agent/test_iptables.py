@@ -72,6 +72,57 @@ def test_verify_installed_returns_false_when_chain_missing(monkeypatch):
     assert iptables.verify_installed(["149.154.160.0/20"], [], tproxy_port=12345) is False
 
 
+def test_verify_installed_rejects_substring_cidr_false_positive(monkeypatch):
+    """L2: an expected CIDR that is only a *substring* of a present one must NOT pass.
+
+    Chain has 149.154.160.0/20; we ask for 149.154.160.0/2 (a prefix string of
+    the present rule). Bare substring matching would wrongly return True.
+    """
+    from mthydra.ru_agent import iptables
+    monkeypatch.setattr(
+        iptables.subprocess, "run",
+        lambda cmd, **kw: type("R", (), {
+            "returncode": 0,
+            "stdout": b"-N MTHYDRA_DCS\n-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j TPROXY --on-port 12345\n",
+            "stderr": b"",
+        })(),
+    )
+    assert iptables.verify_installed(["149.154.160.0/2"], [], tproxy_port=12345) is False
+
+
+def test_verify_installed_rejects_substring_port_false_positive(monkeypatch):
+    """L2: a port that is only a substring of the present --on-port must NOT pass."""
+    from mthydra.ru_agent import iptables
+    monkeypatch.setattr(
+        iptables.subprocess, "run",
+        lambda cmd, **kw: type("R", (), {
+            "returncode": 0,
+            "stdout": b"-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j TPROXY --on-port 123456\n",
+            "stderr": b"",
+        })(),
+    )
+    # Asked for 12345, chain has 123456 — substring match would wrongly pass.
+    assert iptables.verify_installed(["149.154.160.0/20"], [], tproxy_port=12345) is False
+
+
+def test_verify_installed_requires_cidr_and_port_on_same_rule(monkeypatch):
+    """L2: the right CIDR and the right port must be on the SAME rule line."""
+    from mthydra.ru_agent import iptables
+    monkeypatch.setattr(
+        iptables.subprocess, "run",
+        lambda cmd, **kw: type("R", (), {
+            "returncode": 0,
+            # cidr present on one rule, port present on a different rule
+            "stdout": (
+                b"-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j TPROXY --on-port 99999\n"
+                b"-A MTHYDRA_DCS -d 10.0.0.0/8 -p tcp -j TPROXY --on-port 12345\n"
+            ),
+            "stderr": b"",
+        })(),
+    )
+    assert iptables.verify_installed(["149.154.160.0/20"], [], tproxy_port=12345) is False
+
+
 def test_verify_installed_skips_empty_cidr_list(monkeypatch):
     """Empty CIDR list for a family -> not checked. Both empty -> True."""
     from mthydra.ru_agent import iptables
