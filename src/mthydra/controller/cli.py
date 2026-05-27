@@ -1492,6 +1492,29 @@ def _cmd_serve(args) -> int:
     tmp_dir = Path("/var/lib/mthydra/tmp")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
+    # M12: validate LOCAL system state before arming any wheel — schema
+    # version, SQL invariants, age recipient/binary. The documented operator
+    # flow runs `startup-check` via preflight, but serve must not silently arm
+    # against a broken DB. destination=None deliberately skips the network
+    # reachability probe: a transient B2 outage must not stop the controller
+    # from starting (the backup pipeline records such failures at runtime).
+    # Skipped entirely in offline mode (used by tests).
+    if mode != "offline":
+        sc = run_startup_checks(
+            db_path=args.db_path,
+            age_recipient=recipient,
+            mode=mode,
+            bucket_override=args.bucket_override,
+            destination=None,
+        )
+        if not sc.ok:
+            print(
+                f"serve: refusing — startup check failed "
+                f"[{sc.failed_check}]: {sc.message}",
+                file=sys.stderr,
+            )
+            return 10
+
     pipeline = BackupPipeline(
         db_path=args.db_path,
         tmp_dir=tmp_dir,

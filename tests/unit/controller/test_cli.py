@@ -1606,6 +1606,37 @@ def test_serve_arms_upstream_tracker(tmp_path, age_recipient, monkeypatch):
     assert armed["tracker"] == 1
 
 
+def test_serve_refuses_when_startup_check_fails(tmp_path, age_recipient, monkeypatch):
+    """M12: serve validates local state and refuses (rc 10) instead of arming
+    wheels against a broken config — here, a corrupted age recipient."""
+    import pathlib
+    from mthydra.controller.cli import run
+    db = tmp_path / "state.sqlite"
+    cfg_path = tmp_path / "controller.toml"
+    cfg_path.write_text(_MIN_TOML)
+    run(["init", "--db-path", str(db),
+         "--age-recipient", age_recipient,
+         "--provider-credential", "b2=id:secret"])
+    # Recipient file holds a recipient with a broken bech32 checksum (last
+    # char flipped, still lowercase + valid charset).
+    bad = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8q"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(bad + "\n")
+    monkeypatch.setattr("mthydra.controller.cli.DEFAULT_RECIPIENT_FILE",
+                         str(recipient_file))
+    _real_mkdir = pathlib.Path.mkdir
+
+    def _patched_mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        if str(self) == "/var/lib/mthydra/tmp":
+            (tmp_path / "serve_tmp").mkdir(parents=True, exist_ok=True)
+            return
+        _real_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", _patched_mkdir)
+    rc = run(["serve", "--db-path", str(db), "--config", str(cfg_path)])
+    assert rc == 10
+
+
 # ----- spec G: provision-seed -----
 
 
