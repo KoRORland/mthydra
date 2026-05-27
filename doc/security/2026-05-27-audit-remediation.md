@@ -26,22 +26,39 @@ fabricated. Verdicts and the plan below reflect the *verified* state of the code
 | M11 | `burned.py:log_event` outside txn | **FALSE POSITIVE.** burned.py has no `log_event`; audit logging lives in state/audit.py. | NONE |
 | M12 | `_cmd_serve` skips startup checks | **REAL.** Active serve armed all wheels with no validation. | **FIX** (gate on local startup checks) |
 | L1 | bool accepted as int | **REAL.** Fixed alongside M9 (bool rejected in `_require_positive`). | **FIXED** (in M9 commit) |
-| M5/M6/M8/M10 | DB conns under lock / S3 lost-update / shutdown(wait=False) / unlocked _mirror_path | **DEFERRED.** Need design judgment (connection refactor, S3 CAS, shutdown semantics); M8 is accepted design (idempotent short ticks; wait=True risks shutdown hangs). | DEFER |
+| M5 | 3 DB connections under one lock → orphan zombie rows | **NOT A BUG.** The 3 short transactions (started→pushed→index_updated) are *intentional*: `put_blob`/`put_index` are multi-second network uploads and a single SQLite write txn cannot be held across them without locking the DB for every wheel. Partial-failure rows are exactly what `abandon_zombie_starts` (startup) + `reconcile_pending` clean up. The report's single-conn+savepoint fix is infeasible. | NONE |
+| M6 | S3 index.json lost-update (no ETag CAS) | **BOUNDED/ACCEPTED.** Requires concurrent writers = split-brain (two active controllers), which the standby-promotion discipline forbids. Within one active node, gen is monotonic and `reconcile_pending` never downgrades the index (`>= our gen` guard). ETag-conditional PUT is also of uncertain support on the B2 S3-compat endpoint. | NONE |
+| M8 | `shutdown(wait=False)` abandons jobs | **ACCEPTED.** 14 wheels; ticks are short + idempotent and re-derive state next boot; `wait=True` risks shutdown hangs. | NONE |
+| M10 | unlocked module-level `_mirror_path` in state/audit.py | **NOT A BUG.** `set_audit_mirror` is called once at serve startup *before* any wheel thread arms; after that `_mirror_path` is read-only and reads are GIL-atomic. The concurrent mirror writes use `open(..., "a")` (O_APPEND), atomic at line granularity for the short audit lines. No data race. | NONE |
+| L2 | substring CIDR match in iptables verify | **REAL.** `cidr not in out` / `str(port) not in out` substring-matched (prefix CIDR, port-as-substring, cross-rule). | **FIXED** (token-exact, same-rule) |
+| L3 | adopt.py TOCTOU between `exists()` and move | **ACCEPTED.** `adopt_restored_state` runs operator-only, daemon-down, non-concurrent; the `exists()` checks produce friendly errors, they are not a security boundary. No realistic race. | NONE |
+| L4 | no fsync after adopt | **REAL.** Rename + DB commit weren't fsynced to the directory. | **FIXED** (fsync live file + parent dir) |
 | L5/L6 | `backup-monitor/state.py` locking/umask | **FALSE POSITIVE.** No `state.py` exists. | NONE |
 | L8 | `backup-monitor/Dockerfile` runs as root | **FALSE POSITIVE.** No Dockerfile exists. | NONE |
-| L2/L3/L4 | substring CIDR match / adopt TOCTOU / no fsync | **DEFERRED** (low impact, operator-only). | DEFER |
 | L7 | no rate limiting on seed/refresh | **N/A.** Controller has no network server; B2 pull is anonymous static-object GET. | NONE |
 
 ## Outcome
 
-12 commits, one fix per finding. **All Critical and High findings fixed**
-(C1, H1–H5), C2 hardened (downgraded — not actually injectable), plus
-Mediums M1, M2, M7, M9, M12 and Low L1. Full suite green: **1041 passed**
-(deterministic ordering). False positives identified: C2-as-RCE, M4, M11,
-L5, L6, L8. Notably the report's *fixes* were wrong twice — M1 (a
-threading.Lock cannot protect a separate-process reader; used atomic
-os.replace) and C1 (described a `status==304` branch that doesn't exist;
-real path was urllib raising HTTPError on 304).
+Every report finding now has a resolution. **Fixed:** all Critical + High
+(C1, H1–H5), C2 hardened (downgraded — not actually injectable), Mediums
+M1/M2/M7/M9/M12, Lows L1/L2/L4. **Verified non-bug / accepted with rationale:**
+M5 (intentional incremental commits + zombie reconciliation), M6 (bounded by
+single-active + monotonic gen), M8 (idempotent short ticks), M10 (set-once
+before threads; O_APPEND), L3 (operator-only, daemon-down). **False positives:**
+C2-as-RCE, M4, M11, L5, L6, L8. **N/A:** L7 (no network server).
+
+Notably the report's *fixes* were wrong twice — M1 (a threading.Lock cannot
+protect a separate-process reader; used atomic os.replace) and C1 (described a
+`status==304` branch that doesn't exist; real path was urllib raising HTTPError
+on 304) — and its suggested M5 fix (single txn across network I/O) is infeasible.
+
+Full suite green throughout (1041+ passing).
+
+Postscript: a `git add -A` during this work swept local dev files
+(`.opencode/config.json` with a live token, `.ipynb`) into the first commit;
+caught in review, purged from history via `git filter-repo`, force-pushed.
+Because the secret was already pushed, it must be rotated out-of-band
+regardless of the history rewrite.
 
 ## Fix plan (commit-per-step, TDD where logic changes)
 
