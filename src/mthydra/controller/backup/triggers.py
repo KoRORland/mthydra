@@ -5,6 +5,7 @@ No asyncio in this module.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Callable, Protocol
 
@@ -13,6 +14,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from mthydra.controller.state.backup_log import BackupTrigger
+
+_log = logging.getLogger(__name__)
 
 
 class _PipelineLike(Protocol):
@@ -98,13 +101,14 @@ class BackupOrchestrator:
         try:
             self.pipeline.do_backup(BackupTrigger.FLOOR_TIMER)
         except Exception:
-            pass  # pipeline records failures; loop must continue
+            # pipeline records failures; loop must continue, but never silently.
+            _log.exception("floor-timer backup tick failed")
 
     def _fire_burned_change(self) -> None:
         try:
             self.pipeline.do_backup(BackupTrigger.BURNED_DOMAINS_CHANGE)
         except Exception:
-            pass
+            _log.exception("burned-change backup tick failed")
 
     def _cancel_debounce(self) -> None:
         if self._debounce_timer is not None:

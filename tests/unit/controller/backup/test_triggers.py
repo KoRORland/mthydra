@@ -91,6 +91,30 @@ def test_burned_change_debounces_multiple_signals():
     assert pipeline.calls == ["burned_domains_change"]
 
 
+class _BoomPipeline:
+    def do_backup(self, trigger):
+        raise RuntimeError("boom")
+
+
+def test_floor_timer_failure_is_logged_not_swallowed(caplog):
+    """M2: a failing tick must not propagate, but must leave a log record."""
+    orch = BackupOrchestrator(
+        pipeline=_BoomPipeline(), debounce_seconds=60, floor_interval_seconds=3600
+    )
+    with caplog.at_level("ERROR"):
+        orch._fire_floor_timer()  # must not raise
+    assert any("floor-timer backup tick failed" in r.message for r in caplog.records)
+
+
+def test_burned_change_failure_is_logged_not_swallowed(caplog):
+    orch = BackupOrchestrator(
+        pipeline=_BoomPipeline(), debounce_seconds=60, floor_interval_seconds=3600
+    )
+    with caplog.at_level("ERROR"):
+        orch._fire_burned_change()  # must not raise
+    assert any("burned-change backup tick failed" in r.message for r in caplog.records)
+
+
 def test_manual_trigger_runs_immediately():
     pipeline = FakePipeline()
     orch = BackupOrchestrator(pipeline=pipeline, debounce_seconds=60, floor_interval_seconds=3600)
