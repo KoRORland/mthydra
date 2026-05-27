@@ -75,8 +75,9 @@ The genuinely unclosed parts — stated here once, plainly, and tracked in the �
 - **Front-line transport monoculture** — *accepted, not solved.* Mitigated by T4 + T5, recovered by T1. With one client-free transport this is a race you stay in, not one you win.
 - **A compromised in-point can see a connecting user's IP** — *bounded, not closed.* Inherent: a working relay must know where to return packets. Bounded by T6 shard size × T3 dwell time. The irreducible core is a user who connects through a compromised box during the short window before T3 kills it.
 - **Global timing/volume correlation** — *not solved at any scale*, including by Tor against a global adversary. Mitigated in practice mainly by the fleet staying small, private, and undiscovered — an obscurity assumption held consciously, not a guarantee.
+- **On-device inspection of a stopped user** — *bounded, not closed.* Installing/using a VPN or Telegram is not currently illegal in Russia, but that is a policy variable that can change, and an *active* Telegram plus a visible circumvention footprint can itself draw suspicion during the informal, not-strictly-lawful device checks that are common in practice. Bounded by T13 (§14): steady-state footprint reduced to a single Telegram proxy line (no extra app installed), account locked behind a passcode + cloud password. The irreducible core — a coerced or forcibly-unlocked device — is outside our control and rests on user caution.
 
-None of these is a build-stopper for a small trusted circle. All three are reasons to keep N small, keep it private, and keep the test clock (§12) running. The safety margin is **short dwell time on anything bad plus loud failure to the operator** — and that margin holds only if §12 runs on a schedule rather than on noticing.
+None of these is a build-stopper for a small trusted circle. All of these are reasons to keep N small, keep it private, and keep the test clock (§12) running. The safety margin is **short dwell time on anything bad plus loud failure to the operator** — and that margin holds only if §12 runs on a schedule rather than on noticing.
 
 ---
 
@@ -96,6 +97,7 @@ None of these is a build-stopper for a small trusted circle. All three are reaso
 | T10 | Multi-path publishing | **Open** — more than one user-facing distribution mechanism so a single channel takedown doesn't sever the circle | Medium |
 | T11 | Endpoint-descriptor signing scheme | **Open** — pin exact contents, keys, validity window, generation so verify-not-forge is airtight | Medium |
 | T12 | Document the obscurity assumption in the operator runbook | **Open** — make "stay small and unremarkable" an explicit, maintained control | Low |
+| T13 | User-device opsec & inspection-resistance | **Drafted** (§14). Not real until every user has Controls 1+2 enabled and the opsec note is translated + delivered per onboarding (runbook §5.5) | High |
 
 T7–T12 are intentionally left as open TODOs. T7 in particular has genuine unresolved design substance (vantage sourcing without creating an attributable pattern) and is worth a dedicated session on its merits rather than a template fill.
 
@@ -567,6 +569,7 @@ The whole design's safety margin depends on these running on a clock rather than
 - **T4** — track upstream for evasion-relevant releases on a cadence; run canary → validate → promote → re-pin per refresh; never promote an ambiguous canary.
 - **T5** — re-verify reserve cover-domain candidates from Russia-approximating vantages; replenish the pool so burned-set growth never pressures the never-reuse rule; confirm the burned set survives every T2 restore.
 - **T6** — keep shards small and genuinely disjoint (controller-enforced, not memory-based); reshuffle shard membership and assignment on a timer (more frequently the smaller the circle); reshuffle the affected shard on every box compromise.
+- **T13** — at onboarding, verify each user has enabled Telegram Passcode Lock + Two-Step Verification (cloud password) and has installed no extra circumvention app; re-verify on any device change; keep the user-facing opsec note translated and actually delivered.
 
 **One metric to surface upward:** *time since each obligation was last proven.* If any goes stale, that protection is aspirational, not real.
 
@@ -582,5 +585,78 @@ Kept separate and explicit so later edits cannot quietly upgrade *bounded* to *s
 | Compromised in-point sees a user IP | **Bounded, not closed** | T6 shard size × T3 dwell time; irreducible core remains |
 | Global timing/volume correlation | **Not solved at any scale** | Mitigated mainly by staying small/private/undiscovered — an assumption, not a guarantee |
 | Operator legal exposure | **Assumed low, not proven** | Rests entirely on the out-of-jurisdiction premise; revisit if that premise weakens |
+| On-device footprint / inspection of a stopped user | **Bounded, not closed** | T13 (§14): minimal footprint (native Telegram proxy, no extra app) + passcode lock + cloud password; the coerced / forced-unlock core is outside our control and rests on user caution |
 
 The design is honest about these *by construction*. Treat any future revision that softens this table as a regression, not an improvement.
+
+---
+
+# §14 — T13: User-Device Operational Security & Inspection-Resistance
+
+*A user-side threat the network design does not touch: what is found on the phone itself.*
+
+**Purpose:** The rest of this document defends the *connection* — the bytes crossing the DPI boundary. T13 defends the *device and account* against the other half of the real threat model: a user who is physically stopped and whose phone is inspected. Scope: reduce what an inspection reveals, and what an unauthorised holder of the phone can reach. Like T6, it **bounds**; it does not close.
+
+---
+
+#### The threat, stated plainly
+
+As of now it is **not illegal** in Russia to install or use a VPN, other DPI-avoidance software, or Telegram itself. Two things make that an unsafe thing to lean on:
+
+1. **It can change.** Legal status is a policy variable, not a constant. A design that is only safe while today's rules hold is not safe.
+2. **An active Telegram plus a visible circumvention footprint can itself draw suspicion during a device check** — and informal, not-strictly-lawful inspections of what is on a phone are common in practice. The question at the checkpoint is rarely "is this illegal"; it is "does this person look unusual."
+
+So the user-side goal is **unremarkableness**: a device that, on inspection, looks like an ordinary Russian user's, and an account that does not hand itself over if the phone is taken.
+
+---
+
+#### Control 1 — Smallest possible footprint (install nothing; use Telegram's own tools)
+
+This is *why* the front line is MTProto Fake-TLS reached by a `tg://proxy` link (§2), restated as a security control rather than only a UX one:
+
+- The circumvention lives **inside Telegram's built-in proxy setting**. No VPN app, no sing-box, no foreign tunnelling client is installed on the user's device for steady-state use. There is nothing extra to find.
+- Everything else on the device behaves the way a proper Russian user's would — domestic apps present, no conspicuous foreign-tooling pattern. The proxy entry inside Telegram is the *only* artifact, and a Telegram proxy is itself an ordinary, widely-used Telegram feature.
+- **The one acknowledged exception is the break-glass dormant client (§6).** It is a real footprint cost, owned consciously in §6 Part 1, and is *not* present for steady-state operation — only pre-staged for circle-wide-burn recovery. Until that path is needed, the steady-state footprint is "a proxy line in Telegram settings," nothing more.
+
+---
+
+#### Control 2 — Lock the account against an unauthorised holder
+
+If the phone is taken (checkpoint, search, theft), the controls that matter are the ones already built into Telegram. Both are **mandatory** at onboarding (runbook §5.5):
+
+- **Passcode Lock** (Telegram → Settings → Privacy and Security → Passcode Lock): a local lock on the Telegram app, with auto-lock enabled, so an unlocked *phone* does not equal an open *Telegram*.
+- **Two-Step Verification / cloud password** (Settings → Privacy and Security → Two-Step Verification): a password required to log the account in on a new device, so possession of the SIM or an intercepted SMS code is not enough to seize the account and its history. Set a recovery email the user controls.
+
+Together these mean a seized-but-locked device does not immediately yield the account, the chat history, or the active sessions.
+
+---
+
+#### What T13 does and does NOT achieve
+
+**Does:**
+- Removes the steady-state on-device circumvention artifact (Control 1) — there is nothing obvious to find on inspection.
+- Raises the cost of seizing the account from a taken device (Control 2).
+
+**Does NOT — own this plainly:**
+- A passcode and a cloud password are **not fool-proof and not brute-force- or coercion-proof.** They do not survive a user compelled to unlock, a shoulder-surfed passcode, device malware, or a sufficiently determined forensic effort. They raise the bar; they do not close the threat.
+- T13 cannot protect a user who is coerced, careless, or specifically targeted by a capable adversary. Much of what happens at an actual inspection is **outside our control** — it rests on the user's own caution and judgement in the moment.
+- This is acknowledged, not engineered away. The honest position: minimise the footprint, lock the account, and **be clear with every user that the residual risk is real and partly theirs to manage.**
+
+---
+
+#### Honest residuals specific to T13
+- The protection is only as good as the user's habits: a passcode never enabled, a cloud password written on the same phone, or a break-glass client left installed-and-used in steady state all silently erase it.
+- "Unremarkable" is an obscurity property, not a guarantee (same class as §4's correlation residual) — it degrades the moment the circle or its behaviour becomes a known pattern.
+- We can *require and teach* Controls 1 and 2 at onboarding (§5.5) and *re-verify* them on the §12 clock; we cannot enforce them on the device. The gap between "told the user" and "the user did it and kept doing it" is real and belongs to the operator relationship, not the controller.
+
+---
+
+#### User-facing opsec note (pre-written; translate before use)
+
+Deliver verbally during §5.5 and as a short written note the user keeps, in their language. Keep it plain:
+
+> - You don't need any extra app. Your Telegram is set up to connect through a proxy — that's all. Don't install VPNs or other tools for this.
+> - Turn on a **Passcode Lock** in Telegram (Settings → Privacy and Security → Passcode Lock) and set it to lock automatically.
+> - Turn on **Two-Step Verification** (Settings → Privacy and Security → Two-Step Verification) and remember the password — it stops anyone from logging into your account on another phone. Keep the password somewhere safe, NOT on this phone.
+> - These help, but they are **not a guarantee.** If you are ever asked to unlock your phone, think about your own safety first — none of this protects a phone you are made to open.
+> - If Telegram stops working, wait for a message from me on [out-of-band channel] before doing anything.

@@ -591,6 +591,18 @@ mthydra-controller dist-test --user-id alice \
 
 **On Alice's side:** she should receive ONE test message in Telegram (via the distribution bot) AND ONE in email. **On the operator side:** ask Alice (out-of-band) to confirm both arrived. If only one did, fix `controller.toml` `[distribution.X]` and re-test.
 
+### §5.5 — Device footprint & account lock (MANDATORY — do not skip)
+
+Why: installing/using a VPN or Telegram is not illegal in Russia *today*, but that can change, and an active Telegram plus a visible circumvention footprint can draw suspicion during an informal device check (common in practice). Design §14 (T13) is the doctrine; this is the per-user enforcement. Walk the user through ALL of it on the same out-of-band session as §5.1:
+
+1. **No extra software.** Confirm the user has installed NO VPN / tunnelling app for this. The only artifact on their phone is the proxy line inside Telegram (the `tg://proxy` link/QR you distribute). The rest of the device should look like any ordinary Russian user's.
+2. **Telegram Passcode Lock.** Telegram → Settings → Privacy and Security → Passcode Lock → set a passcode and enable Auto-Lock. So an unlocked *phone* is not an open *Telegram*.
+3. **Two-Step Verification (cloud password).** Settings → Privacy and Security → Two-Step Verification → set a password + a recovery email the user controls. So an intercepted SMS / seized SIM cannot log the account in elsewhere. Tell them to keep the password OFF the phone.
+4. **Deliver the opsec note** (design §14, "User-facing opsec note") in the user's language — short and plain.
+5. **State the limit honestly.** Tell the user, in words: these measures help but are **not** fool-proof or brute-force-proof, and none of it protects a device they are forced to unlock — their own caution comes first. Record (in your own out-of-band notes; the controller does not store it) that you delivered this acknowledgement.
+
+If a user will not or cannot enable steps 2–3, that is an accepted-risk decision the operator makes consciously, per user — not a silent default.
+
 ---
 
 ## §6 — Shard management (T6)
