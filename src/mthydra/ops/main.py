@@ -140,7 +140,15 @@ def cmd_setup_host(args: argparse.Namespace) -> int:
 
     for argv, allow_fail in steps:
         _say(f"$ {' '.join(argv)}")
-        rc = subprocess.run(argv).returncode
+        try:
+            rc = subprocess.run(argv).returncode
+        except FileNotFoundError:
+            # Match the old shell behaviour: a missing binary is rc 127, and
+            # the allow_fail steps (old `|| true`) tolerated it.
+            if allow_fail:
+                continue
+            _err(f"step failed: command not found: {argv[0]}")
+            return 127
         if rc != 0 and not allow_fail:
             _err(f"step failed (rc={rc}): {' '.join(argv)}")
             return rc

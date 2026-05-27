@@ -464,6 +464,38 @@ def test_setup_host_dry_run_lists_steps(capsys):
     assert "chmod" in out
 
 
+def test_setup_host_missing_required_binary_aborts(monkeypatch, capsys):
+    """A missing non-allow_fail binary (e.g. apt) → rc 127 + clean error, not a traceback."""
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+
+    def _boom(argv, *a, **k):
+        raise FileNotFoundError(argv[0])
+
+    monkeypatch.setattr(ops_main.subprocess, "run", _boom)
+    rc = ops_main.main(["setup-host"])
+    assert rc == 127
+    assert "not found" in capsys.readouterr().err
+
+
+def test_setup_host_tolerates_missing_allow_fail_binary(monkeypatch, capsys):
+    """adduser missing is tolerated (old `|| true`); other steps still run."""
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+    seen = []
+
+    def _selective(argv, *a, **k):
+        seen.append(argv[0])
+        if argv[0] == "adduser":
+            raise FileNotFoundError("adduser")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(ops_main.subprocess, "run", _selective)
+    rc = ops_main.main(["setup-host"])
+    assert rc == 0
+    # adduser was attempted but tolerated; later steps (mkdir/chown/chmod) ran.
+    assert "adduser" in seen
+    assert "mkdir" in seen
+
+
 def test_setup_host_refuses_without_root_or_dry_run(monkeypatch, capsys):
     monkeypatch.setattr("os.geteuid", lambda: 1000)
     rc = ops_main.main(["setup-host"])

@@ -108,17 +108,22 @@ mthydra-controller --help    # smoke test
 
 ### §1.5 — Bootstrap controller state
 
-**→ `mthydra-ops bootstrap`** combines §1.5 (init), §1.6 (authority migration), and §1.7 (write controller.toml from a template) into one command. See `mthydra-ops bootstrap --help` for the full argument list; you'll need all the credentials from §1.3 + the bot tokens from §1.7.
+**→ `mthydra-ops bootstrap`** combines §1.5 (init), §1.6 (authority migration), and §1.7 (write controller.toml from a template) into one command. See `mthydra-ops bootstrap --help` for the full argument list; you'll need all the credentials from §1.3 + the bot tokens from §1.7. **`mthydra-ops bootstrap` reads the B2 application key from the `B2_APPLICATION_KEY` environment variable — `export` it first (it is deliberately NOT a CLI flag, so it never appears in `ps`).**
 
 The bootstrap creates the SQLite state file with all schema migrations applied. Once it succeeds, the file's contents are the operator's responsibility — refuse to bootstrap a second time over an existing file.
 
 ```bash
-# On the EU host as mthydra user:
+# On the EU host as mthydra user.
+# Keep the B2 secret OFF argv (visible in `ps`): pass it via the environment.
+export B2_CRED="$B2_KEY_ID:$B2_APPLICATION_KEY"
+
 mthydra-controller init \
     --db-path /var/lib/mthydra/state.sqlite \
     --age-recipient "age1...PASTED_FROM_LAPTOP" \
-    --provider-credential "b2=$B2_KEY_ID:$B2_APPLICATION_KEY" \
+    --provider-credential-env "b2=B2_CRED" \
     --role active
+
+unset B2_CRED
 
 # Save the recipient where _cmd_serve can find it.
 echo "age1...PASTED_FROM_LAPTOP" > /etc/mthydra/age-recipient.txt
