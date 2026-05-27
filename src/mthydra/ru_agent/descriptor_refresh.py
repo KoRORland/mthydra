@@ -16,6 +16,23 @@ class RefreshError(RuntimeError):
     pass
 
 
+class _NotModified:
+    """Sentinel returned by a fetch_fn when the server answered 304 Not Modified.
+
+    A 304 means our cached descriptor is still current — it is a *success*, not
+    a failure. Returning bytes here (e.g. an empty body) would fail signature
+    verification and, after MAX_FAILURE_TICKS, needlessly self-terminate the box.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return "NOT_MODIFIED"
+
+
+NOT_MODIFIED = _NotModified()
+
+
 class RefreshLoop:
     TICK_INTERVAL_SECONDS = 15 * 60  # 15 min
     JITTER_SECONDS = 5 * 60  # ±5 min
@@ -80,6 +97,12 @@ class RefreshLoop:
             if self.failure_count >= self.MAX_FAILURE_TICKS:
                 self._terminate_fn("descriptor refresh failed for too long")
             return
+        # 304 Not Modified: cached descriptor is still current. Success, not failure.
+        if blob is NOT_MODIFIED:
+            self.failure_count = 0
+            if last_modified is not None:
+                self._last_modified = last_modified
+            return
         # 304-equivalent: fetch returned the same blob.
         new_hash = self._hash(blob)
         if new_hash == self._current_hash:
@@ -111,11 +134,18 @@ class RefreshLoop:
             sleep_fn(self.next_sleep_seconds())
 
 
-def _fetch_b2(url: str, if_modified_since: str | None) -> tuple[bytes, str]:
+def _fetch_b2(url: str, if_modified_since: str | None) -> tuple[bytes | _NotModified, str | None]:
+    import urllib.error
     import urllib.request
     req = urllib.request.Request(url)
     if if_modified_since:
         req.add_header("If-Modified-Since", if_modified_since)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        last_modified = resp.headers.get("Last-Modified", "")
-        return resp.read(), last_modified
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            last_modified = resp.headers.get("Last-Modified", "")
+            return resp.read(), last_modified
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            # Unchanged: keep the prior If-Modified-Since token, signal success.
+            return NOT_MODIFIED, if_modified_since
+        raise

@@ -219,6 +219,65 @@ def test_run_forever_calls_tick_then_sleeps(monkeypatch):
     assert len(sleeps) == 3
 
 
+def test_tick_not_modified_is_success_never_terminates():
+    """A steady-state NOT_MODIFIED stream must NOT count as failure (C1 regression).
+
+    Previously _fetch_b2 raised HTTPError on a 304, which tick() caught as a
+    failure and, after MAX_FAILURE_TICKS, self-terminated the box even though
+    the descriptor was simply unchanged.
+    """
+    from mthydra.ru_agent import descriptor_refresh
+    blob, anchor = _signed_descriptor()
+    rewrites = []
+    loop = descriptor_refresh.RefreshLoop(
+        url="https://b2/descriptors/current",
+        trust_anchors=[anchor],
+        initial_descriptor=blob,
+        rewrite_fn=lambda b: rewrites.append(b),
+        fetch_fn=lambda url, ims: (descriptor_refresh.NOT_MODIFIED, "Sun, 23 May 2026 00:00:00 GMT"),
+        terminate_fn=lambda r: pytest.fail(f"must not terminate on 304: {r}"),
+        clock=lambda: 1.0,
+    )
+    for _ in range(loop.MAX_FAILURE_TICKS + 5):
+        loop.tick()
+    assert rewrites == []
+    assert loop.failure_count == 0
+    assert loop._last_modified == "Sun, 23 May 2026 00:00:00 GMT"
+
+
+def test_fetch_b2_304_returns_not_modified_sentinel(monkeypatch):
+    """_fetch_b2 maps a 304 HTTPError to the NOT_MODIFIED sentinel, not an exception."""
+    from mthydra.ru_agent import descriptor_refresh
+    import urllib.request
+    import urllib.error
+
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(
+            url="https://x", code=304, msg="Not Modified", hdrs=None, fp=None,
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    body, lm = descriptor_refresh._fetch_b2("https://x", "Sat, 22 May 2026 00:00:00 GMT")
+    assert body is descriptor_refresh.NOT_MODIFIED
+    assert lm == "Sat, 22 May 2026 00:00:00 GMT"
+
+
+def test_fetch_b2_non_304_http_error_propagates(monkeypatch):
+    """A 500 (or any non-304) HTTPError still propagates so tick() counts it."""
+    from mthydra.ru_agent import descriptor_refresh
+    import urllib.request
+    import urllib.error
+
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(
+            url="https://x", code=500, msg="Server Error", hdrs=None, fp=None,
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(urllib.error.HTTPError):
+        descriptor_refresh._fetch_b2("https://x", None)
+
+
 def test_fetch_b2_smoke(monkeypatch):
     """_fetch_b2 builds a Request, optionally adds If-Modified-Since, and reads."""
     from mthydra.ru_agent import descriptor_refresh
