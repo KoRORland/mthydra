@@ -105,12 +105,13 @@ def _confirm(question: str, default_no: bool = True) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def cmd_setup_host(args: argparse.Namespace) -> int:
-    """Idempotent apt install + user + dir layout. Must run as root."""
-    if os.geteuid() != 0 and not args.dry_run:
-        _err("setup-host must run as root (or pass --dry-run)")
-        return 2
+def setup_host_core(run_step, *, dry_run: bool) -> int:
+    """Run (or describe) the package/user/dir steps for setup-host.
 
+    `run_step(argv, allow_fail)` executes one step; when `dry_run` is True
+    the function only prints what would happen. Returns 0 on success or the
+    first non-zero rc on failure.
+    """
     pkgs = ["python3.12", "python3.12-venv", "python3-pip", "git", "age"]
     user = "mthydra"
     dirs = [
@@ -132,13 +133,26 @@ def cmd_setup_host(args: argparse.Namespace) -> int:
         steps.append((["chown", owner, path], False))
         steps.append((["chmod", mode, path], False))
 
-    if args.dry_run:
+    if dry_run:
         _say("DRY-RUN. Steps that WOULD be executed:")
         for argv, _ in steps:
             print(f"  $ {' '.join(argv)}")
         return 0
 
     for argv, allow_fail in steps:
+        rc = run_step(argv, allow_fail)
+        if rc != 0:
+            return rc
+    return 0
+
+
+def cmd_setup_host(args: argparse.Namespace) -> int:
+    """Idempotent apt install + user + dir layout. Must run as root."""
+    if os.geteuid() != 0 and not args.dry_run:
+        _err("setup-host must run as root (or pass --dry-run)")
+        return 2
+
+    def run_step(argv: list[str], allow_fail: bool) -> int:
         _say(f"$ {' '.join(argv)}")
         try:
             rc = subprocess.run(argv).returncode
@@ -146,15 +160,18 @@ def cmd_setup_host(args: argparse.Namespace) -> int:
             # Match the old shell behaviour: a missing binary is rc 127, and
             # the allow_fail steps (old `|| true`) tolerated it.
             if allow_fail:
-                continue
+                return 0
             _err(f"step failed: command not found: {argv[0]}")
             return 127
         if rc != 0 and not allow_fail:
             _err(f"step failed (rc={rc}): {' '.join(argv)}")
             return rc
+        return 0
 
-    _say("setup-host: complete. Next: mthydra-ops gen-age-key (on laptop, not here).")
-    return 0
+    rc = setup_host_core(run_step, dry_run=args.dry_run)
+    if rc == 0 and not args.dry_run:
+        _say("setup-host: complete. Next: mthydra-ops gen-age-key (on laptop, not here).")
+    return rc
 
 
 # ---------------------------------------------------------------------------
@@ -316,12 +333,60 @@ password  = "{dist_smtp_pass}"
 """
 
 
-def cmd_bootstrap(args: argparse.Namespace) -> int:
-    """Init DB + write controller.toml + migrate authority. Runs as mthydra user."""
+def bootstrap_core(
+    run, say, *, db_path, config_path, age_recipient,
+    b2_application_key, hostname, role, operator_email=None,
+    force=False, **toml,
+) -> int:
+    """init (if DB absent) + authority-migrate + write controller.toml (if absent)
+    + write age-recipient.txt (next to the config). `run` matches _run_controller's
+    signature; all secrets travel via the child env, never argv."""
     from datetime import datetime, timezone
 
+    db, cfg = Path(db_path), Path(config_path)
+    if operator_email is None:
+        operator_email = toml.get("obs_smtp_to", "")
+
+    if not db.exists():
+        say("step 1/4: init controller state")
+        child_env = {
+            **os.environ,
+            "MTHYDRA_INIT_B2_CREDENTIAL": f"{toml['b2_key_id']}:{b2_application_key}",
+        }
+        run(
+            "init", "--db-path", str(db), "--age-recipient", age_recipient,
+            "--provider-credential-env", "b2=MTHYDRA_INIT_B2_CREDENTIAL",
+            "--role", role, env=child_env,
+        )
+        say("step 2/4: migrate credential authority off placeholder")
+        run("authority-migrate-placeholder", "--db-path", str(db))
+    else:
+        say("DB exists → skip init + authority-migrate")
+
+    if not cfg.exists():
+        say(f"step 3/4: write {cfg}")
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(_TOML_TEMPLATE.format(
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            hostname=hostname,
+            operator_email=operator_email,
+            **toml,
+        ))
+        os.chmod(cfg, 0o600)
+    else:
+        say(f"{cfg} exists → skip")
+
+    rec = cfg.parent / "age-recipient.txt"
+    if not rec.exists():
+        say(f"step 4/4: write {rec}")
+        rec.write_text(age_recipient + "\n")
+        os.chmod(rec, 0o600)
+    return 0
+
+
+def cmd_bootstrap(args: argparse.Namespace) -> int:
+    """Init DB + write controller.toml + migrate authority. Runs as mthydra user."""
     db_path = Path(args.db_path)
-    cfg_path = Path(args.config)
 
     if db_path.exists() and not args.force:
         _err(f"DB already exists at {db_path}; pass --force only if you know what that does")
@@ -335,59 +400,38 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
              "(kept off argv to avoid `ps` credential leak)")
         return 2
 
-    # Step 1: init. The credential is handed to the controller via the child
-    # environment, not argv, using --provider-credential-env.
-    _say("step 1/3: init controller state")
-    child_env = {**os.environ, "MTHYDRA_INIT_B2_CREDENTIAL": f"{args.b2_key_id}:{b2_app_key}"}
-    init_args = [
-        "init",
-        "--db-path", str(db_path),
-        "--age-recipient", args.age_recipient,
-        "--provider-credential-env", "b2=MTHYDRA_INIT_B2_CREDENTIAL",
-    ]
     try:
-        _run_controller(*init_args, env=child_env)
+        bootstrap_core(
+            _run_controller, _say,
+            db_path=args.db_path,
+            config_path=args.config,
+            age_recipient=args.age_recipient,
+            b2_application_key=b2_app_key,
+            hostname=args.hostname,
+            role="active",
+            operator_email=args.operator_email,
+            b2_endpoint=args.b2_endpoint,
+            b2_bucket=args.b2_bucket,
+            b2_key_id=args.b2_key_id,
+            obs_tg_bot_token=args.obs_tg_bot_token,
+            obs_tg_chat_id=args.obs_tg_chat_id,
+            obs_smtp_host=args.obs_smtp_host,
+            obs_smtp_port=args.obs_smtp_port,
+            obs_smtp_from=args.obs_smtp_from,
+            obs_smtp_to=args.obs_smtp_to,
+            obs_smtp_user=args.obs_smtp_user,
+            obs_smtp_pass=args.obs_smtp_pass,
+            dist_tg_bot_token=args.dist_tg_bot_token,
+            dist_smtp_host=args.dist_smtp_host,
+            dist_smtp_port=args.dist_smtp_port,
+            dist_smtp_from=args.dist_smtp_from,
+            dist_smtp_user=args.dist_smtp_user,
+            dist_smtp_pass=args.dist_smtp_pass,
+        )
     except subprocess.CalledProcessError as e:
-        _err(f"init failed: {e}")
+        _err(f"bootstrap failed: {e}")
         return e.returncode
 
-    # Step 2: migrate authority off placeholder
-    _say("step 2/3: migrate credential authority off placeholder")
-    try:
-        _run_controller("authority-migrate-placeholder",
-                          "--db-path", str(db_path))
-    except subprocess.CalledProcessError as e:
-        _err(f"authority-migrate-placeholder failed: {e}")
-        return e.returncode
-
-    # Step 3: write controller.toml
-    _say(f"step 3/3: write {cfg_path}")
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    toml = _TOML_TEMPLATE.format(
-        timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        hostname=args.hostname,
-        b2_endpoint=args.b2_endpoint,
-        b2_bucket=args.b2_bucket,
-        b2_key_id=args.b2_key_id,
-        operator_email=args.operator_email,
-        obs_tg_bot_token=args.obs_tg_bot_token,
-        obs_tg_chat_id=args.obs_tg_chat_id,
-        obs_smtp_host=args.obs_smtp_host,
-        obs_smtp_port=args.obs_smtp_port,
-        obs_smtp_from=args.obs_smtp_from,
-        obs_smtp_to=args.obs_smtp_to,
-        obs_smtp_user=args.obs_smtp_user,
-        obs_smtp_pass=args.obs_smtp_pass,
-        dist_tg_bot_token=args.dist_tg_bot_token,
-        dist_smtp_host=args.dist_smtp_host,
-        dist_smtp_port=args.dist_smtp_port,
-        dist_smtp_from=args.dist_smtp_from,
-        dist_smtp_user=args.dist_smtp_user,
-        dist_smtp_pass=args.dist_smtp_pass,
-    )
-    cfg_path.write_text(toml)
-    os.chmod(cfg_path, 0o600)
-    _say(f"wrote {cfg_path} (0600).")
     _say("Next: mthydra-ops preflight  (validates both alert sinks)")
     return 0
 
@@ -397,51 +441,63 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def cmd_preflight(args: argparse.Namespace) -> int:
-    """Validate both alert sinks AND heartbeat. Refuse to declare ready otherwise."""
+def preflight_core(run, say, *, db_path, config_path) -> int:
+    """The three controller calls currently in cmd_preflight:
+    obs-alert-test crit, obs-heartbeat-now, startup-check. Return 0."""
     msg = f"deploy-time crit test from {os.uname().nodename}"
-    _say("step 1/3: alert sinks (Telegram + email)")
+    say("step 1/3: alert sinks (Telegram + email)")
     try:
-        _run_controller(
+        run(
             "obs-alert-test",
             "--severity", "crit",
             "--message", msg,
-            "--db-path", args.db_path,
-            "--config", args.config,
+            "--db-path", db_path,
+            "--config", config_path,
         )
     except subprocess.CalledProcessError as e:
         _err(f"obs-alert-test failed: {e}")
         return e.returncode
 
-    _say("step 2/3: heartbeat email")
+    say("step 2/3: heartbeat email")
     try:
-        _run_controller(
+        run(
             "obs-heartbeat-now",
-            "--db-path", args.db_path,
-            "--config", args.config,
+            "--db-path", db_path,
+            "--config", config_path,
         )
     except subprocess.CalledProcessError as e:
         _err(f"obs-heartbeat-now failed: {e}")
         return e.returncode
 
-    _say("step 3/3: startup-check")
+    say("step 3/3: startup-check")
     try:
-        _run_controller(
+        run(
             "startup-check",
-            "--db-path", args.db_path,
+            "--db-path", db_path,
         )
     except subprocess.CalledProcessError as e:
         _err(f"startup-check failed: {e}")
         return e.returncode
 
-    _say("preflight PASSED.")
-    _say(
-        "Now CONFIRM out-of-band that the test message arrived in BOTH:\n"
-        "  - your operator-alert Telegram chat\n"
-        "  - your operator email inbox (check spam folder; whitelist From if needed)\n"
-        "If either is silent, fix [observability.X] in controller.toml and re-run preflight."
-    )
+    say("preflight PASSED.")
     return 0
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    """Validate both alert sinks AND heartbeat. Refuse to declare ready otherwise."""
+    rc = preflight_core(
+        _run_controller, _say,
+        db_path=args.db_path,
+        config_path=args.config,
+    )
+    if rc == 0:
+        _say(
+            "Now CONFIRM out-of-band that the test message arrived in BOTH:\n"
+            "  - your operator-alert Telegram chat\n"
+            "  - your operator email inbox (check spam folder; whitelist From if needed)\n"
+            "If either is silent, fix [observability.X] in controller.toml and re-run preflight."
+        )
+    return rc
 
 
 # ---------------------------------------------------------------------------

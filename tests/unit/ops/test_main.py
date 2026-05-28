@@ -688,3 +688,46 @@ def test_ru_provision_canary_flag_threaded_through(
     rc = ops_main.main(_ru_provision_argv(tmp_path) + ["--canary"])
     assert rc == 0
     assert "--canary" in fake_run_both.calls[0]
+
+
+# ---------------------------------------------------------------------------
+# bootstrap_core
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_core_passes_secret_via_env_not_argv():
+    import os as _os
+
+    from mthydra.ops import main as m
+
+    for _p in ("/tmp/x.sqlite", "/tmp/c.toml"):
+        if _os.path.exists(_p):
+            _os.remove(_p)
+    calls, envs = [], []
+
+    def fake_run(*args, check=True, capture=False, env=None):
+        calls.append(list(args))
+        envs.append(env)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    said = []
+    m.bootstrap_core(
+        fake_run, said.append,
+        db_path="/tmp/x.sqlite", config_path="/tmp/c.toml",
+        age_recipient="age1abc", b2_application_key="SECRET",
+        hostname="h", role="active",
+        b2_endpoint="e", b2_bucket="b", b2_key_id="k",
+        obs_tg_bot_token="t", obs_tg_chat_id="1", obs_smtp_host="s",
+        obs_smtp_port=587, obs_smtp_from="a@b", obs_smtp_to="c@d",
+        obs_smtp_user="u", obs_smtp_pass="p", dist_tg_bot_token="t2",
+        dist_smtp_host="s", dist_smtp_port=587, dist_smtp_from="e@f",
+        dist_smtp_user="u", dist_smtp_pass="p",
+    )
+    # SECRET must never appear on any argv
+    for argv in calls:
+        assert "SECRET" not in " ".join(argv)
+    # but it must be handed to the init call via env
+    init_env = next(
+        e for c, e in zip(calls, envs, strict=False) if c and c[0] == "init"
+    )
+    assert "SECRET" in " ".join(init_env.values())
