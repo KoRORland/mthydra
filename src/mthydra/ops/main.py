@@ -1014,6 +1014,65 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--case", choices=["A", "B"], default="A",
                     help="promotion case (B = active compromised → rotate creds)")
 
+    # ru-bringup
+    rb = sub.add_parser("ru-bringup",
+                        help="per-box wizard: mint provision-seed → reach → mark-live")
+    rb.add_argument("--provider", required=True)
+    rb.add_argument("--region", required=True)
+    rb.add_argument("--canary", action="store_true",
+                    help="mark as canary (spec D2 soak cohort)")
+    rb.add_argument("--agent-source-url", required=True)
+    rb.add_argument("--agent-source-sha256", required=True)
+    rb.add_argument("--descriptor-refresh-url", required=True)
+    rb.add_argument("--cloud-init-out", default=None,
+                    help="cloud-init bundle path (default /tmp/ru-cloud-init-<box>.yaml)")
+    rb.add_argument("--public-ip", default=None,
+                    help="skip the interactive prompt; supply IP up front")
+    rb.add_argument("--box-id", default=None,
+                    help="resume an in-flight bring-up with an existing box_id")
+    rb.add_argument("--reach-timeout", type=int, default=600,
+                    help="seconds to wait for :443 TLS handshake")
+    rb.add_argument("--config", default=None,
+                    help="optional config file with [ru] defaults")
+    rb.add_argument("--non-interactive", action="store_true")
+    rb.add_argument("--verbose", action="store_true")
+    rb.add_argument("--quiet", action="store_true")
+    rb.add_argument("--dry-run", action="store_true")
+
+    # ru-image-cycle
+    rc = sub.add_parser("ru-image-cycle",
+                        help="release wizard: image-build → canaries → soak → promote")
+    rc.add_argument("--release", required=True,
+                    help="upstream mtg release tag, e.g. v2.1.7")
+    rc.add_argument("--profile-json", default=None,
+                    help="path to known-good profile JSON (required for phase 1)")
+    rc.add_argument("--canaries", type=int, default=2,
+                    help="number of canary boxes to provision")
+    rc.add_argument("--canary-target", action="append", default=None,
+                    metavar="provider=X,region=Y",
+                    help="one cohort target; repeat for N canaries")
+    rc.add_argument("--cohort", default=None,
+                    help="cohort file (one 'provider=X,region=Y' per line)")
+    rc.add_argument("--agent-source-url", required=True)
+    rc.add_argument("--agent-source-sha256", required=True)
+    rc.add_argument("--descriptor-refresh-url", required=True)
+    rc.add_argument("--soak-poll", type=int, default=60,
+                    help="seconds between image-promote-status polls")
+    rc.add_argument("--soak-timeout", type=int, default=0,
+                    help="0 = unlimited (operator-paced per O-D5)")
+    rc.add_argument("--evidence", default=None,
+                    help="override the auto-composed image-promote evidence")
+    rc.add_argument("--resume", action="store_true",
+                    help="resume from the saved state file for this release")
+    rc.add_argument("--state-dir", default=None,
+                    help="resume state dir (default /var/lib/mthydra/ru-cycle)")
+    rc.add_argument("--config", default=None)
+    rc.add_argument("--non-interactive", action="store_true")
+    rc.add_argument("--verbose", action="store_true")
+    rc.add_argument("--quiet", action="store_true")
+    rc.add_argument("--dry-run", action="store_true")
+    # `promote_yes` is set only by tests via Namespace; no CLI flag (O-D7).
+
     return p
 
 
@@ -1025,6 +1084,16 @@ def _dispatch_install(args) -> int:
 def _dispatch_install_standby(args) -> int:
     from . import install
     return install.cmd_install_standby(args)
+
+
+def _dispatch_ru_bringup(args) -> int:
+    from . import ru_bringup
+    return ru_bringup.cmd_ru_bringup(args)
+
+
+def _dispatch_ru_image_cycle(args) -> int:
+    from . import ru_bringup
+    return ru_bringup.cmd_ru_image_cycle(args)
 
 
 _DISPATCH: dict[str, object] = {
@@ -1041,6 +1110,8 @@ _DISPATCH: dict[str, object] = {
     "ru-provision": cmd_ru_provision,
     "install": _dispatch_install,
     "install-standby": _dispatch_install_standby,
+    "ru-bringup": _dispatch_ru_bringup,
+    "ru-image-cycle": _dispatch_ru_image_cycle,
 }
 
 

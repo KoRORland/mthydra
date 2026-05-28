@@ -750,3 +750,42 @@ def test_main_routes_install_to_cmd_install(monkeypatch):
     monkeypatch.setattr(install, "cmd_install", lambda args: called.setdefault("v", 0) or 0)
     rc = m.main(["install", "--config", "x.ini"])
     assert rc == 0 and "v" in called
+
+
+def test_ru_bringup_subcommands_parse():
+    from mthydra.ops import main as m
+    p = m.build_parser()
+    a = p.parse_args([
+        "ru-bringup", "--provider", "selectel", "--region", "ru-msk-1",
+        "--canary", "--agent-source-url", "u",
+        "--agent-source-sha256", "s", "--descriptor-refresh-url", "d",
+    ])
+    assert a.cmd == "ru-bringup" and a.provider == "selectel" and a.canary is True
+
+    b = p.parse_args([
+        "ru-image-cycle", "--release", "v1.0.0",
+        "--profile-json", "/tmp/p.json", "--canaries", "2",
+        "--canary-target", "provider=selectel,region=ru-msk-1",
+        "--canary-target", "provider=firstvds,region=ru-spb-1",
+        "--agent-source-url", "u", "--agent-source-sha256", "s",
+        "--descriptor-refresh-url", "d",
+    ])
+    assert b.cmd == "ru-image-cycle" and b.canaries == 2
+    assert b.canary_target == [
+        "provider=selectel,region=ru-msk-1",
+        "provider=firstvds,region=ru-spb-1",
+    ]
+
+
+def test_main_routes_ru_bringup_to_cmd_ru_bringup(monkeypatch):
+    from mthydra.ops import main as m
+    from mthydra.ops import ru_bringup
+    called = {}
+    monkeypatch.setattr(ru_bringup, "cmd_ru_bringup",
+                        lambda args: called.setdefault("v", 0) or 0)
+    rc = m.main([
+        "ru-bringup", "--provider", "selectel", "--region", "ru-msk-1",
+        "--agent-source-url", "u", "--agent-source-sha256", "s",
+        "--descriptor-refresh-url", "d",
+    ])
+    assert rc == 0 and "v" in called
