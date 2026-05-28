@@ -1,4 +1,4 @@
-.PHONY: test test-monitor cov lint smoke smoke-descriptor smoke-install help
+.PHONY: test test-monitor cov lint smoke smoke-descriptor smoke-install smoke-ru-cycle help
 
 help:
 	@echo "Targets:"
@@ -49,6 +49,30 @@ smoke-install:
 	@echo "6. Confirm: heartbeat email + Telegram crit test both arrived."
 	@echo "7. systemctl status mthydra-controller mthydra-daily-check.timer"
 	@echo "8. Repeat with --standby on the warm-substitute host."
+
+smoke-ru-cycle:
+	@echo "--- mthydra ru-image-cycle smoke procedure (spec O) ---"
+	@echo "1. On the EU controller host:"
+	@echo "     mthydra-controller upstream-check          # confirm a release is available"
+	@echo "     mthydra-ops image-build-template > /tmp/profile-v2.1.7.json"
+	@echo "     # edit profile JSON per runbook §3.2"
+	@echo "2. Have 2 (provider, region) targets ready for canaries."
+	@echo "3. Run the cycle:"
+	@echo "     mthydra-ops ru-image-cycle \\"
+	@echo "         --release v2.1.7 --profile-json /tmp/profile-v2.1.7.json \\"
+	@echo "         --canaries 2 \\"
+	@echo "         --canary-target provider=selectel,region=ru-msk-1 \\"
+	@echo "         --canary-target provider=firstvds,region=ru-spb-1 \\"
+	@echo "         --agent-source-url <b2 url> --agent-source-sha256 <sha> \\"
+	@echo "         --descriptor-refresh-url <b2 url>"
+	@echo "4. Paste each cloud-init bundle in the corresponding provider console,"
+	@echo "   feed each public IP back to the prompt as the VMs boot."
+	@echo "5. Submit probe-record from each registered vantage during the soak."
+	@echo "6. Confirm the promote prompt → iv-v2.1.7 in image-list."
+	@echo "7. For a single replacement box (no image cycle):"
+	@echo "     mthydra-ops ru-bringup --provider selectel --region ru-msk-1 \\"
+	@echo "         --agent-source-url <b2> --agent-source-sha256 <sha> \\"
+	@echo "         --descriptor-refresh-url <b2>"
 
 smoke:
 	@echo "--- mthydra smoke test procedure (spec A §13.4) ---"
