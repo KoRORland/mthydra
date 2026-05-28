@@ -16,7 +16,7 @@
 - `SECRET_FIELDS = {"b2_application_key", "obs_tg_bot_token", "obs_smtp_pass", "dist_tg_bot_token", "dist_smtp_pass"}`.
 - `Phase(name: str, is_satisfied: Callable[[Ctx], bool], run: Callable[[Ctx], None])`.
 - `Ctx` attrs: `config, log, dry_run, quiet`; methods `say(msg)`, `err(msg)`, `run_controller(*args, env=None, capture=False)`.
-- Probe names: `host_prepared, controller_installed, db_initialized, authority_is_real, controller_toml_present, age_recipient_file_present, service_active, descriptor_signed, timer_enabled(name), standby_sees_active`.
+- Probe names: `host_prepared, controller_installed, db_initialized, authority_is_real, controller_toml_present, age_recipient_file_present, service_active, descriptor_signed, timer_enabled(name)`. (No `standby-heartbeat-check` CLI exists in this build — standby readiness uses `startup-check`; see Task 9.)
 - Refactored cores in `main.py`: `setup_host_core(run_step, *, dry_run)`, `bootstrap_core(run, say, *, db_path, config_path, age_recipient, b2_application_key, hostname, role, **toml_fields)`, `preflight_core(run, say, *, db_path, config_path)`.
 
 ---
@@ -862,19 +862,6 @@ def descriptor_signed(ctx: Ctx) -> bool:
 
 def timer_enabled(ctx: Ctx, name: str) -> bool:
     return _systemctl_ok("is-enabled", f"{name}.timer")
-
-
-def standby_sees_active(ctx: Ctx) -> bool:
-    try:
-        res = ctx.run_controller(
-            "standby-heartbeat-check", "--db-path", ctx.config.db_path,
-            "--json", capture=True)
-    except subprocess.CalledProcessError:
-        return False
-    try:
-        return bool(json.loads(res.stdout).get("last_heartbeat_at"))
-    except (ValueError, json.JSONDecodeError):
-        return False
 ```
 
 Add `import json` at the top of the module if not already present.
@@ -1116,21 +1103,9 @@ def install_controller_service(ctx: Ctx) -> None:
     (_UNIT_DIR / "mthydra-controller.service").write_text(body)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", "mthydra-controller"], check=True)
-
-
-def install_standby_heartbeat_timer(ctx: Ctx) -> None:
-    write_and_enable_unit(
-        ctx, "mthydra-standby-heartbeat.service",
-        _SERVICE_TMPL.format(desc="standby heartbeat check",
-                             venv=ctx.config.venv_dir,
-                             subcommand="alert-summary"),
-        enable=False)
-    write_and_enable_unit(
-        ctx, "mthydra-standby-heartbeat.timer",
-        _TIMER_TMPL.format(desc="standby heartbeat check",
-                           oncalendar="*-*-* *:00/15:00"),
-        enable=True)
 ```
+
+(A passive standby installs **no** maintenance timers — it emits nothing and has no standby-specific check command to schedule; systemd auto-restarts the `serve` loop. A *promoted* standby becomes active and gets the active `install_maintenance_timers` above. So no `install_standby_heartbeat_timer` helper is needed.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1333,16 +1308,16 @@ def test_passive_standby_phase_order(tmp_path):
     names = [p.name for p in install.build_standby_phases(ctx, promote=False, case="A")]
     assert names == [
         "preconditions", "setup-host", "verify-install", "bootstrap",
-        "standby-heartbeat-check", "service", "standby-heartbeat-timer", "summary",
+        "standby-readiness", "service", "summary",
     ]
 
 
-def test_promote_inserts_promote_phase_and_swaps_timers(tmp_path):
+def test_promote_inserts_promote_phase_and_appends_active_timers(tmp_path):
     ctx = _standby_ctx(tmp_path, promote=True)
     names = [p.name for p in install.build_standby_phases(ctx, promote=True, case="B")]
     assert "promote" in names
-    assert "maintenance-timers" in names         # active timers, not standby
-    assert "standby-heartbeat-timer" not in names
+    assert "maintenance-timers" in names         # active timers after promotion
+    assert names[-1] == "summary"
 
 
 def test_promote_case_b_runs_rotation(tmp_path, monkeypatch):
@@ -1368,11 +1343,14 @@ Expected: FAIL — `build_standby_phases`/`_phase_promote` undefined.
 
 ```python
 # add to src/mthydra/ops/install.py
-def _phase_standby_heartbeat_check(ctx: Ctx) -> None:
-    if not standby_sees_active(ctx) and not ctx.dry_run:
-        raise RuntimeError(
-            "standby cannot see the active's heartbeat — check [backup] (§1.11)")
-    ctx.say("standby sees a recent active heartbeat")
+def _phase_standby_readiness(ctx: Ctx) -> None:
+    # No `standby-heartbeat-check` CLI exists in this build; startup-check is the
+    # available health gate. serve's own B2 polling (spec F-D5) tracks the active.
+    ctx.run_controller("startup-check", "--db-path", ctx.config.db_path)
+    ctx.say(
+        "standby startup-check passed. The serve loop polls the active's B2 "
+        "heartbeat automatically (spec F-D5); confirm liveness from the active "
+        "via `mthydra-controller eu-node-list` after eu-node-add.")
 
 
 def _phase_promote(ctx: Ctx) -> None:
@@ -1402,8 +1380,7 @@ def build_standby_phases(ctx: Ctx, *, promote: bool, case: str) -> list[Phase]:
               lambda c: db_initialized(c) and authority_is_real(c)
               and controller_toml_present(c) and age_recipient_file_present(c),
               _phase_bootstrap),
-        Phase("standby-heartbeat-check", lambda c: False,
-              _phase_standby_heartbeat_check),
+        Phase("standby-readiness", lambda c: False, _phase_standby_readiness),
         Phase("service", service_active, install_controller_service),
     ]
     if promote:
@@ -1414,10 +1391,8 @@ def build_standby_phases(ctx: Ctx, *, promote: bool, case: str) -> list[Phase]:
                             ("mthydra-daily-check", "mthydra-weekly-scan",
                              "mthydra-monthly-compact")),
               install_maintenance_timers))
-    else:
-        phases.append(Phase("standby-heartbeat-timer",
-              lambda c: timer_enabled(c, "mthydra-standby-heartbeat"),
-              install_standby_heartbeat_timer))
+    # A passive standby installs no maintenance timers (emits nothing; systemd
+    # auto-restarts serve; no standby check command to schedule).
     phases.append(Phase("summary", lambda c: False, _phase_summary))
     return phases
 ```
@@ -1789,5 +1764,5 @@ git add -A && git commit -m "test(install): coverage top-ups for installer"
 ## Self-review notes (for the implementer)
 
 - **Spec coverage:** N-D1 → Tasks 11 + 6/8/9; N-D2 → summary text (Task 8/9) + runbook callout (Task 12); N-D3 → Tasks 8/9 + parser (Task 10); N-D4 → Tasks 4/5 + every phase's `is_satisfied`; N-D5 → Task 9 `_phase_promote`; N-D6 → Tasks 3/9; N-D7 → Task 8 `_phase_preflight` gate; N-D8 → Tasks 1/6; N-D9 → Task 7; N-D10 → Tasks 4/8.
-- **Watch item:** Task 6 changes `bootstrap_core`'s init step to add `--role`. Confirm `mthydra-controller init` accepts `--role` (spec F establishes role at init; the runbook §1.11 uses `--role standby`). If a given build lacks it, drop the flag and seed role via the documented standby path — verify against `mthydra-controller init --help` before implementing.
-- **Watch item:** Task 7 `alert-summary` is reused as the standby heartbeat probe command; if a dedicated standby health subcommand is preferred, swap the `subcommand=` string — no structural change.
+- **Resolved (verified against the installed binary 2026-05-28):** `mthydra-controller init --role {active,standby}` exists — Task 6 keeps the `--role` flag. `promote-active`, `authority-rotate`, `signing-key-rotate`, `startup-check`, `descriptor-sign-now`, `descriptor-show`, `obs-alert-test`, `obs-heartbeat-now`, `authority-migrate-placeholder` all exist.
+- **Resolved:** there is **no** `standby-heartbeat-check` subcommand in this build (the runbook §10.2 reference predates it). The standby readiness phase therefore uses `startup-check` (Task 9 `_phase_standby_readiness`), and a passive standby installs no maintenance timer — serve's own B2 polling (spec F-D5) tracks the active. Spec §4.2 updated to match.
