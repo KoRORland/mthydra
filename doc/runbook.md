@@ -35,6 +35,12 @@
 
 ## §1 — Initial deployment
 
+> **One-shot:** `scripts/install.sh --config install.ini` (or `--standby`) runs
+> §1.1–§1.10 end-to-end, idempotently. See spec
+> `doc/specs/2026-05-28-N-eu-host-installer.md`. The long-form steps below remain
+> authoritative for non-default setups. RU image build / RU-node provisioning
+> are separate automation, not part of the installer.
+
 This procedure brings an empty machine to a running active controller. Follow steps strictly in order. **Do not skip the verification at the end of each section.**
 
 ### §1.1 — Provision the EU active host

@@ -1,4 +1,4 @@
-.PHONY: test test-monitor cov lint smoke smoke-descriptor help
+.PHONY: test test-monitor cov lint smoke smoke-descriptor smoke-install help
 
 help:
 	@echo "Targets:"
@@ -34,6 +34,22 @@ smoke-descriptor:
 
 # Smoke test: manual procedure only — cannot be automated without a real B2 bucket
 # and the operator's age private key.  Run before every release.
+smoke-install:
+	@echo "--- mthydra install smoke procedure (spec N) ---"
+	@echo "1. Provision a naked Ubuntu 24.04 root shell on an EU VPS you trust."
+	@echo "2. Generate the operator age key ON YOUR LAPTOP (NOT on the host):"
+	@echo "     age-keygen -o ~/.config/mthydra/operator.age"
+	@echo "     grep '# public key:' ~/.config/mthydra/operator.age   # → age1..."
+	@echo "3. Copy packaging/etc/mthydra/install.ini.example → install.ini and edit."
+	@echo "4. scp scripts/install.sh root@<eu-host>:/root/ ; scp install.ini ..."
+	@echo "5. On the EU host as root:"
+	@echo "     export B2_APPLICATION_KEY=<the b2 secret>"
+	@echo "     sh /root/install.sh --git-url <repo> --git-ref <tag> \\"
+	@echo "         --config /root/install.ini --verbose"
+	@echo "6. Confirm: heartbeat email + Telegram crit test both arrived."
+	@echo "7. systemctl status mthydra-controller mthydra-daily-check.timer"
+	@echo "8. Repeat with --standby on the warm-substitute host."
+
 smoke:
 	@echo "--- mthydra smoke test procedure (spec A §13.4) ---"
 	@echo "1. Ensure /etc/mthydra/controller.toml points at a test B2 bucket."

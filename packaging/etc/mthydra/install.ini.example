@@ -1,0 +1,49 @@
+# install.ini — input to `mthydra-ops install` (first EU active node).
+# Keep this file 0600 root-owned on the target host (it holds secrets).
+# The B2 application key is read from $B2_APPLICATION_KEY (env wins over ini).
+
+[install]
+git_url      = https://github.com/<you>/mthydra.git
+git_ref      = v1.0.0
+src_dir      = /opt/mthydra/src
+venv_dir     = /opt/mthydra/venv
+scheduler    = systemd
+assume_sinks = false              ; true = skip the §1.8 interactive sink gate
+
+[node]
+hostname = eu1.example.com
+
+[age]
+# PUBLIC age recipient only — never an `AGE-SECRET-KEY-...` private key.
+# Generate on your laptop: `age-keygen` and copy the `# public key:` line.
+recipient = age1qqp00000000000000000000000000000000000000000000000000q
+
+[backup]
+endpoint = https://s3.us-west-002.backblazeb2.com
+bucket   = mthydra-prod-state
+key_id   = 001PLACEHOLDER
+# Leave application_key BLANK and export B2_APPLICATION_KEY in the environment.
+# This keeps the secret off argv (`ps`) and off the ini in the typical workflow.
+application_key =
+
+[observability.telegram]
+bot_token = 111111111:AAAplaceholder0123456789012345678901234
+chat_id   = 12345678
+
+[observability.email]
+smtp_host = smtp.example.com
+smtp_port = 587
+from_addr = alerts@example.com
+to_addr   = operator@example.com
+username  = alerts@example.com
+password  = REPLACE_ME
+
+[distribution.telegram]
+bot_token = 222222222:BBBplaceholder0123456789012345678901234
+
+[distribution.email]
+smtp_host = smtp.example.com
+smtp_port = 587
+from_addr = dist@example.com
+username  = dist@example.com
+password  = REPLACE_ME

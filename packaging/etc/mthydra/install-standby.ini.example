@@ -1,0 +1,22 @@
+# install-standby.ini — input to `mthydra-ops install-standby` (warm substitute).
+# Passive standby emits NO alerts; it needs no [observability.*] or
+# [distribution.*] sections. If you pass `--promote`, the standby becomes
+# active and DOES need the sink sections — copy them from install.ini.example
+# in that case (the loader will refuse to proceed otherwise — N-D6).
+
+[install]
+git_url  = https://github.com/<you>/mthydra.git
+git_ref  = v1.0.0
+
+[node]
+hostname = standby.example.com
+
+[age]
+recipient = age1qqp00000000000000000000000000000000000000000000000000q
+
+[backup]
+endpoint = https://s3.us-west-002.backblazeb2.com
+bucket   = mthydra-prod-state
+key_id   = 001PLACEHOLDER
+# Set B2_APPLICATION_KEY in the environment.
+application_key =

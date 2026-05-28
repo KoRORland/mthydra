@@ -370,3 +370,22 @@ def test_promote_case_b_runs_rotation(tmp_path, monkeypatch):
     assert "promote-active" in flat
     assert "authority-rotate" in flat
     assert "signing-key-rotate" in flat
+
+
+from pathlib import Path as _P
+
+
+def test_active_example_ini_loads():
+    ex = _P(__file__).resolve().parents[3] / "packaging/etc/mthydra/install.ini.example"
+    cfg = install.load_config(ex, role="active", promote=False,
+                              interactive=False,
+                              env={"B2_APPLICATION_KEY": "x"})
+    assert cfg.hostname  # non-empty placeholder present
+
+
+def test_standby_example_loads_passive():
+    ex = _P(__file__).resolve().parents[3] / "packaging/etc/mthydra/install-standby.ini.example"
+    cfg = install.load_config(ex, role="standby", promote=False,
+                              interactive=False,
+                              env={"B2_APPLICATION_KEY": "x"})
+    assert cfg.obs_tg_bot_token == ""  # sinks omitted for passive standby
