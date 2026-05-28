@@ -5,6 +5,7 @@ See doc/specs/2026-05-28-N-eu-host-installer.md.
 from __future__ import annotations
 
 import configparser
+import getpass
 import os
 import re
 from dataclasses import dataclass
@@ -164,13 +165,49 @@ def load_config(ini_path, *, role, promote, interactive=True, env=None) -> Confi
             raw[fieldname] = _DEFAULTS[fieldname]
         else:
             raw[fieldname] = ""
-
-    # env wins for the B2 application key (kept off ini/argv when possible).
     if env.get("B2_APPLICATION_KEY"):
         raw["b2_application_key"] = env["B2_APPLICATION_KEY"]
 
-    # (prompting + validation added in Task 3 — for now, fill blanks as-is)
+    required = _required_fields(role, promote)
+    missing = []
+    for fieldname in sorted(required):
+        if raw.get(fieldname):
+            continue
+        if interactive:
+            raw[fieldname] = _prompt(fieldname)
+        if not raw.get(fieldname):
+            missing.append(fieldname)
+    if missing:
+        raise ConfigError(f"required fields missing: {', '.join(missing)}")
+
+    _validate(raw)
     return _build_config(raw, role=role, promote=promote)
+
+
+def _prompt(fieldname: str) -> str:
+    label = f"  {fieldname}: "
+    if fieldname in SECRET_FIELDS:
+        return getpass.getpass(label).strip()
+    return input(label).strip()
+
+
+def _validate(raw: dict[str, str]) -> None:
+    rec = raw.get("age_recipient", "")
+    if rec.startswith("AGE-SECRET-KEY-"):
+        raise ConfigError(
+            "age.recipient is an age secret key — it must NEVER be on a host "
+            "(runbook §1.2). Supply the PUBLIC recipient (age1...)."
+        )
+    if rec and not rec.startswith("age1"):
+        raise ConfigError("age.recipient must start with 'age1'")
+    for f in ("obs_smtp_from", "obs_smtp_to", "dist_smtp_from"):
+        v = raw.get(f, "")
+        if v and "@" not in v:
+            raise ConfigError(f"{f} does not look like an email address: {v!r}")
+    for f in ("obs_smtp_port", "dist_smtp_port"):
+        v = raw.get(f, "")
+        if v and not v.isdigit():
+            raise ConfigError(f"{f} must be an integer: {v!r}")
 
 
 def _build_config(raw: dict[str, str], *, role: str, promote: bool) -> Config:

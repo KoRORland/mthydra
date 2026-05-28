@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import textwrap
 
+import pytest
+
 from mthydra.ops import install
 
 
@@ -101,3 +103,82 @@ def test_secret_values_returns_only_nonempty_secrets(tmp_path):
     assert sv["b2_application_key"] == "B2SECRET"
     assert sv["obs_smtp_pass"] == "OBSPASS"
     assert set(sv) == install.SECRET_FIELDS
+
+
+def test_missing_required_field_errors_when_non_interactive(tmp_path):
+    ini = _write_ini(tmp_path, _FULL_INI.replace("hostname = eu1.example.com", "hostname ="))
+    with pytest.raises(install.ConfigError, match="hostname"):
+        install.load_config(ini, role="active", promote=False,
+                            interactive=False, env={})
+
+
+def test_interactive_prompt_fills_missing_field(tmp_path, monkeypatch):
+    ini = _write_ini(tmp_path, _FULL_INI.replace("hostname = eu1.example.com", "hostname ="))
+    monkeypatch.setattr("builtins.input", lambda prompt="": "typed.example.com")
+    cfg = install.load_config(ini, role="active", promote=False,
+                              interactive=True, env={})
+    assert cfg.hostname == "typed.example.com"
+
+
+def test_secret_prompt_uses_getpass(tmp_path, monkeypatch):
+    ini = _write_ini(tmp_path, _FULL_INI.replace("application_key = B2SECRET", "application_key ="))
+    called = {}
+    def fake_getpass(prompt=""):
+        called["yes"] = True
+        return "TYPED_SECRET"
+    monkeypatch.setattr(install.getpass, "getpass", fake_getpass)
+    cfg = install.load_config(ini, role="active", promote=False,
+                              interactive=True, env={})
+    assert cfg.b2_application_key == "TYPED_SECRET"
+    assert called.get("yes") is True
+
+
+def test_refuses_age_secret_key(tmp_path):
+    bad = _FULL_INI.replace(
+        "recipient = age1qqp0000000000000000000000000000000000000000000000000q",
+        "recipient = AGE-SECRET-KEY-1QQPQYU8H4ENHEER9CA2W7XXXXXXXXXXXXXXXXXXXXXXXXXSPLAB",
+    )
+    ini = _write_ini(tmp_path, bad)
+    with pytest.raises(install.ConfigError, match="secret key"):
+        install.load_config(ini, role="active", promote=False,
+                            interactive=False, env={})
+
+
+def test_passive_standby_allows_missing_sinks(tmp_path):
+    minimal = """\
+        [install]
+        git_url = https://example/mthydra.git
+        [node]
+        hostname = standby.example.com
+        [age]
+        recipient = age1qqp0000000000000000000000000000000000000000000000000q
+        [backup]
+        endpoint = https://s3.example.com
+        bucket = mthydra-prod
+        key_id = 0012abc
+        application_key = B2SECRET
+        """
+    ini = _write_ini(tmp_path, minimal)
+    cfg = install.load_config(ini, role="standby", promote=False,
+                              interactive=False, env={})
+    assert cfg.obs_tg_bot_token == ""  # not required, not prompted
+
+
+def test_promote_standby_requires_sinks(tmp_path):
+    minimal = """\
+        [install]
+        git_url = https://example/mthydra.git
+        [node]
+        hostname = standby.example.com
+        [age]
+        recipient = age1qqp0000000000000000000000000000000000000000000000000q
+        [backup]
+        endpoint = https://s3.example.com
+        bucket = mthydra-prod
+        key_id = 0012abc
+        application_key = B2SECRET
+        """
+    ini = _write_ini(tmp_path, minimal)
+    with pytest.raises(install.ConfigError, match="obs_tg_bot_token"):
+        install.load_config(ini, role="standby", promote=True,
+                            interactive=False, env={})
