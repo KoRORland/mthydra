@@ -171,3 +171,34 @@ def box_info(box_id: str, *, db_path: str = _DEFAULT_DB) -> dict | None:
         if row.get("box_id") == box_id:
             return row
     return None
+
+
+@dataclass(frozen=True)
+class CanaryTarget:
+    provider: str
+    region: str
+
+
+def parse_cohort(*, flags: list[str] | None, file_path,
+                 expected_count: int) -> list[CanaryTarget]:
+    """Accept repeated `provider=X,region=Y` flags OR a file with one such
+    line per target. Validates count matches --canaries N.
+
+    Spec O-D9 mentions YAML; we use a stdlib-only "key=value,key=value\\n"
+    line format to avoid pulling in PyYAML. The file format is line-oriented
+    and human-editable; a future task can add real YAML if needed."""
+    raw: list[str] = []
+    if flags:
+        raw.extend(flags)
+    if file_path is not None:
+        raw.extend(line.strip() for line in Path(file_path).read_text().splitlines()
+                   if line.strip() and not line.lstrip().startswith("#"))
+    if len(raw) != expected_count:
+        raise ValueError(
+            f"cohort size {len(raw)} != canaries={expected_count}")
+    targets = []
+    for spec in raw:
+        kv = dict(part.split("=", 1) for part in spec.split(","))
+        targets.append(CanaryTarget(provider=kv["provider"].strip(),
+                                    region=kv["region"].strip()))
+    return targets

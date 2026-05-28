@@ -171,3 +171,32 @@ def test_cycle_state_round_trip(tmp_path):
 
 def test_cycle_state_load_missing_returns_none(tmp_path):
     assert ru_bringup.CycleState.load(tmp_path / "absent.json") is None
+
+
+def test_parse_cohort_from_flags():
+    targets = ru_bringup.parse_cohort(
+        flags=["provider=selectel,region=ru-msk-1",
+               "provider=timeweb,region=ru-spb-1"],
+        file_path=None, expected_count=2,
+    )
+    assert [(t.provider, t.region) for t in targets] == [
+        ("selectel", "ru-msk-1"), ("timeweb", "ru-spb-1"),
+    ]
+
+
+def test_parse_cohort_count_mismatch_raises():
+    with pytest.raises(ValueError, match="canaries=3"):
+        ru_bringup.parse_cohort(
+            flags=["provider=selectel,region=ru-msk-1"],
+            file_path=None, expected_count=3,
+        )
+
+
+def test_parse_cohort_from_yaml_like_file(tmp_path):
+    # File format: simple "key=value" lines per target, one target per line,
+    # to avoid a YAML dep. (Spec O-D9: YAML alternative, but stdlib is enough.)
+    f = tmp_path / "cohort.txt"
+    f.write_text("provider=selectel,region=ru-msk-1\n"
+                 "provider=firstvds,region=ru-spb-1\n")
+    targets = ru_bringup.parse_cohort(flags=None, file_path=f, expected_count=2)
+    assert len(targets) == 2 and targets[0].provider == "selectel"
