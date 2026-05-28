@@ -11,6 +11,7 @@ import socket
 import ssl
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 # Import controller helpers from main. main does NOT import ru_bringup at top
@@ -91,6 +92,43 @@ def mark_live(box_id: str, public_ip: str,
     """Flip a provisioning box to live."""
     _run_controller("ru-box-mark-live", box_id,
                     "--public-ip", public_ip, "--db-path", db_path)
+
+
+@dataclass(frozen=True)
+class SoakResult:
+    passed: bool
+    reasons: list[str]
+    duration_s: int
+
+
+def wait_for_soak(image_version: str, *, poll_interval_s: int,
+                  on_progress: Callable[[list[str]], None],
+                  state_writer: Callable[[], None],
+                  db_path: str = _DEFAULT_DB,
+                  config: str = _DEFAULT_CONFIG) -> SoakResult:
+    """Poll image-promote-status until passed=True. KeyboardInterrupt is
+    propagated (caller catches and prints a resume hint); state_writer is
+    called each tick so a Ctrl-C lands the latest progress on disk.
+
+    image-promote-status takes image_version as a positional + --db-path +
+    --config + --json."""
+    started = time.monotonic()
+    while True:
+        res = _run_controller(
+            "image-promote-status", image_version,
+            "--db-path", db_path, "--config", config, "--json",
+            capture=True)
+        try:
+            payload = json.loads(res.stdout or "{}")
+        except json.JSONDecodeError:
+            payload = {"passed": False, "reasons": ["malformed status JSON"]}
+        reasons = list(payload.get("reasons") or [])
+        on_progress(reasons)
+        state_writer()
+        if payload.get("passed"):
+            return SoakResult(True, reasons,
+                              int(time.monotonic() - started))
+        time.sleep(poll_interval_s)
 
 
 def box_info(box_id: str, *, db_path: str = _DEFAULT_DB) -> dict | None:

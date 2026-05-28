@@ -4,6 +4,8 @@ import json
 import ssl
 import subprocess
 
+import pytest
+
 from mthydra.ops import ru_bringup
 
 
@@ -109,3 +111,44 @@ def test_box_info_returns_none_when_missing(monkeypatch):
     fake_run, _ = _fake_run_factory(stdout_map={"ru-box-list": "[]"})
     monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
     assert ru_bringup.box_info("b-missing") is None
+
+
+def test_wait_for_soak_exits_when_passed(monkeypatch):
+    payloads = [
+        json.dumps({"passed": False, "reasons": ["canary B below threshold"]}),
+        json.dumps({"passed": True, "reasons": []}),
+    ]
+    def fake_run(*args, check=True, capture=False, env=None):
+        return subprocess.CompletedProcess(args, 0, payloads.pop(0), "")
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup.time, "sleep", lambda s: None)
+
+    progress, writes = [], []
+    result = ru_bringup.wait_for_soak(
+        "iv-v1", poll_interval_s=0,
+        on_progress=lambda reasons: progress.append(list(reasons)),
+        state_writer=lambda: writes.append(1),
+    )
+    assert result.passed is True
+    assert result.duration_s >= 0
+    assert progress[0] == ["canary B below threshold"]
+    assert len(writes) >= 1  # state_writer called at least once during the loop
+
+
+def test_wait_for_soak_propagates_keyboard_interrupt(monkeypatch):
+    def fake_run(*args, **kw):
+        return subprocess.CompletedProcess(args, 0,
+            json.dumps({"passed": False, "reasons": ["pending"]}), "")
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    def kc(_s):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ru_bringup.time, "sleep", kc)
+
+    writes = []
+    with pytest.raises(KeyboardInterrupt):
+        ru_bringup.wait_for_soak(
+            "iv-v1", poll_interval_s=0,
+            on_progress=lambda r: None,
+            state_writer=lambda: writes.append(1),
+        )
+    assert writes  # state was saved before the interrupt propagated
