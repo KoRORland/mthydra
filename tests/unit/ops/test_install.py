@@ -182,3 +182,46 @@ def test_promote_standby_requires_sinks(tmp_path):
     with pytest.raises(install.ConfigError, match="obs_tg_bot_token"):
         install.load_config(ini, role="standby", promote=True,
                             interactive=False, env={})
+
+
+def _ctx(tmp_path, dry_run=False):
+    ini = _write_ini(tmp_path, _FULL_INI)
+    cfg = install.load_config(ini, role="active", promote=False,
+                              interactive=False, env={})
+    log = install.RedactingLog(tmp_path / "i.log", cfg.secret_values())
+    return install.Ctx(config=cfg, log=log, dry_run=dry_run, quiet=True)
+
+
+def test_runner_skips_satisfied_phases(tmp_path):
+    ctx = _ctx(tmp_path)
+    ran = []
+    phases = [
+        install.Phase("a", lambda c: True, lambda c: ran.append("a")),
+        install.Phase("b", lambda c: False, lambda c: ran.append("b")),
+    ]
+    rc = install.Runner(phases, ctx).execute()
+    assert rc == 0
+    assert ran == ["b"]  # 'a' skipped
+
+
+def test_runner_dry_run_executes_nothing(tmp_path):
+    ctx = _ctx(tmp_path, dry_run=True)
+    ran = []
+    phases = [install.Phase("b", lambda c: False, lambda c: ran.append("b"))]
+    rc = install.Runner(phases, ctx).execute()
+    assert rc == 0
+    assert ran == []
+
+
+def test_runner_aborts_on_phase_exception(tmp_path):
+    ctx = _ctx(tmp_path)
+    ran = []
+    def boom(c):
+        raise RuntimeError("kaboom")
+    phases = [
+        install.Phase("a", lambda c: False, boom),
+        install.Phase("b", lambda c: False, lambda c: ran.append("b")),
+    ]
+    rc = install.Runner(phases, ctx).execute()
+    assert rc == 1
+    assert ran == []  # pipeline stopped before 'b'

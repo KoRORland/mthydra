@@ -8,6 +8,9 @@ import configparser
 import getpass
 import os
 import re
+import subprocess
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 
 _AGE_SECRET_RE = re.compile(r"AGE-SECRET-KEY-1[0-9A-Z]+")
@@ -229,3 +232,69 @@ def _build_config(raw: dict[str, str], *, role: str, promote: bool) -> Config:
         dist_smtp_from=raw["dist_smtp_from"], dist_smtp_user=raw["dist_smtp_user"],
         dist_smtp_pass=raw["dist_smtp_pass"],
     )
+
+
+_CONTROLLER_BIN = os.environ.get("MTHYDRA_CONTROLLER", "mthydra-controller")
+
+
+@dataclass
+class Ctx:
+    config: Config
+    log: RedactingLog
+    dry_run: bool = False
+    quiet: bool = False
+
+    def say(self, msg: str) -> None:
+        line = f"[mthydra-install] {msg}"
+        self.log.write(line + "\n")
+        if not self.quiet:
+            print(line, flush=True)
+
+    def err(self, msg: str) -> None:
+        line = f"[mthydra-install] ERROR: {msg}"
+        self.log.write(line + "\n")
+        print(line, file=sys.stderr, flush=True)
+
+    def run_controller(self, *args, env=None, capture=False):
+        cmd = [_CONTROLLER_BIN, *args]
+        self.log.write("$ " + " ".join(cmd) + "\n")
+        if self.dry_run:
+            self.say("DRY-RUN, would run: " + " ".join(cmd))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        res = subprocess.run(
+            cmd, check=True, text=True, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        if res.stdout:
+            self.log.write(res.stdout)
+        return res
+
+
+@dataclass
+class Phase:
+    name: str
+    is_satisfied: Callable[[Ctx], bool]
+    run: Callable[[Ctx], None]
+
+
+class Runner:
+    def __init__(self, phases: list[Phase], ctx: Ctx):
+        self.phases = phases
+        self.ctx = ctx
+
+    def execute(self) -> int:
+        n = len(self.phases)
+        for i, ph in enumerate(self.phases, 1):
+            self.ctx.say(f"[{i}/{n}] {ph.name} …")
+            if ph.is_satisfied(self.ctx):
+                self.ctx.say(f"[{i}/{n}] {ph.name}: already satisfied → skip")
+                continue
+            if self.ctx.dry_run:
+                self.ctx.say(f"[{i}/{n}] {ph.name}: WOULD run")
+                continue
+            try:
+                ph.run(self.ctx)
+            except Exception as e:  # noqa: BLE001 — top-level orchestrator boundary
+                self.ctx.err(f"phase '{ph.name}' failed: {e}")
+                return 1
+        return 0
