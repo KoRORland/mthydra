@@ -3,6 +3,7 @@ from __future__ import annotations
 import json as _json
 import subprocess
 import textwrap
+from pathlib import Path as _P
 
 import pytest
 
@@ -370,9 +371,6 @@ def test_promote_case_b_runs_rotation(tmp_path, monkeypatch):
     assert "promote-active" in flat
     assert "authority-rotate" in flat
     assert "signing-key-rotate" in flat
-
-
-from pathlib import Path as _P
 
 
 def test_active_example_ini_loads():
