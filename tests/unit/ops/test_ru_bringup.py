@@ -152,3 +152,22 @@ def test_wait_for_soak_propagates_keyboard_interrupt(monkeypatch):
             state_writer=lambda: writes.append(1),
         )
     assert writes  # state was saved before the interrupt propagated
+
+
+def test_cycle_state_round_trip(tmp_path):
+    state = ru_bringup.CycleState(
+        release="v1.0.0", image_version="iv-v1.0.0",
+        profile_path="/tmp/p.json", image_built=True,
+        canaries=[{"box_id": "b-1", "provider": "selectel",
+                   "region": "ru-msk-1", "public_ip": "1.2.3.4",
+                   "marked_live_at": "2026-05-28T12:00:00Z"}],
+        started_at="2026-05-28T11:00:00Z",
+    )
+    p = tmp_path / "v1.0.0.json"
+    state.save(p)
+    loaded = ru_bringup.CycleState.load(p)
+    assert loaded == state
+
+
+def test_cycle_state_load_missing_returns_none(tmp_path):
+    assert ru_bringup.CycleState.load(tmp_path / "absent.json") is None

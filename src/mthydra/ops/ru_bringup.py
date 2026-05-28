@@ -11,7 +11,7 @@ import socket
 import ssl
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 # Import controller helpers from main. main does NOT import ru_bringup at top
@@ -22,9 +22,35 @@ _run_controller = _main._run_controller                  # subprocess wrapper, e
 _run_controller_capture_both = _main._run_controller_capture_both
 _extract_box_id = _main._extract_box_id                   # 'provision-seed: created box_id=...'
 
+CYCLE_STATE_DIR = Path("/var/lib/mthydra/ru-cycle")
+
 # Mirror main.py's env-derived defaults so MTHYDRA_DB_PATH / MTHYDRA_CONFIG work.
 _DEFAULT_DB = os.environ.get("MTHYDRA_DB_PATH", "/var/lib/mthydra/state.sqlite")
 _DEFAULT_CONFIG = os.environ.get("MTHYDRA_CONFIG", "/etc/mthydra/controller.toml")
+
+
+@dataclass
+class CycleState:
+    release: str
+    image_version: str
+    profile_path: str
+    image_built: bool
+    canaries: list[dict] = field(default_factory=list)
+    started_at: str = ""
+
+    def save(self, path) -> None:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(asdict(self), indent=2, sort_keys=True))
+        tmp.replace(p)   # atomic rename
+
+    @classmethod
+    def load(cls, path) -> CycleState | None:
+        p = Path(path)
+        if not p.exists():
+            return None
+        return cls(**json.loads(p.read_text()))
 
 
 def wait_for_reachable(host: str, port: int, sni: str, *,
