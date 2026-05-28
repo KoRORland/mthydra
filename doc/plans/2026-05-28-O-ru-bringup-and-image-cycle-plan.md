@@ -164,25 +164,34 @@ def _fake_run_factory(stdout_map=None, stderr_map=None, default_rc=0):
     return fake_run, calls
 
 
-def test_mint_seed_returns_box_id_from_stderr(monkeypatch):
-    fake_run, calls = _fake_run_factory(stderr_map={
-        "provision-seed": "provision-seed: created box_id=b-abc123\n",
-    })
-    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+def test_mint_seed_writes_cloud_init_and_returns_box_id(monkeypatch, tmp_path):
+    # provision-seed prints cloud-init to STDOUT and the box_id line to STDERR.
+    # mint_seed must capture both via _run_controller_capture_both, write the
+    # stdout to --cloud-init-out, parse box_id from stderr.
+    fake_run, calls = _fake_run_factory(
+        stdout_map={"provision-seed": "#cloud-config\n# fake bundle\n"},
+        stderr_map={"provision-seed":
+                    "provision-seed: created box_id=b-abc123\n"})
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    out = tmp_path / "x.yaml"
     box_id = ru_bringup.mint_seed(
         "selectel", "ru-msk-1",
         canary=True,
         agent_source_url="https://b2/agent.tar.gz",
         agent_source_sha256="deadbeef",
         descriptor_refresh_url="https://b2/desc",
-        cloud_init_out="/tmp/x.yaml",
+        cloud_init_out=str(out),
     )
     assert box_id == "b-abc123"
+    assert out.read_text().startswith("#cloud-config")
+    assert (out.stat().st_mode & 0o777) == 0o600
     argv = calls[0]
     assert argv[0] == "provision-seed"
     assert "--canary" in argv
     assert "selectel" in argv and "ru-msk-1" in argv
-    assert "--cloud-init-out" in argv and "/tmp/x.yaml" in argv
+    assert "--db-path" in argv     # threaded through from _DEFAULT_DB
+    assert "--config" in argv      # provision-seed needs --config
 
 
 def test_mark_live_invokes_controller(monkeypatch):
@@ -218,48 +227,71 @@ Expected: FAIL — functions undefined.
 ```python
 # add to src/mthydra/ops/ru_bringup.py
 import json
-import re
+import os
+from pathlib import Path
 
-# Import _run_controller + _extract_box_id from main lazily-friendly: top-level
-# import is fine here because main does NOT import ru_bringup at top (it uses
-# lazy dispatch wrappers, set up in Task 8).
+# Import controller helpers from main. main does NOT import ru_bringup at top
+# (lazy dispatch in Task 8), so this is safe.
 from . import main as _main
 
-_run_controller = _main._run_controller          # subprocess wrapper (env-safe)
-_extract_box_id = _main._extract_box_id           # 'provision-seed: created box_id=...'
+_run_controller = _main._run_controller                 # subprocess wrapper, env-safe
+_run_controller_capture_both = _main._run_controller_capture_both
+_extract_box_id = _main._extract_box_id                  # 'provision-seed: created box_id=...'
+
+# Mirror main.py's env-derived defaults so MTHYDRA_DB_PATH / MTHYDRA_CONFIG work.
+_DEFAULT_DB = os.environ.get("MTHYDRA_DB_PATH", "/var/lib/mthydra/state.sqlite")
+_DEFAULT_CONFIG = os.environ.get("MTHYDRA_CONFIG", "/etc/mthydra/controller.toml")
 
 
 def mint_seed(provider: str, region: str, *, canary: bool,
               agent_source_url: str, agent_source_sha256: str,
-              descriptor_refresh_url: str, cloud_init_out: str) -> str:
-    """Run provision-seed; return the minted box_id parsed from stderr."""
+              descriptor_refresh_url: str, cloud_init_out: str,
+              db_path: str = _DEFAULT_DB,
+              config: str = _DEFAULT_CONFIG) -> str:
+    """Run provision-seed; write the stdout cloud-init bundle to cloud_init_out
+    (mode 0600); return the box_id parsed from stderr.
+
+    provision-seed has NO --cloud-init-out flag — it prints the bundle to
+    stdout. We capture both streams (stdout = bundle, stderr = box_id line)
+    via _run_controller_capture_both."""
     argv = [
         "provision-seed",
         "--provider", provider, "--region", region,
         "--agent-source-url", agent_source_url,
         "--agent-source-sha256", agent_source_sha256,
         "--descriptor-refresh-url", descriptor_refresh_url,
-        "--cloud-init-out", cloud_init_out,
+        "--db-path", db_path, "--config", config,
     ]
     if canary:
         argv.append("--canary")
-    res = _run_controller(*argv, capture=True)
+    res = _run_controller_capture_both(*argv)
     box_id = _extract_box_id(res.stderr or "")
     if not box_id:
         raise RuntimeError(
             "provision-seed succeeded but emitted no 'box_id=' line "
             "(controller version mismatch?)")
+    out = Path(cloud_init_out)
+    out.write_text(res.stdout or "")
+    try:
+        out.chmod(0o600)
+    except OSError:
+        pass    # best-effort; tmpfs / non-owner cases
     return box_id
 
 
-def mark_live(box_id: str, public_ip: str) -> None:
+def mark_live(box_id: str, public_ip: str,
+              *, db_path: str = _DEFAULT_DB) -> None:
     """Flip a provisioning box to live."""
-    _run_controller("ru-box-mark-live", box_id, "--public-ip", public_ip)
+    _run_controller("ru-box-mark-live", box_id,
+                    "--public-ip", public_ip, "--db-path", db_path)
 
 
-def box_info(box_id: str) -> dict | None:
-    """Return the ru_boxes row for `box_id` from ru-box-list, or None."""
-    res = _run_controller("ru-box-list", "--json", capture=True)
+def box_info(box_id: str, *, db_path: str = _DEFAULT_DB) -> dict | None:
+    """Return the ru_boxes row for `box_id` from ru-box-list, or None.
+    Row schema (from controller/state/ru_boxes.py): box_id, provider, region,
+    public_ip, sni, shard_id, state, image_version, ..."""
+    res = _run_controller("ru-box-list", "--json",
+                          "--db-path", db_path, capture=True)
     try:
         rows = json.loads(res.stdout or "[]")
     except json.JSONDecodeError:
@@ -356,14 +388,21 @@ class SoakResult:
 
 def wait_for_soak(image_version: str, *, poll_interval_s: int,
                   on_progress: Callable[[list[str]], None],
-                  state_writer: Callable[[], None]) -> SoakResult:
+                  state_writer: Callable[[], None],
+                  db_path: str = _DEFAULT_DB,
+                  config: str = _DEFAULT_CONFIG) -> SoakResult:
     """Poll image-promote-status until passed=True. KeyboardInterrupt is
     propagated (caller catches and prints a resume hint); state_writer is
-    called each tick so a Ctrl-C lands the latest progress on disk."""
+    called each tick so a Ctrl-C lands the latest progress on disk.
+
+    image-promote-status takes image_version as a positional + --db-path +
+    --config + --json."""
     started = time.monotonic()
     while True:
         res = _run_controller(
-            "image-promote-status", image_version, "--json", capture=True)
+            "image-promote-status", image_version,
+            "--db-path", db_path, "--config", config, "--json",
+            capture=True)
         try:
             payload = json.loads(res.stdout or "{}")
         except json.JSONDecodeError:
@@ -916,7 +955,8 @@ def cmd_ru_image_cycle(args) -> int:
         _say(f"[1/4] image-build: --release {args.release} "
              f"--profile-json {state.profile_path}")
         _run_controller("image-build", "--release", args.release,
-                        "--profile-json", state.profile_path)
+                        "--profile-json", state.profile_path,
+                        "--db-path", _DEFAULT_DB, "--config", _DEFAULT_CONFIG)
         state.image_built = True
         state.save(state_path)
     else:
@@ -989,7 +1029,8 @@ def cmd_ru_image_cycle(args) -> int:
             return 0
     _say(f"[4/4] promote: {state.image_version}")
     _run_controller("image-promote", state.image_version,
-                    "--evidence", evidence)
+                    "--evidence", evidence,
+                    "--db-path", _DEFAULT_DB, "--config", _DEFAULT_CONFIG)
 
     # Phase 5: summary + remove state file.
     _say(f"done: {state.image_version} promoted. "
@@ -1241,10 +1282,16 @@ git push origin main
 
 - **Spec coverage:** O-D1 → Tasks 6 + 7 (two layered subcommands); O-D2 → Task 7 (soak polls + operator submits probe-record externally); O-D3 → Task 7 phase 1 (image-build folded in); O-D4 → Task 1 (TLS handshake, no cert validation); O-D5 → Task 7 KeyboardInterrupt path + Task 3 `state_writer`; O-D6 → Task 4 `CycleState` + Task 7 state_path; O-D7 → Task 7 confirm prompt (only `promote_yes` test-only escape); O-D8 → all (no Phase/Runner import); O-D9 → Task 5 `parse_cohort`.
 
-- **Watch item — `image-build` arg shape:** Task 7 calls `mthydra-controller image-build --release <ver> --profile-json <path>` per runbook §3.2. If the actual CLI requires additional flags (e.g., `--db-path`, `--config`), add them; verify with `.venv/bin/mthydra-controller image-build --help` before implementing Task 7. The same applies to `image-promote-status` (Task 3) and `image-promote` (Task 7): confirm the JSON shape (we expect `passed: bool, reasons: list[str]`) by running `image-promote-status --help` and a one-off invocation against a test DB if available; if the shape differs, adapt the parser in `wait_for_soak` while keeping the test's mocked payload aligned.
-
-- **Watch item — `_extract_box_id` regex:** Task 2 imports `_extract_box_id` from `main`. Confirm the exact stderr format the controller emits (regex pattern `provision-seed: created box_id=(\S+)`); if the controller's actual format differs, fix the regex in `main.py` (one place, used by both `cmd_ru_provision` and the new `mint_seed`).
+- **Resolved (verified 2026-05-28 against the installed binary):**
+  - `image-build` flags: `--release` (required), `--profile-json`, `--db-path`, `--config`, plus optional `--asset`, `--notes`, `--profile-recorded-by`. Task 7 passes `--db-path`/`--config`.
+  - `image-promote-status` shape: `<image_version> [--db-path] [--config] [--json]` — `image_version` is positional. JSON payload has `passed: bool` and `reasons: list[str]`. Task 3 + Task 7 follow.
+  - `image-promote` shape: `<image_version> --evidence <text> [--db-path] [--config]` — `image_version` is positional, `--evidence` is required. Task 7 follows.
+  - `provision-seed` has **no** `--cloud-init-out` flag — it prints the cloud-init bundle to stdout. Task 2's `mint_seed` captures both stdout (bundle, written to the file by the helper) and stderr (`provision-seed: created box_id=<id>`) via `_run_controller_capture_both`. Existing `_extract_box_id` regex in `main.py` matches.
+  - `ru-box-list --json` row schema: `box_id, provider, region, public_ip, sni, shard_id, state, image_version, …` — `sni` IS present. Task 6 reads `info["sni"]` for reachability.
+  - `ru-box-mark-live` takes `--db-path` (no `--config`). Task 2's `mark_live` passes `--db-path`.
 
 - **Watch item — circular import:** `ru_bringup.py` imports `main` at top; `main.py` MUST NOT add `from . import ru_bringup` at top. Task 8 keeps the lazy-dispatch pattern that Task 10 of the spec N plan installed.
 
 - **Watch item — `--state-dir` in the cycle test:** the test passes a tmp `--state-dir` via Namespace so it can assert on the state file; in production the default is `/var/lib/mthydra/ru-cycle`. The CLI flag exists for the same reason.
+
+- **Watch item — `_run_controller_capture_both` in main.py:** Task 2 imports this helper from `main.py`. It already exists (used by `cmd_ru_provision`). If `main.py` is later refactored and the helper is renamed, both call sites update together.
