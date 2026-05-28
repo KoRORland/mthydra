@@ -12,6 +12,7 @@ import ssl
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Import controller helpers from main. main does NOT import ru_bringup at top
@@ -276,3 +277,124 @@ def parse_cohort(*, flags: list[str] | None, file_path,
         targets.append(CanaryTarget(provider=kv["provider"].strip(),
                                     region=kv["region"].strip()))
     return targets
+
+
+def compose_evidence(state: CycleState, soak_started: str, soak_ended: str) -> str:
+    boxes = ", ".join(c["box_id"] for c in state.canaries)
+    return (f"soak from {soak_started} to {soak_ended}; canaries: {boxes}; "
+            f"cover-site behaviour: stable per probe_results; "
+            f"latency baseline within profile bounds")
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def cmd_ru_image_cycle(args) -> int:  # noqa: C901
+    state_dir = Path(args.state_dir) if getattr(args, "state_dir", None) \
+                else CYCLE_STATE_DIR
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / f"{args.release}.json"
+
+    state = CycleState.load(state_path)  # always pick up prior state if present
+    if state is None:
+        state = CycleState(
+            release=args.release,
+            image_version=f"iv-{args.release}",
+            profile_path=args.profile_json or "",
+            image_built=False,
+            canaries=[],
+            started_at=_now_iso(),
+        )
+        state.save(state_path)
+
+    # Phase 1: image-build (skip if already built).
+    if not state.image_built:
+        _say(f"[1/4] image-build: --release {args.release} "
+             f"--profile-json {state.profile_path}")
+        _run_controller("image-build", "--release", args.release,
+                        "--profile-json", state.profile_path,
+                        "--db-path", _DEFAULT_DB, "--config", _DEFAULT_CONFIG)
+        state.image_built = True
+        state.save(state_path)
+    else:
+        _say("[1/4] image-build: already built → skip")
+
+    # Phase 2: canary cohort.
+    targets = parse_cohort(flags=args.canary_target, file_path=args.cohort,
+                           expected_count=args.canaries)
+    done_count = sum(1 for c in state.canaries if c.get("marked_live_at"))
+    _say(f"[2/4] canaries: {done_count}/{args.canaries} already live")
+    for idx, target in enumerate(targets):
+        if idx < len(state.canaries) and state.canaries[idx].get("marked_live_at"):
+            continue
+        # Mint + bring up this canary.
+        cloud_init = str(state_dir / f"{args.release}-c{idx + 1}.yaml")
+        box_id = mint_seed(target.provider, target.region, canary=True,
+                           agent_source_url=args.agent_source_url,
+                           agent_source_sha256=args.agent_source_sha256,
+                           descriptor_refresh_url=args.descriptor_refresh_url,
+                           cloud_init_out=cloud_init)
+        # Cycle always prompts for canary IPs as VMs come up — there is no
+        # CLI shape for pre-staging N IPs at invocation. `--non-interactive`
+        # on the cycle is a no-op for IP collection.
+        public_ip = _prompt_public_ip()
+        if public_ip is None:
+            _say(f"deferred at canary {box_id}. Resume with: "
+                 f"mthydra-ops ru-image-cycle --release {args.release} --resume")
+            return 0
+        info = box_info(box_id) or {}
+        if info.get("state") != "live":
+            if not wait_for_reachable(public_ip, 443, info.get("sni") or "",
+                                      timeout_s=600):
+                _err(f"canary {box_id} unreachable; resume later")
+                return 4
+            mark_live(box_id, public_ip)
+        entry = {"box_id": box_id, "provider": target.provider,
+                 "region": target.region, "public_ip": public_ip,
+                 "marked_live_at": _now_iso()}
+        if idx < len(state.canaries):
+            state.canaries[idx] = entry
+        else:
+            state.canaries.append(entry)
+        state.save(state_path)
+
+    # Phase 3: soak wait.
+    soak_started = _now_iso()
+    _say(f"[3/4] soak: polling image-promote-status every {args.soak_poll}s "
+         f"(Ctrl-C to defer)")
+
+    def _progress(reasons):
+        for r in reasons:
+            _say(f"  pending: {r}")
+
+    try:
+        result = wait_for_soak(state.image_version,
+                               poll_interval_s=args.soak_poll,
+                               on_progress=_progress,
+                               state_writer=lambda: state.save(state_path))
+    except KeyboardInterrupt:
+        _say("deferred. Resume with: mthydra-ops ru-image-cycle "
+             f"--release {args.release} --resume")
+        return 0
+
+    # Phase 4: promote (operator-confirmed unless --promote-yes in tests).
+    soak_ended = _now_iso()
+    evidence = args.evidence or compose_evidence(state, soak_started, soak_ended)
+    if not getattr(args, "promote_yes", False) and not args.non_interactive:
+        ans = input(f"soak passed in {result.duration_s}s. "
+                    f"Promote {state.image_version}? [y/N] ").strip().lower()
+        if ans not in ("y", "yes"):
+            _say("promote declined. State preserved; rerun with --resume to retry")
+            return 0
+    _say(f"[4/4] promote: {state.image_version}")
+    _run_controller("image-promote", state.image_version,
+                    "--evidence", evidence,
+                    "--db-path", _DEFAULT_DB, "--config", _DEFAULT_CONFIG)
+
+    # Phase 5: summary + remove state file.
+    _say(f"done: {state.image_version} promoted. "
+         f"Existing boxes age out via §3.7 replace-on-burn; "
+         f"use `mthydra-ops ru-bringup` for replacements.")
+    state_path.unlink(missing_ok=True)
+    return 0

@@ -4,6 +4,7 @@ import argparse
 import json
 import ssl
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -284,3 +285,112 @@ def test_cmd_ru_bringup_aborts_on_unreachable(monkeypatch, tmp_path):
 
     rc = ru_bringup.cmd_ru_bringup(_bringup_args(tmp_path))
     assert rc != 0   # unreachable → non-zero exit
+
+
+def _cycle_args(tmp_path, **over):
+    base = dict(
+        release="v1.0.0",
+        profile_json=str(tmp_path / "p.json"),
+        canaries=2,
+        canary_target=["provider=selectel,region=ru-msk-1",
+                       "provider=firstvds,region=ru-spb-1"],
+        cohort=None,
+        agent_source_url="https://b2/a.tar.gz",
+        agent_source_sha256="deadbeef",
+        descriptor_refresh_url="https://b2/desc",
+        soak_poll=0, soak_timeout=0,
+        evidence=None, resume=False,
+        non_interactive=True, verbose=False, quiet=True, dry_run=False,
+        config=None,
+        state_dir=str(tmp_path / "state"),     # tests use a tmp state dir
+        promote_yes=True,                       # bypass interactive confirm in tests
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def test_cmd_ru_image_cycle_end_to_end(monkeypatch, tmp_path):
+    (tmp_path / "p.json").write_text("{}")
+    soak_payloads = [
+        json.dumps({"passed": False, "reasons": ["short"]}),
+        json.dumps({"passed": True, "reasons": []}),
+    ]
+    state_ipv4 = iter(["1.1.1.1", "2.2.2.2"])
+    minted = iter(["b-c1", "b-c2"])
+    promoted = {"v": False}
+
+    def fake_run(*args, check=True, capture=False, env=None):
+        sub = args[0]
+        if sub == "image-build":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if sub == "provision-seed":
+            return subprocess.CompletedProcess(args, 0, "",
+                f"provision-seed: created box_id={next(minted)}\n")
+        if sub == "ru-box-list":
+            return subprocess.CompletedProcess(args, 0,
+                json.dumps([{"box_id": "b-c1", "state": "live", "sni": "x"},
+                            {"box_id": "b-c2", "state": "live", "sni": "y"}]),
+                "")
+        if sub == "image-promote-status":
+            return subprocess.CompletedProcess(args, 0, soak_payloads.pop(0), "")
+        if sub == "image-promote":
+            promoted["v"] = True
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if sub == "image-current":
+            return subprocess.CompletedProcess(args, 0,
+                json.dumps({"image_version": "iv-vprev"}), "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "wait_for_reachable", lambda *a, **kw: True)
+    monkeypatch.setattr(ru_bringup, "_prompt_public_ip",
+                        lambda: next(state_ipv4))
+
+    rc = ru_bringup.cmd_ru_image_cycle(_cycle_args(tmp_path))
+    assert rc == 0
+    assert promoted["v"] is True
+    # state file removed on success
+    assert not (Path(_cycle_args(tmp_path).state_dir) / "v1.0.0.json").exists()
+
+
+def test_cmd_ru_image_cycle_resume_skips_built_and_done_canaries(monkeypatch, tmp_path):
+    (tmp_path / "p.json").write_text("{}")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    pre = ru_bringup.CycleState(
+        release="v1.0.0", image_version="iv-v1.0.0",
+        profile_path=str(tmp_path / "p.json"), image_built=True,
+        canaries=[{"box_id": "b-c1", "provider": "selectel",
+                   "region": "ru-msk-1", "public_ip": "1.1.1.1",
+                   "marked_live_at": "2026-05-28T12:00:00Z"}],
+        started_at="2026-05-28T11:00:00Z",
+    )
+    pre.save(state_dir / "v1.0.0.json")
+
+    seen_subs = []
+    def fake_run(*args, **kw):
+        seen_subs.append(args[0])
+        if args[0] == "provision-seed":
+            return subprocess.CompletedProcess(args, 0, "",
+                "provision-seed: created box_id=b-c2\n")
+        if args[0] == "ru-box-list":
+            return subprocess.CompletedProcess(args, 0,
+                json.dumps([{"box_id": "b-c2", "state": "live", "sni": "y"}]), "")
+        if args[0] == "image-promote-status":
+            return subprocess.CompletedProcess(args, 0,
+                json.dumps({"passed": True, "reasons": []}), "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "wait_for_reachable", lambda *a, **kw: True)
+    monkeypatch.setattr(ru_bringup, "_prompt_public_ip", lambda: "2.2.2.2")
+
+    rc = ru_bringup.cmd_ru_image_cycle(
+        _cycle_args(tmp_path, state_dir=str(state_dir), resume=True))
+    assert rc == 0
+    # image-build skipped (already built), and only one provision-seed call
+    # (b-c1 already in state with marked_live_at)
+    assert seen_subs.count("image-build") == 0
+    assert seen_subs.count("provision-seed") == 1
