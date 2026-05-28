@@ -994,7 +994,37 @@ def build_parser() -> argparse.ArgumentParser:
                           "of stdout — convenient for pasting into a provider "
                           "console via 'cat'")
 
+    def _add_install_args(sp):
+        sp.add_argument("--config", required=True, help="path to install.ini")
+        sp.add_argument("--non-interactive", action="store_true",
+                        help="never prompt; missing required field is an error")
+        sp.add_argument("--verbose", action="store_true",
+                        help="stream all subprocess output to the terminal")
+        sp.add_argument("--quiet", action="store_true", help="errors only")
+        sp.add_argument("--dry-run", action="store_true",
+                        help="print the plan; execute nothing")
+
+    inst = sub.add_parser("install", help="one-shot first EU active node setup")
+    _add_install_args(inst)
+
+    st = sub.add_parser("install-standby", help="one-shot warm-standby setup")
+    _add_install_args(st)
+    st.add_argument("--promote", action="store_true",
+                    help="promote to active immediately after setup")
+    st.add_argument("--case", choices=["A", "B"], default="A",
+                    help="promotion case (B = active compromised → rotate creds)")
+
     return p
+
+
+def _dispatch_install(args) -> int:
+    from . import install
+    return install.cmd_install(args)
+
+
+def _dispatch_install_standby(args) -> int:
+    from . import install
+    return install.cmd_install_standby(args)
 
 
 _DISPATCH: dict[str, object] = {
@@ -1009,6 +1039,8 @@ _DISPATCH: dict[str, object] = {
     "rotate-vantage": cmd_rotate_vantage,
     "alert-summary": cmd_alert_summary,
     "ru-provision": cmd_ru_provision,
+    "install": _dispatch_install,
+    "install-standby": _dispatch_install_standby,
 }
 
 

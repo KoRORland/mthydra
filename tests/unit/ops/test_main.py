@@ -731,3 +731,22 @@ def test_bootstrap_core_passes_secret_via_env_not_argv():
         e for c, e in zip(calls, envs, strict=False) if c and c[0] == "init"
     )
     assert "SECRET" in " ".join(init_env.values())
+
+
+def test_install_subcommands_parse():
+    from mthydra.ops import main as m
+    p = m.build_parser()
+    a = p.parse_args(["install", "--config", "x.ini", "--verbose"])
+    assert a.cmd == "install" and a.config == "x.ini" and a.verbose is True
+    b = p.parse_args(["install-standby", "--config", "s.ini",
+                      "--promote", "--case", "B"])
+    assert b.cmd == "install-standby" and b.promote is True and b.case == "B"
+
+
+def test_main_routes_install_to_cmd_install(monkeypatch):
+    from mthydra.ops import install
+    from mthydra.ops import main as m
+    called = {}
+    monkeypatch.setattr(install, "cmd_install", lambda args: called.setdefault("v", 0) or 0)
+    rc = m.main(["install", "--config", "x.ini"])
+    assert rc == 0 and "v" in called

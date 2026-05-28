@@ -632,6 +632,38 @@ def build_standby_phases(ctx: Ctx, *, promote: bool, case: str) -> list[Phase]:
     return phases
 
 
+def cmd_install(args) -> int:
+    cfg = load_config(args.config, role="active", promote=False,
+                      interactive=not args.non_interactive)
+    Path(cfg.log_dir).mkdir(parents=True, exist_ok=True)
+    from datetime import UTC, datetime
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    log = RedactingLog(Path(cfg.log_dir) / f"install-{stamp}.log",
+                       cfg.secret_values(), echo=args.verbose)
+    ctx = Ctx(config=cfg, log=log, dry_run=args.dry_run, quiet=args.quiet)
+    try:
+        return Runner(build_active_phases(ctx), ctx).execute()
+    finally:
+        log.close()
+
+
+def cmd_install_standby(args) -> int:
+    cfg = load_config(args.config, role="standby", promote=args.promote,
+                      interactive=not args.non_interactive)
+    Path(cfg.log_dir).mkdir(parents=True, exist_ok=True)
+    from datetime import UTC, datetime
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    log = RedactingLog(Path(cfg.log_dir) / f"install-{stamp}.log",
+                       cfg.secret_values(), echo=args.verbose)
+    ctx = Ctx(config=cfg, log=log, dry_run=args.dry_run, quiet=args.quiet)
+    try:
+        return Runner(
+            build_standby_phases(ctx, promote=args.promote, case=args.case),
+            ctx).execute()
+    finally:
+        log.close()
+
+
 def build_active_phases(ctx: Ctx) -> list[Phase]:
     return [
         Phase("preconditions", lambda c: False, _precondition_check),
