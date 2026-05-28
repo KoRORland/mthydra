@@ -264,3 +264,30 @@ def test_timer_enabled_probe(tmp_path, monkeypatch):
         lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "enabled\n", ""),
     )
     assert install.timer_enabled(ctx, "mthydra-daily-check") is True
+
+
+def test_write_and_enable_unit_writes_file_and_enables(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    units = tmp_path / "systemd"
+    units.mkdir()
+    monkeypatch.setattr(install, "_UNIT_DIR", units)
+    sysctl = []
+    monkeypatch.setattr(install.subprocess, "run",
+        lambda argv, **kw: sysctl.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
+    install.write_and_enable_unit(ctx, "mthydra-daily-check.timer",
+                                  "[Unit]\nDescription=x\n", enable=True)
+    assert (units / "mthydra-daily-check.timer").read_text().startswith("[Unit]")
+    assert ["systemctl", "daemon-reload"] in sysctl
+    assert any(a[:3] == ["systemctl", "enable", "--now"] for a in sysctl)
+
+
+def test_maintenance_timers_use_configured_venv(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    written = {}
+    monkeypatch.setattr(install, "write_and_enable_unit",
+        lambda c, name, body, enable=True: written.__setitem__(name, body))
+    install.install_maintenance_timers(ctx)
+    svc = written["mthydra-daily-check.service"]
+    assert f"{ctx.config.venv_dir}/bin/mthydra-ops daily-check" in svc
+    assert "mthydra-monthly-compact.timer" in written
+    assert "mthydra-weekly-scan.timer" in written

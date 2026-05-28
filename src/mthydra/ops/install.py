@@ -397,3 +397,84 @@ def descriptor_signed(ctx: Ctx) -> bool:
 
 def timer_enabled(ctx: Ctx, name: str) -> bool:
     return _systemctl_ok("is-enabled", f"{name}.timer")
+
+
+# ---------------------------------------------------------------------------
+# systemd unit generation + enable helpers (N-D9)
+# ---------------------------------------------------------------------------
+
+_UNIT_DIR = Path("/etc/systemd/system")
+
+_TIMER_TMPL = """\
+[Unit]
+Description={desc}
+
+[Timer]
+OnCalendar={oncalendar}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"""
+
+_SERVICE_TMPL = """\
+[Unit]
+Description={desc}
+
+[Service]
+Type=oneshot
+User=mthydra
+Group=mthydra
+ExecStart={venv}/bin/mthydra-ops {subcommand}
+StandardOutput=journal
+StandardError=journal
+"""
+
+
+def write_and_enable_unit(ctx: Ctx, name: str, body: str, enable: bool = True) -> None:
+    target = _UNIT_DIR / name
+    ctx.say(f"writing {target}")
+    if ctx.dry_run:
+        return
+    target.write_text(body)
+    subprocess.run(["systemctl", "daemon-reload"], check=True)
+    if enable and name.endswith(".timer"):
+        subprocess.run(["systemctl", "enable", "--now", name], check=True)
+
+
+def install_maintenance_timers(ctx: Ctx) -> None:
+    venv = ctx.config.venv_dir
+    specs = [
+        ("mthydra-daily-check", "daily obligation check", "daily-check", "*-*-* 06:17:00"),
+        ("mthydra-weekly-scan", "weekly silent-failure scan",
+         "alert-summary", "Mon *-*-* 07:00:00"),
+        ("mthydra-monthly-compact", "monthly log compaction",
+         "monthly-compact --no-dry-run --evidence scheduled", "*-*-01 03:00:00"),
+    ]
+    for base, desc, subcmd, oncal in specs:
+        write_and_enable_unit(
+            ctx, f"{base}.service",
+            _SERVICE_TMPL.format(desc=desc, venv=venv, subcommand=subcmd),
+            enable=False)
+        write_and_enable_unit(
+            ctx, f"{base}.timer",
+            _TIMER_TMPL.format(desc=desc, oncalendar=oncal), enable=True)
+
+
+def install_controller_service(ctx: Ctx) -> None:
+    body = (
+        "[Unit]\nDescription=mthydra controller\nAfter=network.target\n\n"
+        "[Service]\nUser=mthydra\nGroup=mthydra\n"
+        "WorkingDirectory=/var/lib/mthydra\n"
+        f"ExecStart={ctx.config.venv_dir}/bin/mthydra-controller serve "
+        f"--db-path {ctx.config.db_path} --config {ctx.config.config_path}\n"
+        "Restart=on-failure\nRestartSec=5\n"
+        "StandardOutput=journal\nStandardError=journal\n\n"
+        "[Install]\nWantedBy=multi-user.target\n"
+    )
+    ctx.say("writing /etc/systemd/system/mthydra-controller.service")
+    if ctx.dry_run:
+        return
+    (_UNIT_DIR / "mthydra-controller.service").write_text(body)
+    subprocess.run(["systemctl", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "enable", "--now", "mthydra-controller"], check=True)
