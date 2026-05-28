@@ -317,3 +317,56 @@ def test_active_dry_run_executes_no_side_effects(tmp_path, monkeypatch):
     rc = install.Runner(install.build_active_phases(ctx), ctx).execute()
     assert rc == 0
     assert ran["systemctl"] == 0  # nothing executed in dry-run
+
+
+def _standby_ctx(tmp_path, promote=False, case="A"):
+    minimal = _FULL_INI if promote else """\
+        [install]
+        git_url = https://example/mthydra.git
+        [node]
+        hostname = standby.example.com
+        [age]
+        recipient = age1qqp0000000000000000000000000000000000000000000000000q
+        [backup]
+        endpoint = https://s3.example.com
+        bucket = mthydra-prod
+        key_id = 0012abc
+        application_key = B2SECRET
+        """
+    ini = _write_ini(tmp_path, minimal)
+    cfg = install.load_config(ini, role="standby", promote=promote,
+                              interactive=False, env={})
+    object.__setattr__(cfg, "promote_case", case)
+    log = install.RedactingLog(tmp_path / "s.log", cfg.secret_values())
+    return install.Ctx(config=cfg, log=log, dry_run=True, quiet=True)
+
+
+def test_passive_standby_phase_order(tmp_path):
+    ctx = _standby_ctx(tmp_path)
+    names = [p.name for p in install.build_standby_phases(ctx, promote=False, case="A")]
+    assert names == [
+        "preconditions", "setup-host", "verify-install", "bootstrap",
+        "standby-readiness", "service", "summary",
+    ]
+
+
+def test_promote_inserts_promote_phase_and_appends_active_timers(tmp_path):
+    ctx = _standby_ctx(tmp_path, promote=True)
+    names = [p.name for p in install.build_standby_phases(ctx, promote=True, case="B")]
+    assert "promote" in names
+    assert "maintenance-timers" in names         # active timers after promotion
+    assert names[-1] == "summary"
+
+
+def test_promote_case_b_runs_rotation(tmp_path, monkeypatch):
+    ctx = _standby_ctx(tmp_path, promote=True, case="B")
+    ctx.dry_run = False
+    calls = []
+    monkeypatch.setattr(install.Ctx, "run_controller",
+        lambda self, *a, **k: calls.append(list(a))
+        or subprocess.CompletedProcess(a, 0, "", ""))
+    install._phase_promote(ctx)
+    flat = [c[0] for c in calls]
+    assert "promote-active" in flat
+    assert "authority-rotate" in flat
+    assert "signing-key-rotate" in flat

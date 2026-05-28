@@ -573,6 +573,65 @@ def _phase_summary(ctx: Ctx) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Warm-standby orchestrator with optional promotion (§1.11, §10.2, N-D5/D6)
+# ---------------------------------------------------------------------------
+
+
+def _phase_standby_readiness(ctx: Ctx) -> None:
+    # No `standby-heartbeat-check` CLI exists in this build; startup-check is the
+    # available health gate. serve's own B2 polling (spec F-D5) tracks the active.
+    ctx.run_controller("startup-check", "--db-path", ctx.config.db_path)
+    ctx.say(
+        "standby startup-check passed. The serve loop polls the active's B2 "
+        "heartbeat automatically (spec F-D5); confirm liveness from the active "
+        "via `mthydra-controller eu-node-list` after eu-node-add.")
+
+
+def _phase_promote(ctx: Ctx) -> None:
+    case = getattr(ctx.config, "promote_case", "A")
+    ctx.say(f"promoting standby → active (case {case})")
+    ctx.run_controller("promote-active", "--case", case,
+                       "--evidence", f"install-standby --promote --case {case}")
+    if case == "B":
+        ctx.run_controller("authority-rotate", "--evidence", "post-Case-B install")
+        ctx.run_controller("signing-key-rotate", "--evidence", "post-Case-B install")
+        ctx.say(
+            "CASE B manual rotations still required (NOT automated):\n"
+            "  - rotate the B2 application key in the B2 UI + re-bootstrap cred\n"
+            "  - rotate [observability.email]/[distribution.email] app passwords\n"
+            "  - revoke + re-mint both Telegram bot tokens at @BotFather\n"
+            "  then re-run obs-alert-test to confirm sinks.")
+
+
+def build_standby_phases(ctx: Ctx, *, promote: bool, case: str) -> list[Phase]:
+    phases = [
+        Phase("preconditions", lambda c: False, _precondition_check),
+        Phase("setup-host", host_prepared, _phase_setup_host),
+        Phase("verify-install", controller_installed,
+              lambda c: (_ for _ in ()).throw(
+                  RuntimeError("mthydra-controller not on PATH — build broken (§1.4)"))),
+        Phase("bootstrap",
+              lambda c: db_initialized(c) and authority_is_real(c)
+              and controller_toml_present(c) and age_recipient_file_present(c),
+              _phase_bootstrap),
+        Phase("standby-readiness", lambda c: False, _phase_standby_readiness),
+        Phase("service", service_active, install_controller_service),
+    ]
+    if promote:
+        object.__setattr__(ctx.config, "promote_case", case)
+        phases.append(Phase("promote", lambda c: False, _phase_promote))
+        phases.append(Phase("maintenance-timers",
+              lambda c: all(timer_enabled(c, n) for n in
+                            ("mthydra-daily-check", "mthydra-weekly-scan",
+                             "mthydra-monthly-compact")),
+              install_maintenance_timers))
+    # A passive standby installs no maintenance timers (emits nothing; systemd
+    # auto-restarts serve; no standby check command to schedule).
+    phases.append(Phase("summary", lambda c: False, _phase_summary))
+    return phases
+
+
 def build_active_phases(ctx: Ctx) -> list[Phase]:
     return [
         Phase("preconditions", lambda c: False, _precondition_check),
