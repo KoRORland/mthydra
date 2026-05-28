@@ -4,10 +4,26 @@ See doc/specs/2026-05-28-O-ru-bringup-and-image-cycle.md.
 """
 from __future__ import annotations
 
+import contextlib
+import json
+import os
 import socket
 import ssl
 import time
 from collections.abc import Callable
+from pathlib import Path
+
+# Import controller helpers from main. main does NOT import ru_bringup at top
+# (lazy dispatch in a later task), so this is safe.
+from . import main as _main
+
+_run_controller = _main._run_controller                  # subprocess wrapper, env-safe
+_run_controller_capture_both = _main._run_controller_capture_both
+_extract_box_id = _main._extract_box_id                   # 'provision-seed: created box_id=...'
+
+# Mirror main.py's env-derived defaults so MTHYDRA_DB_PATH / MTHYDRA_CONFIG work.
+_DEFAULT_DB = os.environ.get("MTHYDRA_DB_PATH", "/var/lib/mthydra/state.sqlite")
+_DEFAULT_CONFIG = os.environ.get("MTHYDRA_CONFIG", "/etc/mthydra/controller.toml")
 
 
 def wait_for_reachable(host: str, port: int, sni: str, *,
@@ -34,3 +50,60 @@ def wait_for_reachable(host: str, port: int, sni: str, *,
                 on_progress(e)
             time.sleep(poll_s)
     return False
+
+
+def mint_seed(provider: str, region: str, *, canary: bool,
+              agent_source_url: str, agent_source_sha256: str,
+              descriptor_refresh_url: str, cloud_init_out: str,
+              db_path: str = _DEFAULT_DB,
+              config: str = _DEFAULT_CONFIG) -> str:
+    """Run provision-seed; write the stdout cloud-init bundle to cloud_init_out
+    (mode 0600); return the box_id parsed from stderr.
+
+    provision-seed has NO --cloud-init-out flag — it prints the bundle to
+    stdout. We capture both streams (stdout = bundle, stderr = box_id line)
+    via _run_controller_capture_both."""
+    argv = [
+        "provision-seed",
+        "--provider", provider, "--region", region,
+        "--agent-source-url", agent_source_url,
+        "--agent-source-sha256", agent_source_sha256,
+        "--descriptor-refresh-url", descriptor_refresh_url,
+        "--db-path", db_path, "--config", config,
+    ]
+    if canary:
+        argv.append("--canary")
+    res = _run_controller_capture_both(*argv)
+    box_id = _extract_box_id(res.stderr or "")
+    if not box_id:
+        raise RuntimeError(
+            "provision-seed succeeded but emitted no 'box_id=' line "
+            "(controller version mismatch?)")
+    out = Path(cloud_init_out)
+    out.write_text(res.stdout or "")
+    with contextlib.suppress(OSError):  # best-effort; tmpfs / non-owner cases
+        out.chmod(0o600)
+    return box_id
+
+
+def mark_live(box_id: str, public_ip: str,
+              *, db_path: str = _DEFAULT_DB) -> None:
+    """Flip a provisioning box to live."""
+    _run_controller("ru-box-mark-live", box_id,
+                    "--public-ip", public_ip, "--db-path", db_path)
+
+
+def box_info(box_id: str, *, db_path: str = _DEFAULT_DB) -> dict | None:
+    """Return the ru_boxes row for `box_id` from ru-box-list, or None.
+    Row schema (from controller/state/ru_boxes.py): box_id, provider, region,
+    public_ip, sni, shard_id, state, image_version, ..."""
+    res = _run_controller("ru-box-list", "--json",
+                          "--db-path", db_path, capture=True)
+    try:
+        rows = json.loads(res.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+    for row in rows:
+        if row.get("box_id") == box_id:
+            return row
+    return None
