@@ -291,3 +291,29 @@ def test_maintenance_timers_use_configured_venv(tmp_path, monkeypatch):
     assert f"{ctx.config.venv_dir}/bin/mthydra-ops daily-check" in svc
     assert "mthydra-monthly-compact.timer" in written
     assert "mthydra-weekly-scan.timer" in written
+
+
+def test_build_active_phases_order(tmp_path):
+    ctx = _ctx(tmp_path)
+    names = [p.name for p in install.build_active_phases(ctx)]
+    assert names == [
+        "preconditions", "setup-host", "verify-install", "bootstrap",
+        "preflight", "service", "first-descriptor", "maintenance-timers",
+        "summary",
+    ]
+
+
+def test_active_dry_run_executes_no_side_effects(tmp_path, monkeypatch):
+    # every probe False so phases would "run", but dry_run must execute nothing
+    for probe in ("host_prepared", "controller_installed", "db_initialized",
+                  "service_active", "descriptor_signed"):
+        monkeypatch.setattr(install, probe, lambda c: False)
+    monkeypatch.setattr(install, "timer_enabled", lambda c, n: False)
+    ran = {"systemctl": 0}
+    monkeypatch.setattr(install.subprocess, "run",
+        lambda *a, **k: ran.__setitem__("systemctl", ran["systemctl"] + 1)
+        or subprocess.CompletedProcess(a, 0, "", ""))
+    ctx = _ctx(tmp_path, dry_run=True)
+    rc = install.Runner(install.build_active_phases(ctx), ctx).execute()
+    assert rc == 0
+    assert ran["systemctl"] == 0  # nothing executed in dry-run

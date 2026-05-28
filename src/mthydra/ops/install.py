@@ -17,6 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import main as _main
+
 _AGE_SECRET_RE = re.compile(r"AGE-SECRET-KEY-1[0-9A-Z]+")
 _BOT_TOKEN_RE = re.compile(r"\d{8,10}:[A-Za-z0-9_-]{35}")
 
@@ -478,3 +480,140 @@ def install_controller_service(ctx: Ctx) -> None:
     (_UNIT_DIR / "mthydra-controller.service").write_text(body)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", "mthydra-controller"], check=True)
+
+
+# ---------------------------------------------------------------------------
+# Active-host 9-phase orchestrator  (§1.1-1.10)
+# ---------------------------------------------------------------------------
+
+
+def _precondition_check(ctx: Ctx) -> None:
+    if os.geteuid() != 0 and not ctx.dry_run:
+        raise RuntimeError("install must run as root")
+    ctx.say(
+        f"role={ctx.config.role} promote={ctx.config.promote} "
+        f"host={ctx.config.hostname}"
+    )  # config already validated at load
+
+
+def _phase_setup_host(ctx: Ctx) -> None:
+    def run_step(argv: list[str], allow_fail: bool) -> int:
+        ctx.log.write("$ " + " ".join(argv) + "\n")
+        rc = subprocess.run(argv).returncode
+        if rc != 0 and not allow_fail:
+            raise RuntimeError(f"step failed (rc={rc}): {' '.join(argv)}")
+        return rc
+
+    _main.setup_host_core(run_step, dry_run=ctx.dry_run)
+
+
+def _phase_bootstrap(ctx: Ctx) -> None:
+    c = ctx.config
+    _main.bootstrap_core(
+        ctx.run_controller,
+        ctx.say,
+        db_path=c.db_path,
+        config_path=c.config_path,
+        age_recipient=c.age_recipient,
+        b2_application_key=c.b2_application_key,
+        hostname=c.hostname,
+        role=c.role,
+        operator_email=c.obs_smtp_to,
+        b2_endpoint=c.b2_endpoint,
+        b2_bucket=c.b2_bucket,
+        b2_key_id=c.b2_key_id,
+        obs_tg_bot_token=c.obs_tg_bot_token,
+        obs_tg_chat_id=c.obs_tg_chat_id,
+        obs_smtp_host=c.obs_smtp_host,
+        obs_smtp_port=c.obs_smtp_port,
+        obs_smtp_from=c.obs_smtp_from,
+        obs_smtp_to=c.obs_smtp_to,
+        obs_smtp_user=c.obs_smtp_user,
+        obs_smtp_pass=c.obs_smtp_pass,
+        dist_tg_bot_token=c.dist_tg_bot_token,
+        dist_smtp_host=c.dist_smtp_host,
+        dist_smtp_port=c.dist_smtp_port,
+        dist_smtp_from=c.dist_smtp_from,
+        dist_smtp_user=c.dist_smtp_user,
+        dist_smtp_pass=c.dist_smtp_pass,
+    )
+
+
+def _phase_preflight(ctx: Ctx) -> None:
+    c = ctx.config
+    rc = _main.preflight_core(
+        ctx.run_controller, ctx.say, db_path=c.db_path, config_path=c.config_path
+    )
+    if rc != 0:
+        raise RuntimeError(
+            "preflight failed — fix [observability.*] in controller.toml and re-run"
+        )
+    if c.assume_sinks:
+        ctx.say("assume_sinks=true → skipping the §1.8 human gate")
+        return
+    if ctx.dry_run:
+        return
+    ans = input("Did the crit test arrive in BOTH Telegram AND email? [y/N] ")
+    if ans.strip().lower() not in ("y", "yes"):
+        raise RuntimeError(
+            "§1.8 gate not confirmed — fix [observability.*] and re-run install"
+        )
+
+
+def _phase_summary(ctx: Ctx) -> None:
+    ctx.say(
+        "EU active host is live. Remaining OUT-OF-BAND steps:\n"
+        "  1. Confirm §1.8 sinks if you skipped the gate.\n"
+        "  2. Back up the operator age key to two non-cloud locations "
+        "(§1.2) — it is NOT on this host and must never be.\n"
+        "  3. Stand up a warm standby (mthydra-ops install-standby) and "
+        "eu-node-add it from here (§1.11).\n"
+        "  4. RU image build and RU-node provisioning are SEPARATE automation, "
+        "not run by this installer."
+    )
+
+
+def build_active_phases(ctx: Ctx) -> list[Phase]:
+    return [
+        Phase("preconditions", lambda c: False, _precondition_check),
+        Phase("setup-host", host_prepared, _phase_setup_host),
+        Phase(
+            "verify-install",
+            controller_installed,
+            lambda c: (_ for _ in ()).throw(
+                RuntimeError(
+                    "mthydra-controller not on PATH — build broken (§1.4)"
+                )
+            ),
+        ),
+        Phase(
+            "bootstrap",
+            lambda c: db_initialized(c)
+            and authority_is_real(c)
+            and controller_toml_present(c)
+            and age_recipient_file_present(c),
+            _phase_bootstrap,
+        ),
+        Phase("preflight", lambda c: False, _phase_preflight),
+        Phase("service", service_active, install_controller_service),
+        Phase(
+            "first-descriptor",
+            descriptor_signed,
+            lambda c: c.run_controller(
+                "descriptor-sign-now", "--db-path", c.config.db_path
+            ),
+        ),
+        Phase(
+            "maintenance-timers",
+            lambda c: all(
+                timer_enabled(c, n)
+                for n in (
+                    "mthydra-daily-check",
+                    "mthydra-weekly-scan",
+                    "mthydra-monthly-compact",
+                )
+            ),
+            install_maintenance_timers,
+        ),
+        Phase("summary", lambda c: False, _phase_summary),
+    ]
