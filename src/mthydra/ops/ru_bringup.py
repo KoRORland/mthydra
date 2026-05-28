@@ -179,6 +179,80 @@ class CanaryTarget:
     region: str
 
 
+_say = _main._say
+_err = _main._err
+
+
+def _prompt_public_ip() -> str | None:
+    try:
+        ans = input("Public IP when VM is up (Ctrl-C to defer): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        return None
+    return ans or None
+
+
+def cmd_ru_bringup(args) -> int:
+    # Phase 1: mint (skipped on --box-id resume).
+    if args.box_id:
+        box_id = args.box_id
+        _say(f"resume: using existing box {box_id}; skipping mint")
+    else:
+        _say(f"mint: provision-seed for {args.provider}/{args.region}"
+             + (" (canary)" if args.canary else ""))
+        box_id = mint_seed(
+            args.provider, args.region, canary=args.canary,
+            agent_source_url=args.agent_source_url,
+            agent_source_sha256=args.agent_source_sha256,
+            descriptor_refresh_url=args.descriptor_refresh_url,
+            cloud_init_out=args.cloud_init_out,
+        )
+        _say(f"minted box_id={box_id}; cloud-init at {args.cloud_init_out}")
+
+    # Phase 2: boot-handoff. Get public IP.
+    public_ip = args.public_ip
+    if not public_ip:
+        if args.non_interactive:
+            _err("--public-ip required in non-interactive mode")
+            return 2
+        _say("Paste the cloud-init file as user-data in your provider's "
+             "console, boot the VM, then come back with the public IP.")
+        public_ip = _prompt_public_ip()
+        if not public_ip:
+            _say(f"deferred. Resume with: mthydra-ops ru-bringup "
+                 f"--box-id {box_id} --public-ip <ip>")
+            return 0
+
+    # Phase 3: reachability (skip if box already live).
+    info = box_info(box_id)
+    if info is None:
+        _err(f"box {box_id} not found in ru-box-list")
+        return 3
+    if info.get("state") == "live":
+        _say("box already live — skipping reachability + mark-live")
+    else:
+        sni = info.get("sni") or ""
+        _say(f"reachability: waiting for TLS handshake on {public_ip}:443 "
+             f"(sni={sni!r}, timeout={args.reach_timeout}s)")
+        ok = wait_for_reachable(public_ip, 443, sni,
+                                timeout_s=args.reach_timeout,
+                                on_progress=lambda e: None)
+        if not ok:
+            _err(f"box {public_ip}:443 not reachable within "
+                 f"{args.reach_timeout}s — check provider firewall + "
+                 f"cloud-init logs on the VM")
+            return 4
+        # Phase 4: mark-live.
+        _say(f"mark-live: {box_id} @ {public_ip}")
+        mark_live(box_id, public_ip)
+
+    # Phase 5: summary.
+    canary_note = ("CANARY — next: §3.4 soak (submit probe-record from "
+                   "each registered vantage)" if args.canary
+                   else "in rotation")
+    _say(f"done: box {box_id} live @ {public_ip}; {canary_note}")
+    return 0
+
+
 def parse_cohort(*, flags: list[str] | None, file_path,
                  expected_count: int) -> list[CanaryTarget]:
     """Accept repeated `provider=X,region=Y` flags OR a file with one such

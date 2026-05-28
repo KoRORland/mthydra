@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import ssl
 import subprocess
@@ -200,3 +201,86 @@ def test_parse_cohort_from_yaml_like_file(tmp_path):
                  "provider=firstvds,region=ru-spb-1\n")
     targets = ru_bringup.parse_cohort(flags=None, file_path=f, expected_count=2)
     assert len(targets) == 2 and targets[0].provider == "selectel"
+
+
+def _bringup_args(tmp_path, **over):
+    base = dict(
+        provider="selectel", region="ru-msk-1", canary=True,
+        agent_source_url="https://b2/a.tar.gz",
+        agent_source_sha256="deadbeef",
+        descriptor_refresh_url="https://b2/desc",
+        cloud_init_out=str(tmp_path / "ci.yaml"),
+        public_ip="1.2.3.4",     # skip the input() prompt
+        box_id=None,
+        reach_timeout=1,
+        non_interactive=True,
+        verbose=False, quiet=True, dry_run=False,
+        config=None,
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def test_cmd_ru_bringup_happy_path(monkeypatch, tmp_path):
+    box_state = {"v": "provisioning"}
+    def fake_run(*args, check=True, capture=False, env=None):
+        sub = args[0]
+        if sub == "provision-seed":
+            return subprocess.CompletedProcess(args, 0, "",
+                "provision-seed: created box_id=b-c1\n")
+        if sub == "ru-box-list":
+            return subprocess.CompletedProcess(args, 0,
+                json.dumps([{"box_id": "b-c1", "state": box_state["v"],
+                             "sni": "cover.example"}]), "")
+        if sub == "ru-box-mark-live":
+            box_state["v"] = "live"
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "wait_for_reachable",
+                        lambda *a, **kw: True)
+
+    rc = ru_bringup.cmd_ru_bringup(_bringup_args(tmp_path))
+    assert rc == 0
+    assert box_state["v"] == "live"
+
+
+def test_cmd_ru_bringup_resume_skips_mint(monkeypatch, tmp_path):
+    calls = []
+    def fake_run(*args, **kw):
+        calls.append(args[0])
+        if args[0] == "ru-box-list":
+            return subprocess.CompletedProcess(args, 0,
+                json.dumps([{"box_id": "b-existing", "state": "provisioning",
+                             "sni": "cover.example"}]), "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "wait_for_reachable", lambda *a, **kw: True)
+
+    rc = ru_bringup.cmd_ru_bringup(_bringup_args(tmp_path, box_id="b-existing"))
+    assert rc == 0
+    assert "provision-seed" not in calls   # mint skipped on resume
+
+
+def test_cmd_ru_bringup_aborts_on_unreachable(monkeypatch, tmp_path):
+    def fake_run(*args, **kw):
+        if args[0] == "provision-seed":
+            return subprocess.CompletedProcess(args, 0, "",
+                "provision-seed: created box_id=b-c1\n")
+        if args[0] == "ru-box-list":
+            return subprocess.CompletedProcess(args, 0,
+                json.dumps([{"box_id": "b-c1", "state": "provisioning",
+                             "sni": "cover.example"}]), "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "wait_for_reachable",
+                        lambda *a, **kw: False)
+
+    rc = ru_bringup.cmd_ru_bringup(_bringup_args(tmp_path))
+    assert rc != 0   # unreachable → non-zero exit
