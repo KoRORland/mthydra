@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json as _json
+import subprocess
 import textwrap
 
 import pytest
@@ -225,3 +227,40 @@ def test_runner_aborts_on_phase_exception(tmp_path):
     rc = install.Runner(phases, ctx).execute()
     assert rc == 1
     assert ran == []  # pipeline stopped before 'b'
+
+
+def test_service_active_probe(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    calls = []
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        rc = 0 if argv[:2] == ["systemctl", "is-active"] else 1
+        return subprocess.CompletedProcess(argv, rc, "active\n", "")
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+    assert install.service_active(ctx) is True
+    assert ["systemctl", "is-active", "mthydra-controller"] in calls
+
+
+def test_db_initialized_probe_false_when_missing(tmp_path):
+    ctx = _ctx(tmp_path)
+    object.__setattr__(ctx.config, "db_path", str(tmp_path / "absent.sqlite"))
+    assert install.db_initialized(ctx) is False
+
+
+def test_descriptor_signed_probe_reads_generation(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(
+        install.Ctx, "run_controller",
+        lambda self, *a, **k: subprocess.CompletedProcess(
+            list(a), 0, _json.dumps({"generation": 3}), ""),
+    )
+    assert install.descriptor_signed(ctx) is True
+
+
+def test_timer_enabled_probe(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(
+        install.subprocess, "run",
+        lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "enabled\n", ""),
+    )
+    assert install.timer_enabled(ctx, "mthydra-daily-check") is True

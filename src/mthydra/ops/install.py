@@ -6,12 +6,16 @@ from __future__ import annotations
 
 import configparser
 import getpass
+import json
 import os
+import pwd
 import re
+import stat as _stat
 import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 _AGE_SECRET_RE = re.compile(r"AGE-SECRET-KEY-1[0-9A-Z]+")
 _BOT_TOKEN_RE = re.compile(r"\d{8,10}:[A-Za-z0-9_-]{35}")
@@ -298,3 +302,98 @@ class Runner:
                 self.ctx.err(f"phase '{ph.name}' failed: {e}")
                 return 1
         return 0
+
+
+# ---------------------------------------------------------------------------
+# State-derived is_satisfied probe functions (N-D4)
+# ---------------------------------------------------------------------------
+
+def _systemctl_ok(*args: str) -> bool:
+    return subprocess.run(
+        ["systemctl", *args], capture_output=True, text=True
+    ).returncode == 0
+
+
+def host_prepared(ctx: Ctx) -> bool:
+    try:
+        pwd.getpwnam("mthydra")
+    except KeyError:
+        return False
+    needed = {
+        "/etc/mthydra": (0o755, "root"),
+        "/var/lib/mthydra": (0o700, "mthydra"),
+        "/var/log/mthydra": (0o755, "mthydra"),
+    }
+    for path, (mode, owner) in needed.items():
+        p = Path(path)
+        if not p.is_dir():
+            return False
+        st = p.stat()
+        if _stat.S_IMODE(st.st_mode) != mode:
+            return False
+        if pwd.getpwuid(st.st_uid).pw_name != owner:
+            return False
+    return True
+
+
+def controller_installed(ctx: Ctx) -> bool:
+    return subprocess.run(
+        [_CONTROLLER_BIN, "--help"], capture_output=True, text=True
+    ).returncode == 0
+
+
+def db_initialized(ctx: Ctx) -> bool:
+    if not Path(ctx.config.db_path).exists():
+        return False
+    return subprocess.run(
+        [_CONTROLLER_BIN, "startup-check", "--db-path", ctx.config.db_path],
+        capture_output=True, text=True,
+    ).returncode == 0
+
+
+def authority_is_real(ctx: Ctx) -> bool:
+    """True if credential_authority holds a real (non-placeholder) key.
+
+    Uses sqlite3 to read the key length (runbook §1.6 verifies the same way).
+    If sqlite3 is unavailable, conservatively assume real so we never re-run
+    authority-migrate-placeholder on an existing DB (which would mint gen 2).
+    """
+    import shutil as _sh
+    if _sh.which("sqlite3") is None:
+        return True
+    out = subprocess.run(
+        ["sqlite3", ctx.config.db_path,
+         "SELECT length(privkey_pem) FROM credential_authority "
+         "ORDER BY generation DESC LIMIT 1;"],
+        capture_output=True, text=True,
+    )
+    return out.returncode == 0 and out.stdout.strip().isdigit() and int(out.stdout.strip()) > 200
+
+
+def controller_toml_present(ctx: Ctx) -> bool:
+    return Path(ctx.config.config_path).exists()
+
+
+def age_recipient_file_present(ctx: Ctx) -> bool:
+    return Path("/etc/mthydra/age-recipient.txt").exists()
+
+
+def service_active(ctx: Ctx) -> bool:
+    return _systemctl_ok("is-active", "mthydra-controller")
+
+
+def descriptor_signed(ctx: Ctx) -> bool:
+    try:
+        res = ctx.run_controller(
+            "descriptor-show", "--db-path", ctx.config.db_path, "--json",
+            capture=True)
+    except subprocess.CalledProcessError:
+        return False
+    try:
+        return int(json.loads(res.stdout).get("generation", 0)) >= 1
+    except (ValueError, json.JSONDecodeError):
+        return False
+
+
+def timer_enabled(ctx: Ctx, name: str) -> bool:
+    return _systemctl_ok("is-enabled", f"{name}.timer")
