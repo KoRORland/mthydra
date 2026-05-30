@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -2822,10 +2823,35 @@ def _cmd_data_exit_reality_keygen(args) -> int:
             print("data-exit-reality-keygen: could not parse keypair output",
                   file=sys.stderr)
             return 5
-        Path(cfg.data_exit.reality_key_path).parent.mkdir(
-            parents=True, exist_ok=True)
-        Path(cfg.data_exit.reality_key_path).write_text(priv + "\n")
-        Path(cfg.data_exit.reality_key_path).chmod(0o600)
+        key_path = Path(cfg.data_exit.reality_key_path)
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic write: tempfile in same dir → 0600 → fsync → rename → fsync
+        # parent dir. write_text() left a partial file on crash and the next
+        # boot would read a truncated private key (M16).
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=key_path.name + ".", suffix=".tmp",
+            dir=str(key_path.parent),
+        )
+        try:
+            os.chmod(tmp_path, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(priv + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, key_path)
+            dir_fd = os.open(str(key_path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            except OSError:
+                pass    # best-effort on filesystems that reject dir fsync
+            finally:
+                os.close(dir_fd)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
         cover_sni = cfg.data_exit.cover_sni_for(args.node_id)
         set_data_exit_identity(
             conn, args.node_id, cover_sni=cover_sni, reality_pubkey=pub,
