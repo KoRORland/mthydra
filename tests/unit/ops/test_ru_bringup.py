@@ -407,3 +407,46 @@ def test_safe_release_rejects_path_traversal():
     # And accepts plausible release tags.
     assert ru_bringup._safe_release("v2.1.7") == "v2.1.7"
     assert ru_bringup._safe_release("v2.1.7-rc1") == "v2.1.7-rc1"
+
+
+def test_cmd_ru_bringup_auto_fetches_agent_from_manifest(monkeypatch, tmp_path):
+    """When --agent-source-url not provided, ru-bringup reads agent.json."""
+    from mthydra.ops import agent_ops
+    manifest = agent_ops.AgentManifest(
+        url="https://auto/agent.tar.gz", sha256="deadbeef" * 8,
+        published_at="2026-05-30T00:00:00Z",
+        expires_at="2026-06-30T00:00:00Z",
+    )
+    monkeypatch.setattr(ru_bringup, "_resolve_agent",
+                        lambda args, cfg=None: (manifest.url, manifest.sha256))
+
+    box_state = {"v": "provisioning"}
+    def fake_run(*args, check=True, capture=False, env=None):
+        sub = args[0]
+        if sub == "provision-seed":
+            return subprocess.CompletedProcess(args, 0, "",
+                "provision-seed: created box_id=b-1\n")
+        if sub == "ru-box-list":
+            return subprocess.CompletedProcess(args, 0,
+                json.dumps([{"box_id": "b-1", "state": box_state["v"],
+                             "sni": "x"}]), "")
+        if sub == "ru-box-mark-live":
+            box_state["v"] = "live"
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "wait_for_reachable", lambda *a, **kw: True)
+
+    args = argparse.Namespace(
+        provider="timeweb", region="ru-msk-1", canary=False,
+        agent_source_url=None, agent_source_sha256=None,
+        descriptor_refresh_url="https://desc",
+        cloud_init_out=str(tmp_path / "ci.yaml"),
+        public_ip="1.2.3.4", box_id=None, reach_timeout=1,
+        non_interactive=True, verbose=False, quiet=True, dry_run=False,
+        config=None, db_path=str(tmp_path / "x.sqlite"),
+    )
+    rc = ru_bringup.cmd_ru_bringup(args)
+    assert rc == 0

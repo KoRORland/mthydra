@@ -2471,6 +2471,29 @@ def test_cli_vantage_burn_refuses_double_burn(tmp_path, age_recipient, capsys):
     assert rc == 2
 
 
+def test_cli_vantage_set_ssh_persists_columns(tmp_path, age_recipient):
+    db = _h_init(tmp_path, age_recipient)
+    run(["vantage-add", "ru-msk-1",
+         "--label", "ru-msk-1", "--source-kind", "cloud-cis",
+         "--db-path", str(db)])
+    rc = run([
+        "vantage-set-ssh", "ru-msk-1",
+        "--host", "203.0.113.5", "--user", "probe", "--port", "2222",
+        "--key-path", "/var/lib/mthydra/ssh/ru-msk-1.key",
+        "--known-hosts", "/var/lib/mthydra/ssh/known_hosts",
+        "--db-path", str(db),
+    ])
+    assert rc == 0
+    conn = connect(str(db))
+    row = conn.execute(
+        "SELECT ssh_host, ssh_port, ssh_user, ssh_key_path, ssh_known_hosts_path"
+        " FROM probe_vantages WHERE vantage_id=?", ("ru-msk-1",)
+    ).fetchone()
+    assert row == ("203.0.113.5", 2222, "probe",
+                   "/var/lib/mthydra/ssh/ru-msk-1.key",
+                   "/var/lib/mthydra/ssh/known_hosts")
+
+
 def test_cli_profile_pin_and_show(tmp_path, age_recipient, capsys):
     db = _h_init(tmp_path, age_recipient)
     # Seed an image via raw SQL.

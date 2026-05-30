@@ -205,6 +205,35 @@ def _prompt_public_ip() -> str | None:
     return ans or None
 
 
+def _resolve_agent(args, cfg=None) -> tuple[str, str]:
+    """Return (url, sha256). If args.agent_source_url+sha given, use them.
+    Otherwise read /var/lib/mthydra/agent.json; auto-publish if missing or
+    expiry within 24h. Caller passes cfg (or None to load on demand)."""
+    if args.agent_source_url and args.agent_source_sha256:
+        return args.agent_source_url, args.agent_source_sha256
+
+    from . import agent_ops
+    from datetime import UTC, datetime, timedelta
+    manifest = agent_ops.read_manifest()
+    need_publish = manifest is None
+    if manifest is not None:
+        try:
+            exp = datetime.strptime(manifest.expires_at, "%Y-%m-%dT%H:%M:%SZ"
+                                    ).replace(tzinfo=UTC)
+        except ValueError:
+            need_publish = True
+        else:
+            if exp - datetime.now(UTC) < timedelta(hours=24):
+                need_publish = True
+    if need_publish:
+        if cfg is None:
+            cfg = agent_ops._load_cfg(args.db_path, args.config or
+                                      "/etc/mthydra/controller.toml")
+        tar_bytes, sha = agent_ops.package_agent("/opt/mthydra/src/src")
+        manifest = agent_ops.publish_agent(cfg, tar_bytes, sha, ttl_days=7)
+    return manifest.url, manifest.sha256
+
+
 def cmd_ru_bringup(args) -> int:
     # Phase 1: mint (skipped on --box-id resume).
     if args.box_id:
@@ -213,10 +242,12 @@ def cmd_ru_bringup(args) -> int:
     else:
         _say(f"mint: provision-seed for {args.provider}/{args.region}"
              + (" (canary)" if args.canary else ""))
+        agent_url, agent_sha = _resolve_agent(args)
+        _say(f"agent: {agent_url[:60]}…  sha={agent_sha[:12]}…")
         box_id = mint_seed(
             args.provider, args.region, canary=args.canary,
-            agent_source_url=args.agent_source_url,
-            agent_source_sha256=args.agent_source_sha256,
+            agent_source_url=agent_url,
+            agent_source_sha256=agent_sha,
             descriptor_refresh_url=args.descriptor_refresh_url,
             cloud_init_out=args.cloud_init_out,
         )

@@ -1,5 +1,7 @@
+"""Tests for mthydra.ops.agent_ops — package + publish ru_agent."""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import tarfile
@@ -15,7 +17,6 @@ def test_package_agent_includes_ru_agent_and_init(tmp_path):
     (src / "mthydra" / "__init__.py").write_text("# mthydra root pkg\n")
     (src / "mthydra" / "ru_agent" / "__init__.py").write_text("")
     (src / "mthydra" / "ru_agent" / "__main__.py").write_text("# agent main\n")
-    # Junk that MUST be excluded:
     (src / "mthydra" / "ru_agent" / "__pycache__").mkdir()
     (src / "mthydra" / "ru_agent" / "__pycache__" / "x.pyc").write_bytes(b"x")
     (src / "mthydra" / "ru_agent" / "stale.pyc").write_bytes(b"y")
@@ -65,10 +66,8 @@ class _FakeCfg:
 def test_publish_agent_uploads_and_writes_manifest(monkeypatch, tmp_path):
     fake = _FakeS3Client()
     monkeypatch.setattr(agent_ops, "_make_s3_client", lambda cfg: fake)
-    monkeypatch.setattr(agent_ops, "_get_s3_credentials",
-                        lambda cfg: ("AKIA", "SECRET"))
-    monkeypatch.setattr(agent_ops, "AGENT_MANIFEST_PATH",
-                        tmp_path / "agent.json")
+    monkeypatch.setattr(agent_ops, "_get_s3_credentials", lambda cfg: ("AKIA", "SECRET"))
+    monkeypatch.setattr(agent_ops, "AGENT_MANIFEST_PATH", tmp_path / "agent.json")
 
     m = agent_ops.publish_agent(_FakeCfg(), tar_bytes=b"hello",
                                 sha="0123456789abcdef" * 4, ttl_days=7)
@@ -80,8 +79,7 @@ def test_publish_agent_uploads_and_writes_manifest(monkeypatch, tmp_path):
     assert on_disk["sha256"] == m.sha256
 
 
-def test_publish_agent_skips_when_manifest_fresh_and_sha_matches(
-        monkeypatch, tmp_path):
+def test_publish_agent_skips_when_manifest_fresh_and_sha_matches(monkeypatch, tmp_path):
     sha = "abc" + "0" * 61
     manifest_path = tmp_path / "agent.json"
     now = datetime.now(UTC)
@@ -92,11 +90,43 @@ def test_publish_agent_skips_when_manifest_fresh_and_sha_matches(
         "expires_at": (now + timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }))
     monkeypatch.setattr(agent_ops, "AGENT_MANIFEST_PATH", manifest_path)
-
-    def _boom_s3(cfg):
-        raise AssertionError("should not call S3")
-
-    monkeypatch.setattr(agent_ops, "_make_s3_client", _boom_s3)
-    m = agent_ops.publish_agent(_FakeCfg(), tar_bytes=b"x",
-                                sha=sha, ttl_days=7)
+    fake = _FakeS3Client()
+    monkeypatch.setattr(agent_ops, "_make_s3_client",
+                        lambda cfg: (_ for _ in ()).throw(
+                            AssertionError("should not call S3")))
+    m = agent_ops.publish_agent(_FakeCfg(), tar_bytes=b"x", sha=sha, ttl_days=7)
     assert m.url == "https://existing.example/agent.tar.gz"
+    assert fake.put_calls == []
+
+
+def test_cmd_agent_publish_tars_uploads_and_prints_manifest(monkeypatch, tmp_path):
+    src = tmp_path / "src"
+    (src / "mthydra" / "ru_agent").mkdir(parents=True)
+    (src / "mthydra" / "__init__.py").write_text("")
+    (src / "mthydra" / "ru_agent" / "__init__.py").write_text("")
+
+    monkeypatch.setattr(agent_ops, "AGENT_MANIFEST_PATH",
+                        tmp_path / "agent.json")
+
+    class _FakeCfg2(_FakeCfg):
+        pass
+    monkeypatch.setattr(agent_ops, "_load_cfg",
+                        lambda db, config: _FakeCfg2())
+    captured = {"sha": None}
+    def _fake_publish(cfg, tar_bytes, sha, *, ttl_days, bucket=None):
+        captured["sha"] = sha
+        return agent_ops.AgentManifest(
+            url="https://fake/x", sha256=sha,
+            published_at="2026-05-30T00:00:00Z",
+            expires_at="2026-06-06T00:00:00Z")
+    monkeypatch.setattr(agent_ops, "publish_agent", _fake_publish)
+
+    args = argparse.Namespace(
+        ttl_days=7, source_dir=str(src),
+        db_path=str(tmp_path / "x.sqlite"),
+        config=str(tmp_path / "c.toml"),
+        verbose=False, quiet=True,
+    )
+    rc = agent_ops.cmd_agent_publish(args)
+    assert rc == 0
+    assert captured["sha"]

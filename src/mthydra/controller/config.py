@@ -124,6 +124,9 @@ class ProbeConfig:
     coverage_window_seconds: int
     probe_vantage_ttl_days: int
     probe_audit_sweep_interval_seconds: int
+    runner_enabled: bool = True
+    runner_interval_seconds: int = 1800
+    runner_max_concurrent: int = 4
 
 
 @dataclass(frozen=True)
@@ -449,6 +452,13 @@ def _load_probe(data: dict) -> ProbeConfig:
             "probe.probe_audit_sweep_interval",
             sec.get("probe_audit_sweep_interval", 300),
         ),
+        runner_enabled=bool(sec.get("runner_enabled", True)),
+        runner_interval_seconds=_require_positive(
+            "probe.runner_interval_seconds",
+            sec.get("runner_interval_seconds", 1800), positive=True),
+        runner_max_concurrent=_require_positive(
+            "probe.runner_max_concurrent",
+            sec.get("runner_max_concurrent", 4), positive=True),
     )
 
 

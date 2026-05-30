@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -398,7 +398,12 @@ _STATEMENTS: list[str] = [
       retired_at   TEXT,
       burned_at    TEXT,
       burn_reason  TEXT,
-      notes        TEXT
+      notes        TEXT,
+      ssh_host              TEXT,
+      ssh_port              INTEGER,
+      ssh_user              TEXT,
+      ssh_key_path          TEXT,
+      ssh_known_hosts_path  TEXT
     )
     """,
     """
@@ -748,6 +753,25 @@ def migrate_v13_to_v14(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
+    """Idempotent v14 → v15: add SSH config columns to probe_vantages."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(probe_vantages)")}
+    for col, decl in (
+        ("ssh_host", "TEXT"),
+        ("ssh_port", "INTEGER"),
+        ("ssh_user", "TEXT"),
+        ("ssh_key_path", "TEXT"),
+        ("ssh_known_hosts_path", "TEXT"),
+    ):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE probe_vantages ADD COLUMN {col} {decl}")
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (15, _now()),
+    )
+    conn.commit()
+
+
 def migrate_v12_to_v13(conn: sqlite3.Connection) -> None:
     """Idempotent v12 → v13 migration: add alert_acks table + index + triggers."""
     conn.executescript(
@@ -1014,4 +1038,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v12_to_v13(conn)
         if current < 14:
             migrate_v13_to_v14(conn)
+        if current < 15:
+            migrate_v14_to_v15(conn)
     conn.commit()

@@ -905,3 +905,13 @@ def test_image_prepare_subcommand_parses_and_routes(monkeypatch):
                         lambda args: called.setdefault("v", 0) or 0)
     rc = m.main(["image-prepare"])
     assert rc == 0 and "v" in called
+
+
+def test_agent_publish_subcommand_parses_and_routes(monkeypatch):
+    from mthydra.ops import agent_ops
+    from mthydra.ops import main as m
+    called = {}
+    monkeypatch.setattr(agent_ops, "cmd_agent_publish",
+                        lambda args: called.setdefault("v", 0) or 0)
+    rc = m.main(["agent-publish"])
+    assert rc == 0 and "v" in called

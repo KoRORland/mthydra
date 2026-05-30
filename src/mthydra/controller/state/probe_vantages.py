@@ -39,6 +39,18 @@ def _row(conn: sqlite3.Connection, vantage_id: str) -> ProbeVantage | None:
     return ProbeVantage(*r) if r else None
 
 
+def set_ssh(conn, vantage_id: str, *, host: str, port: int, user: str,
+            key_path: str, known_hosts_path: str) -> None:
+    cur = conn.execute(
+        "UPDATE probe_vantages SET ssh_host=?, ssh_port=?, ssh_user=?,"
+        " ssh_key_path=?, ssh_known_hosts_path=? WHERE vantage_id=?",
+        (host, port, user, key_path, known_hosts_path, vantage_id),
+    )
+    if cur.rowcount == 0:
+        raise ValueError(f"no probe_vantages row for {vantage_id!r}")
+    conn.commit()
+
+
 def add_candidate(
     conn: sqlite3.Connection,
     *,

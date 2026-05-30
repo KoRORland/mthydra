@@ -503,6 +503,17 @@ def build_parser() -> argparse.ArgumentParser:
     vb.add_argument("--reason", required=True)
     vb.add_argument("--db-path", default=DEFAULT_DB)
 
+    vss = sub.add_parser("vantage-set-ssh",
+                          help="configure SSH access so the probe runner can reach this vantage")
+    vss.add_argument("vantage_id")
+    vss.add_argument("--host", required=True)
+    vss.add_argument("--user", required=True)
+    vss.add_argument("--key-path", required=True, dest="key_path")
+    vss.add_argument("--port", type=int, default=22)
+    vss.add_argument("--known-hosts", default="/var/lib/mthydra/ssh/known_hosts",
+                      dest="known_hosts")
+    vss.add_argument("--db-path", default=DEFAULT_DB)
+
     pp = sub.add_parser("profile-pin",
                           help="pin a known-good profile for an image_version")
     pp.add_argument("image_version")
@@ -999,6 +1010,8 @@ def run(argv: list[str]) -> int:
         return _cmd_vantage_retire(args)
     if args.cmd == "vantage-burn":
         return _cmd_vantage_burn(args)
+    if args.cmd == "vantage-set-ssh":
+        return _cmd_vantage_set_ssh(args)
     if args.cmd == "profile-pin":
         return _cmd_profile_pin(args)
     if args.cmd == "profile-show":
@@ -1542,6 +1555,7 @@ def _cmd_serve(args) -> int:
     from mthydra.controller.shard_manager.wheel import ShardReshuffleWheel
     from mthydra.controller.probe.audit_wheel import ProbeAuditWheel
     from mthydra.controller.probe.evaluator import ProbeConfigView
+    from mthydra.controller.probe_runner.wheel import ProbeRunnerWheel
     from mthydra.controller.observability.alerter import AlertSweep
     from mthydra.controller.observability.heartbeat import ObsHeartbeatPublisher
     from mthydra.controller.distribution.publisher import DistributionPublisher
@@ -1604,6 +1618,12 @@ def _cmd_serve(args) -> int:
         sweep_interval_seconds=cfg.probe.probe_audit_sweep_interval_seconds,
         mode=mode,
     )
+    probe_runner = ProbeRunnerWheel(
+        db_path=args.db_path,
+        interval_seconds=cfg.probe.runner_interval_seconds,
+        max_concurrent=cfg.probe.runner_max_concurrent,
+        mode=mode,
+    )
     tg_sink, em_sink = _build_alert_sinks(cfg, mode)
     alerter = AlertSweep(
         db_path=args.db_path,
@@ -1653,6 +1673,8 @@ def _cmd_serve(args) -> int:
         obs_heartbeat.arm()
         dist_publisher.arm()
         dist_user_heartbeat.arm()
+        if cfg.probe.runner_enabled:
+            probe_runner.start()
         print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
@@ -1674,6 +1696,7 @@ def _cmd_serve(args) -> int:
         obs_heartbeat.disarm()
         dist_publisher.disarm()
         dist_user_heartbeat.disarm()
+        probe_runner.shutdown(wait=False)
         print("serve: stopped", flush=True)
     return 0
 
@@ -3265,6 +3288,22 @@ def _cmd_vantage_burn(args) -> int:
         return 0
     finally:
         conn.close()
+
+
+def _cmd_vantage_set_ssh(args) -> int:
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state import probe_vantages as _pv
+    with connect(args.db_path) as conn:
+        try:
+            _pv.set_ssh(conn, args.vantage_id,
+                        host=args.host, port=args.port, user=args.user,
+                        key_path=args.key_path,
+                        known_hosts_path=args.known_hosts)
+        except ValueError as e:
+            print(f"vantage-set-ssh: {e}", file=sys.stderr)
+            return 2
+    print(f"vantage-set-ssh: {args.vantage_id} updated")
+    return 0
 
 
 def _read_profile_json(arg: str) -> str:

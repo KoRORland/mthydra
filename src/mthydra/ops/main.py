@@ -991,6 +991,16 @@ def build_parser() -> argparse.ArgumentParser:
     ip.add_argument("--quiet", action="store_true")
     ip.add_argument("--dry-run", action="store_true")
 
+    ap = sub.add_parser("agent-publish",
+                        help="tar mthydra/ru_agent + upload to S3 + presign + write agent.json")
+    ap.add_argument("--ttl-days", type=int, default=7)
+    ap.add_argument("--source-dir", default="/opt/mthydra/src/src",
+                    help="root containing mthydra/ru_agent/ and mthydra/__init__.py")
+    ap.add_argument("--db-path", default=_DEFAULT_DB)
+    ap.add_argument("--config", default=_DEFAULT_CONFIG)
+    ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--quiet", action="store_true")
+
     uo = sub.add_parser("user-onboard",
                           help="user-add + user-channels-set + dist-test")
     uo.add_argument("user_id")
@@ -1069,8 +1079,8 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("--region", required=True)
     rb.add_argument("--canary", action="store_true",
                     help="mark as canary (spec D2 soak cohort)")
-    rb.add_argument("--agent-source-url", required=True)
-    rb.add_argument("--agent-source-sha256", required=True)
+    rb.add_argument("--agent-source-url", default=None)
+    rb.add_argument("--agent-source-sha256", default=None)
     rb.add_argument("--descriptor-refresh-url", required=True)
     rb.add_argument("--cloud-init-out", default=None,
                     help="cloud-init bundle path (default /tmp/ru-cloud-init-<box>.yaml)")
@@ -1149,6 +1159,11 @@ def _dispatch_image_prepare(args) -> int:
     return image_ops.cmd_image_prepare(args)
 
 
+def _dispatch_agent_publish(args) -> int:
+    from . import agent_ops
+    return agent_ops.cmd_agent_publish(args)
+
+
 _DISPATCH: dict[str, object] = {
     "setup-host": cmd_setup_host,
     "gen-age-key": cmd_gen_age_key,
@@ -1166,6 +1181,7 @@ _DISPATCH: dict[str, object] = {
     "ru-bringup": _dispatch_ru_bringup,
     "ru-image-cycle": _dispatch_ru_image_cycle,
     "image-prepare": _dispatch_image_prepare,
+    "agent-publish": _dispatch_agent_publish,
 }
 
 

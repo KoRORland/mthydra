@@ -1037,7 +1037,7 @@ def test_v11_to_v12_migration_idempotent(tmp_path):
 # --- spec J2 schema v13 tests ---
 
 def test_schema_version_at_least_13(tmp_path):
-    """Superseded by test_schema_version_is_14. Kept to preserve numbering."""
+    """Superseded by test_schema_version_is_15. Kept to preserve numbering."""
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
     assert SCHEMA_VERSION >= 13
@@ -1113,14 +1113,14 @@ def test_v12_to_v13_migration_idempotent(tmp_path):
 
 # --- spec I2 schema v14 tests ---
 
-def test_schema_version_is_14(tmp_path):
+def test_schema_version_is_15(tmp_path):
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
-    assert SCHEMA_VERSION == 14
+    assert SCHEMA_VERSION == 15
     conn = connect(tmp_path / "state.sqlite")
     apply_schema(conn)
     row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 14
+    assert row[0] == 15
 
 
 def test_v14_probe_credentials_table_present(tmp_path):

@@ -1,4 +1,4 @@
-.PHONY: test test-monitor cov lint smoke smoke-descriptor smoke-install smoke-ru-cycle help
+.PHONY: test test-monitor cov lint smoke smoke-descriptor smoke-install smoke-ru-cycle smoke-eu-automation help
 
 help:
 	@echo "Targets:"
@@ -73,6 +73,20 @@ smoke-ru-cycle:
 	@echo "     mthydra-ops ru-bringup --provider selectel --region ru-msk-1 \\"
 	@echo "         --agent-source-url <b2> --agent-source-sha256 <sha> \\"
 	@echo "         --descriptor-refresh-url <b2>"
+
+smoke-eu-automation:
+	@echo "--- mthydra EU-side RU automation smoke procedure (spec P) ---"
+	@echo "1. On the EU controller host as the mthydra user:"
+	@echo "     mthydra-ops image-prepare --yes        # latest mtg -> built -> promoted"
+	@echo "     mthydra-ops agent-publish              # tar + S3 upload + presign -> /var/lib/mthydra/agent.json"
+	@echo "2. For each vantage:"
+	@echo "     mthydra-controller vantage-set-ssh <id> --host <ip> --user probe --key-path /var/lib/mthydra/ssh/<id>.key"
+	@echo "3. Confirm the probe runner is ticking (within 30 min):"
+	@echo "     mthydra-controller obs-status --json | jq '.obligations_healthy[] | select(.obligation_id==\"probe_coverage_proven\")'"
+	@echo "4. Bring up a box with no extra flags:"
+	@echo "     mthydra-ops ru-bringup --provider timeweb --region ru-msk-1 \\"
+	@echo "         --descriptor-refresh-url <b2>"
+	@echo "5. Probe coverage should stay green automatically going forward."
 
 smoke:
 	@echo "--- mthydra smoke test procedure (spec A §13.4) ---"

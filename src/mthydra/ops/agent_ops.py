@@ -168,3 +168,23 @@ def publish_agent(
         },
     )
     return manifest
+
+
+def _load_cfg(db_path: str, config: str):
+    """Load the controller config + stash db_path for _get_s3_credentials."""
+    from mthydra.controller.config import load_config
+    cfg = load_config(Path(config))
+    cfg._db_path = db_path
+    return cfg
+
+
+def cmd_agent_publish(args) -> int:
+    cfg = _load_cfg(args.db_path, args.config)
+    tar_bytes, sha = package_agent(args.source_dir)
+    manifest = publish_agent(cfg, tar_bytes, sha, ttl_days=args.ttl_days)
+    print(json.dumps({
+        "url": manifest.url, "sha256": manifest.sha256,
+        "published_at": manifest.published_at,
+        "expires_at": manifest.expires_at,
+    }, indent=2, sort_keys=True))
+    return 0

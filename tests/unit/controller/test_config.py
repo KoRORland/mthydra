@@ -10,6 +10,35 @@ def _write(path: Path, content: str) -> Path:
     return path
 
 
+def test_probe_config_defaults_runner_enabled_true(tmp_path):
+    p = _write(
+        tmp_path / "c.toml",
+        """
+        [node]
+        role = "active"
+        hostname = "h"
+        [backup]
+        floor_interval_hours = 24
+        on_change_debounce_seconds = 30
+        endpoint = "https://example"
+        bucket = "b"
+        access_key_id = "k"
+        [backup.retention]
+        keep_daily = 30
+        keep_monthly = 12
+        object_lock_days = 30
+        [gap_monitor]
+        poll_interval_minutes = 30
+        alarm_threshold_hours = 48
+        recipient_email = "op@example.org"
+        """,
+    )
+    cfg = load_config(p)
+    assert cfg.probe.runner_enabled is True
+    assert cfg.probe.runner_interval_seconds == 1800
+    assert cfg.probe.runner_max_concurrent == 4
+
+
 def test_load_valid_config(tmp_path):
     p = _write(
         tmp_path / "c.toml",
