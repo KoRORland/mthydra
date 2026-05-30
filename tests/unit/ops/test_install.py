@@ -445,3 +445,33 @@ def test_load_config_strips_inline_comments(tmp_path):
     assert cfg.git_url == "https://example/m.git"
     assert cfg.b2_endpoint == "https://s3.eu-west-1.amazonaws.com"
     assert ";" not in cfg.hostname and "#" not in cfg.b2_endpoint
+
+
+def test_ctx_say_does_not_double_print_when_log_echoes(tmp_path, capsys):
+    """With --verbose (RedactingLog echo=True), Ctx.say must NOT also print —
+    regression seen on AWS install 2026-05-30, every banner appeared twice."""
+    ini = _write_ini(tmp_path, _FULL_INI)
+    cfg = install.load_config(ini, role="active", promote=False,
+                              interactive=False, env={})
+    log = install.RedactingLog(tmp_path / "l.log", cfg.secret_values(),
+                               echo=True)
+    ctx = install.Ctx(config=cfg, log=log, dry_run=False, quiet=False)
+    ctx.say("hello world")
+    log.close()
+    captured = capsys.readouterr()
+    # Exactly ONE occurrence on stdout (from the log echo, not Ctx.say's print).
+    assert captured.out.count("hello world") == 1
+
+
+def test_ctx_say_prints_when_log_not_echoing(tmp_path, capsys):
+    """Default (no --verbose) still gets terminal output via Ctx.say's print."""
+    ini = _write_ini(tmp_path, _FULL_INI)
+    cfg = install.load_config(ini, role="active", promote=False,
+                              interactive=False, env={})
+    log = install.RedactingLog(tmp_path / "l.log", cfg.secret_values(),
+                               echo=False)
+    ctx = install.Ctx(config=cfg, log=log, dry_run=False, quiet=False)
+    ctx.say("hello world")
+    log.close()
+    captured = capsys.readouterr()
+    assert "hello world" in captured.out

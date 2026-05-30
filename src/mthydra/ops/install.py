@@ -260,13 +260,20 @@ class Ctx:
     def say(self, msg: str) -> None:
         line = f"[mthydra-install] {msg}"
         self.log.write(line + "\n")
-        if not self.quiet:
+        # With --verbose the RedactingLog already echoes every write to stdout;
+        # printing again here would double every banner. Suppress in that case.
+        if not self.quiet and not getattr(self.log, "_echo", False):
             print(line, flush=True)
 
     def err(self, msg: str) -> None:
         line = f"[mthydra-install] ERROR: {msg}"
         self.log.write(line + "\n")
-        print(line, file=sys.stderr, flush=True)
+        # Same double-print guard. Errors always go to stderr though, so even
+        # when --verbose echoes to stdout, we still print to stderr — but only
+        # when not echoing, to avoid duplicating the error text on stdout AND
+        # stderr in the operator's terminal.
+        if not getattr(self.log, "_echo", False):
+            print(line, file=sys.stderr, flush=True)
 
     def run_controller(self, *args, env=None, capture=False):
         cmd = [_CONTROLLER_BIN, *args]
