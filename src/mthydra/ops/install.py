@@ -433,6 +433,18 @@ StandardError=journal
 """
 
 
+def _systemd_safe_path(p: str, *, field: str) -> str:
+    """Reject newlines / NULs in any operator-supplied path interpolated into a
+    systemd unit (defense-in-depth — installer runs as root, so anyone who can
+    edit install.ini already has the keys, but a newline in venv_dir or db_path
+    would inject lines into [Service] otherwise; audit 2026-05-30 L10)."""
+    if "\n" in p or "\r" in p or "\x00" in p:
+        raise ValueError(
+            f"install.ini {field}={p!r} contains a newline / NUL — "
+            f"refusing to write systemd unit with injected lines")
+    return p
+
+
 def write_and_enable_unit(ctx: Ctx, name: str, body: str, enable: bool = True) -> None:
     target = _UNIT_DIR / name
     ctx.say(f"writing {target}")
@@ -445,7 +457,7 @@ def write_and_enable_unit(ctx: Ctx, name: str, body: str, enable: bool = True) -
 
 
 def install_maintenance_timers(ctx: Ctx) -> None:
-    venv = ctx.config.venv_dir
+    venv = _systemd_safe_path(ctx.config.venv_dir, field="install.venv_dir")
     specs = [
         ("mthydra-daily-check", "daily obligation check", "daily-check", "*-*-* 06:17:00"),
         ("mthydra-weekly-scan", "weekly silent-failure scan",
@@ -464,12 +476,15 @@ def install_maintenance_timers(ctx: Ctx) -> None:
 
 
 def install_controller_service(ctx: Ctx) -> None:
+    venv = _systemd_safe_path(ctx.config.venv_dir, field="install.venv_dir")
+    db = _systemd_safe_path(ctx.config.db_path, field="db_path")
+    cfg = _systemd_safe_path(ctx.config.config_path, field="config_path")
     body = (
         "[Unit]\nDescription=mthydra controller\nAfter=network.target\n\n"
         "[Service]\nUser=mthydra\nGroup=mthydra\n"
         "WorkingDirectory=/var/lib/mthydra\n"
-        f"ExecStart={ctx.config.venv_dir}/bin/mthydra-controller serve "
-        f"--db-path {ctx.config.db_path} --config {ctx.config.config_path}\n"
+        f"ExecStart={venv}/bin/mthydra-controller serve "
+        f"--db-path {db} --config {cfg}\n"
         "Restart=on-failure\nRestartSec=5\n"
         "StandardOutput=journal\nStandardError=journal\n\n"
         "[Install]\nWantedBy=multi-user.target\n"

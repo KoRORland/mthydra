@@ -387,3 +387,16 @@ def test_standby_example_loads_passive():
                               interactive=False,
                               env={"B2_APPLICATION_KEY": "x"})
     assert cfg.obs_tg_bot_token == ""  # sinks omitted for passive standby
+
+
+def test_systemd_safe_path_rejects_newlines():
+    # L10 defense-in-depth: refuse newline / NUL in any operator-supplied path
+    # interpolated into a systemd unit.
+    with pytest.raises(ValueError, match="newline"):
+        install._systemd_safe_path("/opt/mthydra\n[Service]\nExecStart=/bad",
+                                   field="install.venv_dir")
+    with pytest.raises(ValueError, match="newline"):
+        install._systemd_safe_path("/opt\x00null", field="db_path")
+    # Plausible paths pass through untouched.
+    assert install._systemd_safe_path("/opt/mthydra/venv",
+                                      field="venv_dir") == "/opt/mthydra/venv"
