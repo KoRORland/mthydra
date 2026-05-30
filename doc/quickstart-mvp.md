@@ -267,15 +267,8 @@ export B2_APPLICATION_KEY='<AWS_SECRET_ACCESS_KEY>'         # from step 1.2
 
 Run the installer:
 ```bash
-sh /tmp/install.sh \
-    --git-url https://github.com/KoRORland/mthydra.git \
-    --config /tmp/install.ini --verbose
+sh /tmp/install.sh --config /tmp/install.ini --verbose
 ```
-
-> **Note on `--git-url`**: recent versions of `install.sh` auto-read it from
-> the `[install] git_url` line in your ini, so you can omit `--git-url` if you
-> like. The explicit `--git-url` works either way and is safer if your local
-> copy of `install.sh` is from before this fix.
 
 The script will:
 1. `apt update && apt install` Python 3.12, git, age, build tools — about 1 minute.

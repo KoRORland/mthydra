@@ -240,7 +240,11 @@ def _build_config(raw: dict[str, str], *, role: str, promote: bool) -> Config:
     )
 
 
-_CONTROLLER_BIN = os.environ.get("MTHYDRA_CONTROLLER", "mthydra-controller")
+# See main.py for why we resolve relative to sys.executable instead of relying
+# on PATH lookup (root's PATH doesn't include /opt/mthydra/venv/bin).
+_CONTROLLER_BIN = os.environ.get("MTHYDRA_CONTROLLER") or str(
+    Path(sys.executable).parent / "mthydra-controller"
+)
 
 
 @dataclass

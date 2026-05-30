@@ -789,3 +789,14 @@ def test_main_routes_ru_bringup_to_cmd_ru_bringup(monkeypatch):
         "--descriptor-refresh-url", "d",
     ])
     assert rc == 0 and "v" in called
+
+
+def test_controller_bin_resolves_to_venv_sibling():
+    """_CONTROLLER_BIN must default to sys.executable's neighbor so root shells
+    without /opt/mthydra/venv/bin on PATH can still find the binary
+    (regression: 2026-05-30 install run on AWS EC2)."""
+    import sys as _sys
+    from pathlib import Path as _Pp
+    from mthydra.ops import main as m
+    expected = str(_Pp(_sys.executable).parent / "mthydra-controller")
+    assert m._CONTROLLER_BIN == expected

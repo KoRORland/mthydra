@@ -40,7 +40,14 @@ _DEFAULT_DB = os.environ.get("MTHYDRA_DB_PATH", "/var/lib/mthydra/state.sqlite")
 _DEFAULT_CONFIG = os.environ.get(
     "MTHYDRA_CONFIG", "/etc/mthydra/controller.toml"
 )
-_CONTROLLER_BIN = os.environ.get("MTHYDRA_CONTROLLER", "mthydra-controller")
+# Resolve mthydra-controller as the sibling of the running mthydra-ops in the
+# same venv bin/. Defaulting to the bare name relies on PATH lookup, and root
+# shells (which `install.sh` runs under) do NOT have /opt/mthydra/venv/bin on
+# PATH — subprocess.run then errors FileNotFoundError. MTHYDRA_CONTROLLER env
+# var still overrides for tests / non-standard layouts.
+_CONTROLLER_BIN = os.environ.get("MTHYDRA_CONTROLLER") or str(
+    Path(sys.executable).parent / "mthydra-controller"
+)
 
 
 # ---------------------------------------------------------------------------
