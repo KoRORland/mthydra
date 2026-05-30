@@ -7,6 +7,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import socket
 import ssl
 import time
@@ -290,7 +291,22 @@ def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+_RELEASE_OK = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+
+
+def _safe_release(release: str) -> str:
+    """Refuse anything that could escape state_dir or be a path-traversal —
+    --release is operator-controlled CLI input that lands in a filename
+    (defense-in-depth; audit 2026-05-30 M13)."""
+    if not _RELEASE_OK.fullmatch(release):
+        raise ValueError(
+            f"--release {release!r} must match [A-Za-z0-9][A-Za-z0-9._-]{{0,63}}"
+        )
+    return release
+
+
 def cmd_ru_image_cycle(args) -> int:  # noqa: C901
+    _safe_release(args.release)
     state_dir = Path(args.state_dir) if getattr(args, "state_dir", None) \
                 else CYCLE_STATE_DIR
     state_dir.mkdir(parents=True, exist_ok=True)

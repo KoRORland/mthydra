@@ -394,3 +394,16 @@ def test_cmd_ru_image_cycle_resume_skips_built_and_done_canaries(monkeypatch, tm
     # (b-c1 already in state with marked_live_at)
     assert seen_subs.count("image-build") == 0
     assert seen_subs.count("provision-seed") == 1
+
+
+def test_safe_release_rejects_path_traversal():
+    # M13 defense-in-depth: --release lands in a filename; refuse traversal.
+    with pytest.raises(ValueError, match="--release"):
+        ru_bringup._safe_release("../../etc/passwd")
+    with pytest.raises(ValueError, match="--release"):
+        ru_bringup._safe_release("v1/with/slash")
+    with pytest.raises(ValueError, match="--release"):
+        ru_bringup._safe_release("")
+    # And accepts plausible release tags.
+    assert ru_bringup._safe_release("v2.1.7") == "v2.1.7"
+    assert ru_bringup._safe_release("v2.1.7-rc1") == "v2.1.7-rc1"
