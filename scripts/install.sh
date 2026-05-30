@@ -6,9 +6,10 @@ set -eu
 
 SUBCMD="install"
 GIT_URL="${MTHYDRA_GIT_URL:-}"
-GIT_REF="${MTHYDRA_GIT_REF:-main}"
+GIT_REF="${MTHYDRA_GIT_REF:-}"
 SRC_DIR="${MTHYDRA_SRC_DIR:-/opt/mthydra/src}"
 VENV_DIR="${MTHYDRA_VENV_DIR:-/opt/mthydra/venv}"
+CFG_FILE=""
 FWD=""   # forwarded args
 
 while [ $# -gt 0 ]; do
@@ -18,10 +19,35 @@ while [ $# -gt 0 ]; do
     --git-ref) GIT_REF="$2"; shift ;;
     --src-dir) SRC_DIR="$2"; shift ;;
     --venv-dir) VENV_DIR="$2"; shift ;;
+    --config) CFG_FILE="$2"; FWD="$FWD --config $2"; shift ;;
     *) FWD="$FWD $1" ;;
   esac
   shift
 done
+
+# If a --config was given, seed any unset shell-layer params from its [install]
+# section so the operator only types git_url / git_ref in ONE place (the ini).
+# Tiny awk-based parser, no extra deps.
+ini_get() {
+  # ini_get FILE SECTION KEY → echoes value or empty
+  [ -r "$1" ] || return 0
+  awk -v section="[$2]" -v key="$3" '
+    $0 == section { in_s = 1; next }
+    /^\[/ { in_s = 0; next }
+    in_s && $0 ~ "^[ \t]*" key "[ \t]*=" {
+      sub(/^[^=]*=[ \t]*/, "")
+      sub(/[ \t]*[;#].*$/, "")
+      sub(/[ \t]*$/, "")
+      print
+      exit
+    }
+  ' "$1"
+}
+if [ -n "$CFG_FILE" ]; then
+  [ -z "$GIT_URL" ] && GIT_URL="$(ini_get "$CFG_FILE" install git_url)"
+  [ -z "$GIT_REF" ] && GIT_REF="$(ini_get "$CFG_FILE" install git_ref)"
+fi
+[ -z "$GIT_REF" ] && GIT_REF="main"   # last-resort default
 
 say() { printf '[install.sh] %s\n' "$1"; }
 
@@ -49,7 +75,10 @@ if [ "${MTHYDRA_SKIP_BUILD:-0}" != "1" ]; then
     git -C "$SRC_DIR" fetch --tags origin
     git -C "$SRC_DIR" checkout "$GIT_REF"
   else
-    [ -n "$GIT_URL" ] || { echo "--git-url required for first run" >&2; exit 2; }
+    [ -n "$GIT_URL" ] || {
+      echo "git_url required: pass --git-url, set MTHYDRA_GIT_URL, or put it in the [install] section of --config" >&2
+      exit 2
+    }
     say "cloning $GIT_URL@$GIT_REF → $SRC_DIR"
     git clone --branch "$GIT_REF" "$GIT_URL" "$SRC_DIR"
   fi
