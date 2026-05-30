@@ -800,3 +800,76 @@ def test_controller_bin_resolves_to_venv_sibling():
     from mthydra.ops import main as m
     expected = str(_Pp(_sys.executable).parent / "mthydra-controller")
     assert m._CONTROLLER_BIN == expected
+
+
+def test_bootstrap_core_chowns_files_to_mthydra_best_effort(tmp_path,
+                                                            monkeypatch):
+    """bootstrap_core typically runs as root (under sudo); the resulting
+    DB/TOML/age-recipient must end up readable by the mthydra user that
+    the systemd unit runs as — otherwise the controller can't read its
+    own config and restarts forever (regression: AWS install 2026-05-30,
+    restart counter at 31)."""
+    from mthydra.ops import main as m
+
+    chown_calls = []
+
+    def fake_chown(path, *, user, group):
+        chown_calls.append((str(path), user, group))
+
+    monkeypatch.setattr(m.shutil, "chown", fake_chown)
+
+    def fake_run(*args, check=True, capture=False, env=None):
+        # DB has to exist after init for the chown loop to fire on it.
+        if args and args[0] == "init":
+            (tmp_path / "x.sqlite").write_text("")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    m.bootstrap_core(
+        fake_run, lambda _msg: None,
+        db_path=str(tmp_path / "x.sqlite"),
+        config_path=str(tmp_path / "c.toml"),
+        age_recipient="age1abc", b2_application_key="SECRET",
+        hostname="h", role="active",
+        b2_endpoint="e", b2_bucket="b", b2_key_id="k",
+        obs_tg_bot_token="t", obs_tg_chat_id="1", obs_smtp_host="s",
+        obs_smtp_port=587, obs_smtp_from="a@b", obs_smtp_to="c@d",
+        obs_smtp_user="u", obs_smtp_pass="p", dist_tg_bot_token="t2",
+        dist_smtp_host="s", dist_smtp_port=587, dist_smtp_from="e@f",
+        dist_smtp_user="u", dist_smtp_pass="p",
+    )
+    chowned = {p for p, _, _ in chown_calls}
+    assert str(tmp_path / "x.sqlite") in chowned
+    assert str(tmp_path / "c.toml") in chowned
+    assert str(tmp_path / "age-recipient.txt") in chowned
+    assert all(u == "mthydra" and g == "mthydra" for _, u, g in chown_calls)
+
+
+def test_bootstrap_core_swallows_chown_when_mthydra_user_absent(tmp_path,
+                                                                  monkeypatch):
+    """In test environments / non-root invocations, chown raises LookupError
+    or PermissionError — must NOT abort bootstrap."""
+    from mthydra.ops import main as m
+
+    def boom(*a, **kw):
+        raise LookupError("no such user 'mthydra'")
+    monkeypatch.setattr(m.shutil, "chown", boom)
+
+    def fake_run(*args, check=True, capture=False, env=None):
+        if args and args[0] == "init":
+            (tmp_path / "x.sqlite").write_text("")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    rc = m.bootstrap_core(
+        fake_run, lambda _msg: None,
+        db_path=str(tmp_path / "x.sqlite"),
+        config_path=str(tmp_path / "c.toml"),
+        age_recipient="age1abc", b2_application_key="SECRET",
+        hostname="h", role="active",
+        b2_endpoint="e", b2_bucket="b", b2_key_id="k",
+        obs_tg_bot_token="t", obs_tg_chat_id="1", obs_smtp_host="s",
+        obs_smtp_port=587, obs_smtp_from="a@b", obs_smtp_to="c@d",
+        obs_smtp_user="u", obs_smtp_pass="p", dist_tg_bot_token="t2",
+        dist_smtp_host="s", dist_smtp_port=587, dist_smtp_from="e@f",
+        dist_smtp_user="u", dist_smtp_pass="p",
+    )
+    assert rc == 0

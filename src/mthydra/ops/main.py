@@ -26,6 +26,7 @@ Run `mthydra-ops <subcommand> --help` for details on each.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -388,7 +389,22 @@ def bootstrap_core(
         say(f"step 4/4: write {rec}")
         rec.write_text(age_recipient + "\n")
         os.chmod(rec, 0o600)
+
+    # bootstrap_core is typically invoked as root (the installer runs under
+    # sudo), so the DB / TOML / age-recipient all end up root:root 0600 —
+    # which the systemd unit, running as mthydra, then cannot read. Chown
+    # them to mthydra:mthydra now. Best-effort: silent when the mthydra
+    # user doesn't exist (tests) or we lack permission (non-root callers).
+    for path in (db, cfg, rec):
+        if path.exists():
+            _chown_mthydra_best_effort(path)
     return 0
+
+
+def _chown_mthydra_best_effort(path) -> None:
+    # mthydra user absent (tests) or not running as root → ignore.
+    with contextlib.suppress(LookupError, PermissionError, FileNotFoundError):
+        shutil.chown(path, user="mthydra", group="mthydra")
 
 
 def cmd_bootstrap(args: argparse.Namespace) -> int:
