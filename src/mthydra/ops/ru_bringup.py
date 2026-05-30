@@ -92,6 +92,7 @@ def mint_seed(provider: str, region: str, *, canary: bool,
     provision-seed has NO --cloud-init-out flag — it prints the bundle to
     stdout. We capture both streams (stdout = bundle, stderr = box_id line)
     via _run_controller_capture_both."""
+    import subprocess as _sp
     argv = [
         "provision-seed",
         "--provider", provider, "--region", region,
@@ -102,7 +103,18 @@ def mint_seed(provider: str, region: str, *, canary: bool,
     ]
     if canary:
         argv.append("--canary")
-    res = _run_controller_capture_both(*argv)
+    try:
+        res = _run_controller_capture_both(*argv)
+    except _sp.CalledProcessError as e:
+        # Surface the controller's own error message. Without this, the
+        # operator just sees "CalledProcessError ... exit status 2" with
+        # no clue WHAT broke (commonly: "no promoted ru_image; run
+        # mthydra-controller image-promote first", or "no candidate_verified
+        # cover_domain_pool entries", or a missing config field).
+        stderr = (e.stderr or "").strip() or "(no stderr captured)"
+        raise RuntimeError(
+            f"provision-seed failed (exit {e.returncode}):\n  {stderr}"
+        ) from e
     box_id = _extract_box_id(res.stderr or "")
     if not box_id:
         raise RuntimeError(

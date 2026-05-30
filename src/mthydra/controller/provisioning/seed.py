@@ -116,7 +116,13 @@ class SeedBundle:
             f"  - echo '{self.agent_source_sha256}  /run/mthydra/agent.tar.gz' | sha256sum -c -\n"
             "  - mkdir -p /run/mthydra/agent\n"
             "  - tar -xzf /run/mthydra/agent.tar.gz -C /run/mthydra/agent\n"
-            "  - systemd-run --unit mthydra-agent --description='mthydra RU agent' python3 -m mthydra.ru_agent\n"
+            # PYTHONPATH so `python3 -m mthydra.ru_agent` finds the extracted
+            # tarball (systemd-run runs from / with empty PYTHONPATH otherwise
+            # and the import fails). The tarball is expected to contain
+            # mthydra/ru_agent/* at its top level.
+            "  - systemd-run --unit mthydra-agent --description='mthydra RU agent'"
+            " --setenv=PYTHONPATH=/run/mthydra/agent"
+            " python3 -m mthydra.ru_agent\n"
         )
         return yaml.encode("utf-8")
 
