@@ -81,7 +81,14 @@ def render_sing_box_config(
 
 
 def write_atomic(path: Path | str, content: bytes) -> None:
-    """Write content to path via tempfile + os.replace in the same directory."""
+    """Write content to path via tempfile + fsync + os.replace + dir-fsync.
+
+    Without the fsyncs, os.replace alone is not crash-durable: the rename can
+    land in the page cache while the file contents do not, so a power cut
+    after rename but before background flush leaves a (renamed) empty/partial
+    file. fsync the file before rename, and fsync the parent dir after the
+    rename, so both the contents and the rename itself are durable.
+    (Audit ref: 2026-05-30 M17.)"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(
@@ -90,7 +97,16 @@ def write_atomic(path: Path | str, content: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp_path, path)
+        dir_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass    # best-effort; some filesystems reject directory fsync
+        finally:
+            os.close(dir_fd)
     except Exception:
         try:
             os.unlink(tmp_path)
