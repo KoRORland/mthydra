@@ -27,6 +27,7 @@ def decrypt_blob(blob_path: Path | str, identity_path: Path | str, out: Path | s
             ["age", "-d", "-i", str(identity_path), "-o", str(out), str(blob_path)],
             check=True,
             capture_output=True,
+            timeout=300,    # match age_crypt.encrypt_file (L18, audit 2026-05-30)
         )
     except subprocess.CalledProcessError as e:
         raise DecryptError(
@@ -34,3 +35,5 @@ def decrypt_blob(blob_path: Path | str, identity_path: Path | str, out: Path | s
         ) from e
     except FileNotFoundError as e:
         raise DecryptError("age binary not on PATH") from e
+    except subprocess.TimeoutExpired as e:
+        raise DecryptError(f"age decrypt timed out after {e.timeout}s") from e
