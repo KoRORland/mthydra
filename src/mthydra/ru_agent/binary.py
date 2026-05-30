@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -44,5 +46,29 @@ def download_and_verify(
         )
 
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(content)
-    out.chmod(0o755)
+    # Atomic write: tempfile in the same directory → fsync → chmod → rename →
+    # fsync directory. Without this, a power cut mid-write leaves a partial
+    # binary on disk and the supervisor would try to exec it next boot.
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=out.name + ".", suffix=".tmp", dir=str(out.parent),
+    )
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o755)
+        os.replace(tmp_path, out)
+        dir_fd = os.open(str(out.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass    # some filesystems can't fsync a directory; best-effort
+        finally:
+            os.close(dir_fd)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
