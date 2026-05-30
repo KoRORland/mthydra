@@ -213,6 +213,20 @@ class AlertSweep:
 _OFFLINE_SINK = DryRunSink(label="offline")
 
 
+def _fmt_details(raw: str | None) -> str:
+    """Pretty-print a JSON details string into indented lines. Falls back
+    to the raw value if it's not valid JSON or is None."""
+    if raw is None:
+        return "  (none)"
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return f"  {raw}"
+    if isinstance(data, dict):
+        return "\n".join(f"  {k}: {v}" for k, v in data.items())
+    return f"  {raw}"
+
+
 def _build_decisions(
     snap: Snapshot, staleness_alert_seconds: int,
 ) -> list[tuple[str, str, str, str | None, str, str]]:
@@ -222,7 +236,12 @@ def _build_decisions(
 
     for a in snap.anti_obligations:
         subject = f"[{a.severity}] {a.kind}" + (f" :: {a.target}" if a.target else "")
-        body = f"obligation_id: {a.obligation_id}\nlast_proven_at: {a.last_proven_at}\ndetails: {a.details}"
+        details_fmt = _fmt_details(a.details)
+        body = (
+            f"obligation_id: {a.obligation_id}\n"
+            f"last_proven_at: {a.last_proven_at}\n"
+            f"details:\n{details_fmt}"
+        )
         out.append((a.severity, a.obligation_id, a.kind, a.target, subject, body))
 
     for o in snap.obligations_overdue:
