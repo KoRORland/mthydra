@@ -27,3 +27,32 @@ def resolve_latest_tag(*, upstream_repo: str, github_api_url: str) -> str:
         raise ImageOpsError(
             f"GitHub releases/latest for {upstream_repo!r} has no tag_name")
     return str(tag)
+
+
+def default_profile_json(tag: str, arch: str) -> dict:
+    """Minimal placeholder profile for MVP image-prepare flows. NOT a real
+    captured profile — a real one comes from running probes against a soaked
+    canary box and recording the observed handshake/timing fingerprints."""
+    return {
+        "image_version": f"iv-{tag}",
+        "transport_build_hash": f"placeholder-{tag}-{arch}",
+        "tls_handshake": {
+            "expected_cipher_order": [
+                "TLS_AES_128_GCM_SHA256",
+                "TLS_AES_256_GCM_SHA384",
+                "TLS_CHACHA20_POLY1305_SHA256",
+            ],
+            "expected_extensions": [
+                "server_name", "supported_versions",
+                "key_share", "supported_groups",
+            ],
+        },
+        "malformed_input_response": {
+            "tcp_reset_within_ms": 250,
+            "no_application_layer_response": True,
+        },
+        "expected_surface": [443],
+        "baseline_latency_ms": {"p50": 50, "p95": 200},
+        "notes": "MVP placeholder — replace with a real profile captured "
+                 "from a soaked canary before relying on probe verdicts.",
+    }

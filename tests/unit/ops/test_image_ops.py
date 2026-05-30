@@ -38,3 +38,14 @@ def test_resolve_latest_tag_raises_on_non_200(monkeypatch):
     with pytest.raises(image_ops.ImageOpsError, match="404"):
         image_ops.resolve_latest_tag(upstream_repo="x/y",
                                      github_api_url="https://api.github.com")
+
+
+def test_default_profile_json_has_required_schema_fields():
+    p = image_ops.default_profile_json("v2.2.8", "linux-amd64")
+    assert p["image_version"] == "iv-v2.2.8"
+    assert p["transport_build_hash"]
+    assert "tls_handshake" in p
+    assert "expected_surface" in p
+    assert p["expected_surface"] == [443]
+    assert "baseline_latency_ms" in p
+    assert p["notes"].startswith("MVP placeholder")
