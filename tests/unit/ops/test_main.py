@@ -873,3 +873,25 @@ def test_bootstrap_core_swallows_chown_when_mthydra_user_absent(tmp_path,
         dist_smtp_user="u", dist_smtp_pass="p",
     )
     assert rc == 0
+
+
+def test_setup_host_core_adds_usermod_for_existing_user(monkeypatch):
+    """setup_host_core must run `usermod --shell /bin/bash --home
+    /var/lib/mthydra mthydra` so operators can `sudo -u mthydra -i`
+    (regression: earlier installs created the user with /usr/sbin/nologin
+    + /nonexistent home, breaking the quickstart §5.2 login)."""
+    from mthydra.ops import main as m
+
+    seen = []
+    def run_step(argv, _allow_fail):
+        seen.append(argv)
+        return 0
+
+    rc = m.setup_host_core(run_step, dry_run=False)
+    assert rc == 0
+    # adduser AND usermod both present with the right shell + home.
+    adduser = next(a for a in seen if a and a[0] == "adduser")
+    usermod = next(a for a in seen if a and a[0] == "usermod")
+    assert "/bin/bash" in adduser and "/var/lib/mthydra" in adduser
+    assert "/bin/bash" in usermod and "/var/lib/mthydra" in usermod
+    assert "mthydra" in usermod

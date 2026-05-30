@@ -131,10 +131,18 @@ def setup_host_core(run_step, *, dry_run: bool) -> int:
     # List-form (shell=False) so there is no shell to inject into. Each step is
     # (argv, allow_fail); adduser is allowed to fail (idempotent re-run when the
     # user already exists), replacing the old `|| true`.
+    # --shell /bin/bash + --home /var/lib/mthydra so the operator can `sudo -u
+    # mthydra -i` to run controller commands interactively. Default --system
+    # users get /usr/sbin/nologin + /nonexistent which makes -i fail with
+    # "This account is currently not available." The usermod step force-fixes
+    # users created by earlier versions of this installer (idempotent).
     steps: list[tuple[list[str], bool]] = [
         (["apt", "update"], False),
         (["apt", "install", "-y", *pkgs], False),
-        (["adduser", "--system", "--group", "--no-create-home", user], True),
+        (["adduser", "--system", "--group", "--shell", "/bin/bash",
+          "--home", "/var/lib/mthydra", "--no-create-home", user], True),
+        (["usermod", "--shell", "/bin/bash",
+          "--home", "/var/lib/mthydra", user], True),
     ]
     for path, owner, mode in dirs:
         steps.append((["mkdir", "-p", path], False))
