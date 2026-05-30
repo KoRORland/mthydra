@@ -35,15 +35,19 @@ def mark_burned(
             "INSERT INTO burned_domains (domain, burned_at, reason, last_box_id, details) VALUES (?, ?, ?, ?, ?)",
             (domain, at, reason, last_box_id, details),
         )
-        conn.execute("COMMIT")
+        # Audit row must commit in the SAME transaction as the burn — otherwise a
+        # crash between commit-the-burn and write-the-audit drops the audit trail
+        # for the single most security-sensitive cover-pool operation (spec audit
+        # 2026-05-30 M11). log_event() ends with conn.commit(), so we DELETE +
+        # INSERT-burned + INSERT-audit + commit are all one atomic txn here.
+        log_event(
+            conn,
+            ts=at,
+            actor="controller",
+            action="cover_burned",
+            target=domain,
+            details_json=json.dumps({"reason": reason, "last_box_id": last_box_id}),
+        )
     except Exception:
         conn.execute("ROLLBACK")
         raise
-    log_event(
-        conn,
-        ts=at,
-        actor="controller",
-        action="cover_burned",
-        target=domain,
-        details_json=json.dumps({"reason": reason, "last_box_id": last_box_id}),
-    )
