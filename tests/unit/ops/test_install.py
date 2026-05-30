@@ -400,3 +400,48 @@ def test_systemd_safe_path_rejects_newlines():
     # Plausible paths pass through untouched.
     assert install._systemd_safe_path("/opt/mthydra/venv",
                                       field="venv_dir") == "/opt/mthydra/venv"
+
+
+def test_load_config_strips_inline_comments(tmp_path):
+    """Operators paste install.ini.example with trailing ';...' annotations.
+    Without inline_comment_prefixes they end up in the field value (regression
+    seen on AWS install 2026-05-30)."""
+    ini = tmp_path / "install.ini"
+    ini.write_text(
+        "[install]\n"
+        "git_url = https://example/m.git    ; pasted comment\n"
+        "[node]\n"
+        "hostname = eu1.example.com    ; from step 1.3\n"
+        "[age]\n"
+        "recipient = age1qqp00000000000000000000000000000000000000000000000000q\n"
+        "[backup]\n"
+        "endpoint = https://s3.eu-west-1.amazonaws.com  # AWS S3\n"
+        "bucket = mthydra-prod\n"
+        "key_id = AKIA\n"
+        "application_key = SECRET\n"
+        "[observability.telegram]\n"
+        "bot_token = t\n"
+        "chat_id = 1\n"
+        "[observability.email]\n"
+        "smtp_host = smtp\n"
+        "smtp_port = 587\n"
+        "from_addr = a@b\n"
+        "to_addr = c@d\n"
+        "username = u\n"
+        "password = p\n"
+        "[distribution.telegram]\n"
+        "bot_token = t2\n"
+        "[distribution.email]\n"
+        "smtp_host = smtp\n"
+        "smtp_port = 587\n"
+        "from_addr = e@f\n"
+        "username = u\n"
+        "password = p\n"
+    )
+    cfg = install.load_config(ini, role="active", promote=False,
+                              interactive=False, env={})
+    # No comment text leaked into the values.
+    assert cfg.hostname == "eu1.example.com"
+    assert cfg.git_url == "https://example/m.git"
+    assert cfg.b2_endpoint == "https://s3.eu-west-1.amazonaws.com"
+    assert ";" not in cfg.hostname and "#" not in cfg.b2_endpoint

@@ -71,9 +71,13 @@ fi
 
 if [ "${MTHYDRA_SKIP_BUILD:-0}" != "1" ]; then
   if [ -d "$SRC_DIR/.git" ]; then
-    say "updating existing checkout at $SRC_DIR"
-    git -C "$SRC_DIR" fetch --tags origin
-    git -C "$SRC_DIR" checkout "$GIT_REF"
+    say "updating existing checkout at $SRC_DIR to $GIT_REF"
+    # `git fetch` + `git checkout <branch>` is a no-op when already on that
+    # branch — it does NOT fast-forward. Fetch the ref explicitly and hard-
+    # reset to FETCH_HEAD: works for branches, tags, and commit SHAs alike,
+    # and an installer flow expects no local edits to preserve.
+    git -C "$SRC_DIR" fetch --tags origin "$GIT_REF"
+    git -C "$SRC_DIR" reset --hard FETCH_HEAD
   else
     [ -n "$GIT_URL" ] || {
       echo "git_url required: pass --git-url, set MTHYDRA_GIT_URL, or put it in the [install] section of --config" >&2

@@ -163,7 +163,10 @@ def _required_fields(role: str, promote: bool) -> set[str]:
 
 def load_config(ini_path, *, role, promote, interactive=True, env=None) -> Config:
     env = os.environ if env is None else env
-    parser = configparser.ConfigParser()
+    # inline_comment_prefixes: operators routinely copy install.ini.example with
+    # its '; from step …' annotations still attached. Without this they end up
+    # in the field VALUE (e.g. hostname becomes 'ec2-….amazonaws.com   ; from …').
+    parser = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
     parser.read(ini_path)
 
     raw: dict[str, str] = {}
