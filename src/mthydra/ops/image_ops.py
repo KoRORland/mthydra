@@ -2,7 +2,19 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import urllib.request
+
+from . import main as _main
+
+_run_controller = _main._run_controller
+_DEFAULT_DB = _main._DEFAULT_DB
+_DEFAULT_CONFIG = _main._DEFAULT_CONFIG
+
+
+def _say(msg: str) -> None:
+    _main._say(f"image-prepare: {msg}")
 
 
 class ImageOpsError(RuntimeError):
@@ -56,3 +68,63 @@ def default_profile_json(tag: str, arch: str) -> dict:
         "notes": "MVP placeholder — replace with a real profile captured "
                  "from a soaked canary before relying on probe verdicts.",
     }
+
+
+def cmd_image_prepare(args) -> int:
+    """Resolve latest → build → (optionally) promote, in one wizard."""
+    tag = args.release
+    if tag == "latest":
+        _say(f"resolving latest from {args.upstream_repo}")
+        try:
+            tag = resolve_latest_tag(upstream_repo=args.upstream_repo,
+                                     github_api_url=args.github_api_url)
+        except ImageOpsError as e:
+            _main._err(str(e))
+            return 2
+        _say(f"latest = {tag}")
+
+    asset = f"mtg-{tag}-{args.arch}.tar.gz"
+    _say(f"asset = {asset}")
+
+    if args.profile_json == "auto":
+        import json as _j
+        import tempfile
+        profile = default_profile_json(tag, args.arch)
+        fd, profile_path = tempfile.mkstemp(prefix="profile-", suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            _j.dump(profile, f, indent=2, sort_keys=True)
+        _say(f"placeholder profile written to {profile_path}")
+    else:
+        profile_path = args.profile_json
+
+    try:
+        _run_controller(
+            "image-build", "--release", tag, "--asset", asset,
+            "--profile-json", profile_path,
+            "--db-path", args.db_path, "--config", args.config,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        _main._err(f"image-build failed (exit {e.returncode}): see above")
+        return e.returncode
+
+    if not args.yes:
+        if args.non_interactive:
+            _say(f"non-interactive without --yes — image iv-{tag} stays candidate")
+            return 0
+        ans = input(f"Promote iv-{tag}? [y/N] ").strip().lower()
+        if ans not in ("y", "yes"):
+            _say(f"promotion declined — iv-{tag} stays candidate")
+            return 0
+    try:
+        _run_controller(
+            "image-promote", f"iv-{tag}",
+            "--evidence", f"mthydra-ops image-prepare auto-promote {tag}",
+            "--db-path", args.db_path, "--config", args.config,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        _main._err(f"image-promote failed (exit {e.returncode}): see above")
+        return e.returncode
+    _say(f"iv-{tag} promoted")
+    return 0

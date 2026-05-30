@@ -895,3 +895,13 @@ def test_setup_host_core_adds_usermod_for_existing_user(monkeypatch):
     assert "/bin/bash" in adduser and "/var/lib/mthydra" in adduser
     assert "/bin/bash" in usermod and "/var/lib/mthydra" in usermod
     assert "mthydra" in usermod
+
+
+def test_image_prepare_subcommand_parses_and_routes(monkeypatch):
+    from mthydra.ops import image_ops
+    from mthydra.ops import main as m
+    called = {}
+    monkeypatch.setattr(image_ops, "cmd_image_prepare",
+                        lambda args: called.setdefault("v", 0) or 0)
+    rc = m.main(["image-prepare"])
+    assert rc == 0 and "v" in called

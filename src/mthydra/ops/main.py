@@ -974,6 +974,23 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("image-build-template",
                      help="print a known-good profile JSON skeleton to stdout")
 
+    ip = sub.add_parser("image-prepare",
+                        help="resolve latest mtg release → build → (optionally) promote")
+    ip.add_argument("--release", default="latest")
+    ip.add_argument("--arch", default="linux-amd64")
+    ip.add_argument("--profile-json", default="auto",
+                    help="'auto' = generate a minimal placeholder; otherwise a path")
+    ip.add_argument("--yes", action="store_true",
+                    help="auto-promote after build (skip the [y/N] prompt)")
+    ip.add_argument("--non-interactive", action="store_true")
+    ip.add_argument("--db-path", default=_DEFAULT_DB)
+    ip.add_argument("--config", default=_DEFAULT_CONFIG)
+    ip.add_argument("--upstream-repo", default="9seconds/mtg")
+    ip.add_argument("--github-api-url", default="https://api.github.com")
+    ip.add_argument("--verbose", action="store_true")
+    ip.add_argument("--quiet", action="store_true")
+    ip.add_argument("--dry-run", action="store_true")
+
     uo = sub.add_parser("user-onboard",
                           help="user-add + user-channels-set + dist-test")
     uo.add_argument("user_id")
@@ -1127,6 +1144,11 @@ def _dispatch_ru_image_cycle(args) -> int:
     return ru_bringup.cmd_ru_image_cycle(args)
 
 
+def _dispatch_image_prepare(args) -> int:
+    from . import image_ops
+    return image_ops.cmd_image_prepare(args)
+
+
 _DISPATCH: dict[str, object] = {
     "setup-host": cmd_setup_host,
     "gen-age-key": cmd_gen_age_key,
@@ -1143,6 +1165,7 @@ _DISPATCH: dict[str, object] = {
     "install-standby": _dispatch_install_standby,
     "ru-bringup": _dispatch_ru_bringup,
     "ru-image-cycle": _dispatch_ru_image_cycle,
+    "image-prepare": _dispatch_image_prepare,
 }
 
 
