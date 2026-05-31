@@ -1,6 +1,8 @@
 """mthydra-ops upgrade — one-command controller upgrade (spec Q)."""
 from __future__ import annotations
 
+import ast
+import sqlite3
 import subprocess
 import tomllib
 from pathlib import Path
@@ -53,3 +55,43 @@ def _resolve_target_ref(*, ref: str | None, upstream_repo: str,
         return ref
     return _call_resolve_latest_tag(
         upstream_repo=upstream_repo, github_api_url=github_api_url)
+
+
+def _parse_schema_version_constant(schema_py: Path) -> int:
+    """AST-walk schema.py for `SCHEMA_VERSION = <int>`. Avoids importing the
+    new code into the running process (which would conflict with the running
+    module of the same name in sys.modules)."""
+    tree = ast.parse(schema_py.read_text(), filename=str(schema_py))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if (
+                isinstance(target, ast.Name)
+                and target.id == "SCHEMA_VERSION"
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, int)
+            ):
+                return node.value.value
+    raise UpgradeError(
+        f"SCHEMA_VERSION constant not found in {schema_py}")
+
+
+def _current_schema_version(db_path: str) -> int:
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT version FROM schema_version WHERE rowid=1").fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise UpgradeError(f"schema_version row missing in {db_path}")
+    return int(row[0])
+
+
+def _schema_would_migrate(src_dir: Path, db_path: str
+                          ) -> tuple[bool, int, int]:
+    schema_py = (Path(src_dir) / "src" / "mthydra" / "controller"
+                 / "state" / "schema.py")
+    target = _parse_schema_version_constant(schema_py)
+    current = _current_schema_version(db_path)
+    return (target > current, target, current)

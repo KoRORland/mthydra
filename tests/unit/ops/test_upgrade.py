@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -54,3 +56,47 @@ def test_resolve_target_ref_falls_back_to_latest(monkeypatch):
         upstream_repo="KoRORland/mthydra",
         github_api_url="https://api.github.com",
     ) == "v0.1.0"
+
+
+def _seed_schema_db(path: Path, version: int) -> None:
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE schema_version (version INTEGER, applied_at TEXT)")
+    conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                 (version, "2026-05-31T00:00:00Z"))
+    conn.commit()
+    conn.close()
+
+
+def _seed_target_src(src: Path, target_version: int) -> None:
+    (src / "src" / "mthydra" / "controller" / "state").mkdir(parents=True)
+    (src / "src" / "mthydra" / "controller" / "state" / "schema.py").write_text(
+        f"SCHEMA_VERSION = {target_version}\n# rest of file irrelevant for AST\n")
+
+
+def test_schema_would_migrate_true_when_target_higher(tmp_path):
+    db = tmp_path / "state.sqlite"
+    _seed_schema_db(db, 14)
+    src = tmp_path / "src-tree"
+    _seed_target_src(src, 16)
+    would, target, current = upgrade._schema_would_migrate(src, str(db))
+    assert (would, target, current) == (True, 16, 14)
+
+
+def test_schema_would_migrate_false_when_equal(tmp_path):
+    db = tmp_path / "state.sqlite"
+    _seed_schema_db(db, 15)
+    src = tmp_path / "src-tree"
+    _seed_target_src(src, 15)
+    would, _t, _c = upgrade._schema_would_migrate(src, str(db))
+    assert would is False
+
+
+def test_schema_would_migrate_raises_when_constant_missing(tmp_path):
+    db = tmp_path / "state.sqlite"
+    _seed_schema_db(db, 15)
+    src = tmp_path / "src-tree"
+    (src / "src" / "mthydra" / "controller" / "state").mkdir(parents=True)
+    (src / "src" / "mthydra" / "controller" / "state" / "schema.py").write_text(
+        "# no SCHEMA_VERSION constant\n")
+    with pytest.raises(upgrade.UpgradeError, match="SCHEMA_VERSION"):
+        upgrade._schema_would_migrate(src, str(db))
