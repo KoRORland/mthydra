@@ -100,3 +100,43 @@ def test_schema_would_migrate_raises_when_constant_missing(tmp_path):
         "# no SCHEMA_VERSION constant\n")
     with pytest.raises(upgrade.UpgradeError, match="SCHEMA_VERSION"):
         upgrade._schema_would_migrate(src, str(db))
+
+
+def test_record_prior_captures_sha_version_and_backup_gen(monkeypatch, tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / ".git").mkdir()    # make _current_head_sha's "not a git checkout" check pass
+    (src / "pyproject.toml").write_text('[project]\nversion = "0.0.1"\n')
+
+    calls = []
+    def fake_run(*args, **kw):
+        argv = args[0] if args else []
+        calls.append(list(argv))
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(args, 0, "a" * 40 + "\n", "")
+        return subprocess.CompletedProcess(
+            args, 0, "backup-now: pushed generation 42\n", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+
+    prior = upgrade._record_prior(src, "/tmp/db.sqlite", "/tmp/c.toml")
+    assert prior["prior_sha"] == "a" * 40
+    assert prior["prior_version"] == "0.0.1"
+    assert prior["backup_generation"] == 42
+    backup_call = next(c for c in calls if c and "backup-now" in c)
+    assert "--reason" in backup_call
+
+
+def test_record_prior_raises_when_backup_gen_unparsable(monkeypatch, tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / ".git").mkdir()
+    (src / "pyproject.toml").write_text('[project]\nversion = "0.0.1"\n')
+
+    def fake_run(*args, **kw):
+        argv = args[0] if args else []
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(args, 0, "a" * 40 + "\n", "")
+        return subprocess.CompletedProcess(args, 0, "no generation here\n", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    with pytest.raises(upgrade.UpgradeError, match="generation"):
+        upgrade._record_prior(src, "/tmp/db.sqlite", "/tmp/c.toml")

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import ast
+import re
 import sqlite3
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -86,6 +88,43 @@ def _current_schema_version(db_path: str) -> int:
     if row is None:
         raise UpgradeError(f"schema_version row missing in {db_path}")
     return int(row[0])
+
+
+_BACKUP_GEN_RE = re.compile(r"backup-now: pushed generation (\d+)")
+
+
+def _controller_bin() -> str:
+    """Resolve mthydra-controller as the sys.executable sibling — mirrors
+    install.py's fix for the no-PATH root-shell case."""
+    return str(Path(sys.executable).parent / "mthydra-controller")
+
+
+def _record_prior(src_dir: Path, db_path: str, config_path: str) -> dict:
+    """Snapshot the upgrade's recovery floor: current commit SHA + pyproject
+    version + a freshly-forced backup generation number (parsed from the
+    `backup-now: pushed generation <N>` line on the controller's stdout)."""
+    sha = _current_head_sha(src_dir)
+    version = _pyproject_version(src_dir)
+    res = subprocess.run(
+        [_controller_bin(), "backup-now",
+         "--db-path", db_path, "--config", config_path,
+         "--reason", "pre-upgrade snapshot"],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        raise UpgradeError(
+            f"pre-upgrade backup-now failed (exit {res.returncode}): "
+            f"{res.stderr.strip()}")
+    m = _BACKUP_GEN_RE.search(res.stdout or "")
+    if not m:
+        raise UpgradeError(
+            "could not parse backup generation from backup-now stdout; "
+            f"got: {res.stdout!r}")
+    return {
+        "prior_sha": sha,
+        "prior_version": version,
+        "backup_generation": int(m.group(1)),
+    }
 
 
 def _schema_would_migrate(src_dir: Path, db_path: str
