@@ -915,3 +915,24 @@ def test_agent_publish_subcommand_parses_and_routes(monkeypatch):
                         lambda args: called.setdefault("v", 0) or 0)
     rc = m.main(["agent-publish"])
     assert rc == 0 and "v" in called
+
+
+def test_upgrade_subcommand_parses_and_routes(monkeypatch):
+    from mthydra.ops import main as m
+    from mthydra.ops import upgrade
+    called = {}
+    def _fake(args):
+        called["v"] = args
+        return 0
+    monkeypatch.setattr(upgrade, "cmd_upgrade", _fake)
+    rc = m.main([
+        "upgrade", "--ref", "v0.0.2", "--allow-schema-migration",
+        "--src-dir", "/tmp/src", "--venv-dir", "/tmp/venv",
+        "--db-path", "/tmp/db.sqlite", "--config", "/tmp/c.toml",
+    ])
+    assert rc == 0 and "v" in called
+    args = called["v"]
+    assert args.ref == "v0.0.2"
+    assert args.allow_schema_migration is True
+    assert args.no_auto_rollback is False
+    assert args.unit == "mthydra-controller"

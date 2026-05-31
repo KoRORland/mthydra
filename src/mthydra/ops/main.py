@@ -1131,6 +1131,35 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--dry-run", action="store_true")
     # `promote_yes` is set only by tests via Namespace; no CLI flag (O-D7).
 
+    # upgrade  —  spec Q one-command controller upgrade
+    upg = sub.add_parser(
+        "upgrade",
+        help="upgrade controller in place: backup → checkout → pip → restart → verify",
+    )
+    upg.add_argument("--ref", default=None,
+                     help="target git ref (branch/tag/SHA); default = latest GitHub release tag")
+    upg.add_argument("--no-auto-rollback", action="store_true",
+                     help="do NOT auto-revert to prior SHA on verify failure")
+    upg.add_argument("--allow-schema-migration", action="store_true",
+                     help="acknowledge that this upgrade will perform a forward-only schema migration")
+    upg.add_argument("--src-dir", default="/opt/mthydra/src",
+                     help="path to the controller git checkout")
+    upg.add_argument("--venv-dir", default="/opt/mthydra/venv",
+                     help="path to the controller venv")
+    upg.add_argument("--unit", default="mthydra-controller",
+                     help="systemd unit to stop/start during upgrade")
+    upg.add_argument("--db-path", default=_DEFAULT_DB)
+    upg.add_argument("--config", default=_DEFAULT_CONFIG)
+    upg.add_argument("--upstream-repo", default="KoRORland/mthydra",
+                     help="GitHub repo (owner/name) used when --ref is omitted")
+    upg.add_argument("--github-api-url", default="https://api.github.com")
+    upg.add_argument("--verify-timeout", type=int, default=120,
+                     help="seconds to wait for service to become active after restart")
+    upg.add_argument("--non-interactive", action="store_true")
+    upg.add_argument("--verbose", action="store_true")
+    upg.add_argument("--quiet", action="store_true")
+    upg.add_argument("--dry-run", action="store_true")
+
     return p
 
 
@@ -1164,6 +1193,11 @@ def _dispatch_agent_publish(args) -> int:
     return agent_ops.cmd_agent_publish(args)
 
 
+def _dispatch_upgrade(args) -> int:
+    from . import upgrade
+    return upgrade.cmd_upgrade(args)
+
+
 _DISPATCH: dict[str, object] = {
     "setup-host": cmd_setup_host,
     "gen-age-key": cmd_gen_age_key,
@@ -1182,6 +1216,7 @@ _DISPATCH: dict[str, object] = {
     "ru-image-cycle": _dispatch_ru_image_cycle,
     "image-prepare": _dispatch_image_prepare,
     "agent-publish": _dispatch_agent_publish,
+    "upgrade": _dispatch_upgrade,
 }
 
 

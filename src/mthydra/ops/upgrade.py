@@ -237,3 +237,146 @@ def _start_and_verify(unit: str, db_path: str, config_path: str,
         raise VerifyFailed(
             f"obs-heartbeat-now failed (exit {res.returncode}): "
             f"{res.stderr.strip() or res.stdout.strip()}")
+
+
+# ---------------------------------------------------------------------------
+# orchestrator
+# ---------------------------------------------------------------------------
+
+
+def _say(msg: str) -> None:
+    print(f"[mthydra-upgrade] {msg}", flush=True)
+
+
+def _err(msg: str) -> None:
+    print(f"[mthydra-upgrade] ERROR: {msg}", file=sys.stderr, flush=True)
+
+
+def cmd_upgrade(args) -> int:  # noqa: C901 — orchestrator
+    """One-command controller upgrade (spec Q).
+
+    Exit codes:
+      0 success
+      2 preflight failure
+      3 target-resolution failure
+      4 record-prior (forced backup) failure
+      5 fetch-and-checkout failure
+      6 schema-migration refused without --allow-schema-migration
+      7 pip install failure
+      8 service stop failure
+      9 verify failed (auto-rollback may have run)
+    """
+    src_dir = Path(args.src_dir)
+    venv_dir = Path(args.venv_dir)
+
+    # Phase 1: preflight
+    _say(f"phase 1/8: preflight (src={src_dir})")
+    try:
+        head_sha = _current_head_sha(src_dir)
+    except UpgradeError as e:
+        _err(f"preflight: {e}")
+        return 2
+    _say(f"  current HEAD: {head_sha}")
+    _say(f"  current version: {_pyproject_version(src_dir)}")
+
+    # Phase 2: resolve target ref
+    _say("phase 2/8: resolve-target")
+    try:
+        target_ref = _resolve_target_ref(
+            ref=args.ref,
+            upstream_repo=args.upstream_repo,
+            github_api_url=args.github_api_url,
+        )
+    except Exception as e:
+        _err(f"resolve-target: {e}")
+        return 3
+    _say(f"  target ref: {target_ref}")
+
+    # No-op short-circuit when already at target (works for SHAs; for tags
+    # we still take the safer path through fetch-and-checkout below).
+    if target_ref == head_sha:
+        _say("already at target ref → nothing to do")
+        return 0
+
+    # Phase 3: record-prior (forced backup + SHA snapshot)
+    _say("phase 3/8: record-prior (forced backup-now)")
+    try:
+        prior = _record_prior(src_dir, args.db_path, args.config)
+    except UpgradeError as e:
+        _err(f"record-prior: {e}")
+        return 4
+    _say(f"  prior_sha={prior['prior_sha']} version={prior['prior_version']} "
+         f"backup_generation={prior['backup_generation']}")
+
+    # Phase 4: fetch-and-checkout
+    _say(f"phase 4/8: fetch-and-checkout {target_ref}")
+    try:
+        _fetch_and_checkout(src_dir, target_ref)
+    except UpgradeError as e:
+        _err(f"fetch-and-checkout: {e}")
+        return 5
+
+    # Schema-migration gate (post-checkout: new schema.py is on disk)
+    will_migrate, tgt_schema, cur_schema = _schema_would_migrate(
+        src_dir, args.db_path)
+    if will_migrate and not args.allow_schema_migration:
+        _err(
+            f"this upgrade would migrate schema {cur_schema} -> {tgt_schema}; "
+            "rollback can NOT undo schema changes. Re-run with "
+            "--allow-schema-migration to acknowledge.")
+        _say("rolling back checkout to prior SHA (no install was performed)")
+        try:
+            _fetch_and_checkout(src_dir, prior["prior_sha"])
+        except UpgradeError as e:
+            _err(f"checkout-rollback also failed: {e}")
+        return 6
+    if will_migrate:
+        _say(f"  schema migration acknowledged: {cur_schema} -> {tgt_schema}")
+
+    # Phase 5: pip install
+    _say("phase 5/8: pip install -e .")
+    try:
+        _pip_install(venv_dir, src_dir)
+    except UpgradeError as e:
+        _err(f"pip-install: {e}")
+        return 7
+
+    # Phase 6: stop service
+    _say(f"phase 6/8: stop {args.unit}")
+    try:
+        _stop_service(args.unit)
+    except UpgradeError as e:
+        _err(f"stop-service: {e}")
+        return 8
+
+    # Phase 7: start + verify (with auto-rollback)
+    _say(f"phase 7/8: start + verify {args.unit}")
+    try:
+        _start_and_verify(
+            args.unit, args.db_path, args.config,
+            verify_timeout_s=args.verify_timeout,
+        )
+    except VerifyFailed as e:
+        _err(f"verify failed: {e}")
+        if args.no_auto_rollback:
+            _err("auto-rollback DISABLED (--no-auto-rollback); leaving as-is.")
+            return 9
+        _say(f"auto-rollback: reverting to prior_sha={prior['prior_sha']}")
+        try:
+            _stop_service(args.unit)
+            _rollback_to(src_dir, venv_dir, prior["prior_sha"])
+            _start_and_verify(
+                args.unit, args.db_path, args.config,
+                verify_timeout_s=args.verify_timeout,
+            )
+            _say("auto-rollback: prior version is back up and healthy")
+        except (UpgradeError, VerifyFailed) as e2:
+            _err(f"auto-rollback FAILED: {e2}")
+            _err(f"recovery floor: backup generation {prior['backup_generation']}")
+        return 9
+
+    # Phase 8: summary
+    _say("phase 8/8: upgrade complete")
+    _say(f"  {prior['prior_version']} ({prior['prior_sha'][:12]}) "
+         f"-> {_pyproject_version(src_dir)} ({target_ref})")
+    return 0

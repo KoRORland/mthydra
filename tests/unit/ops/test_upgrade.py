@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -236,3 +237,148 @@ def test_start_and_verify_raises_when_service_never_active(monkeypatch):
     monkeypatch.setattr(upgrade.time, "sleep", lambda s: None)
     with pytest.raises(upgrade.VerifyFailed, match="never became active"):
         upgrade._start_and_verify("x", "/db", "/cfg", verify_timeout_s=1)
+
+
+# ---------------------------------------------------------------------------
+# cmd_upgrade orchestrator tests
+# ---------------------------------------------------------------------------
+
+
+def _upgrade_args(tmp_path, **over):
+    base = dict(
+        ref="v0.0.2", no_auto_rollback=False, allow_schema_migration=False,
+        src_dir=str(tmp_path / "src"),
+        venv_dir=str(tmp_path / "venv"),
+        unit="mthydra-controller",
+        db_path=str(tmp_path / "db.sqlite"),
+        config=str(tmp_path / "controller.toml"),
+        upstream_repo="KoRORland/mthydra",
+        github_api_url="https://api.github.com",
+        verify_timeout=30,
+        non_interactive=True, verbose=False, quiet=True, dry_run=False,
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def _seed_min_src(src: Path) -> str:
+    """Create a minimal src tree that _current_head_sha can read (via the
+    sentinel .git dir + a monkeypatched subprocess returning a fake SHA in
+    the test). Returns the fake prior_sha string the fake_run will yield."""
+    src.mkdir()
+    (src / ".git").mkdir()
+    (src / "pyproject.toml").write_text('[project]\nversion = "0.0.1"\n')
+    return "a" * 40
+
+
+def test_cmd_upgrade_happy_path(monkeypatch, tmp_path):
+    prior_sha = _seed_min_src(tmp_path / "src")
+    _seed_schema_db(tmp_path / "db.sqlite", 15)
+
+    monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
+                        lambda **kw: "v0.0.2")
+    monkeypatch.setattr(upgrade, "_schema_would_migrate",
+                        lambda src, db: (False, 15, 15))
+    monkeypatch.setattr(upgrade, "_fetch_and_checkout", lambda src, ref: None)
+    monkeypatch.setattr(upgrade, "_pip_install", lambda v, s: None)
+    monkeypatch.setattr(upgrade, "_stop_service", lambda u, timeout_s=30: None)
+    monkeypatch.setattr(upgrade, "_start_and_verify",
+                        lambda *a, **kw: None)
+
+    def fake_run(*args, **kw):
+        argv = args[0] if args else []
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(args, 0, prior_sha + "\n", "")
+        if "backup-now" in argv:
+            return subprocess.CompletedProcess(
+                args, 0, "backup-now: pushed generation 7\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+
+    rc = upgrade.cmd_upgrade(_upgrade_args(tmp_path))
+    assert rc == 0
+
+
+def test_cmd_upgrade_auto_rollback_on_verify_fail(monkeypatch, tmp_path):
+    prior_sha = _seed_min_src(tmp_path / "src")
+    _seed_schema_db(tmp_path / "db.sqlite", 15)
+    monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
+                        lambda **kw: "v0.0.2")
+    monkeypatch.setattr(upgrade, "_schema_would_migrate",
+                        lambda src, db: (False, 15, 15))
+    monkeypatch.setattr(upgrade, "_fetch_and_checkout", lambda src, ref: None)
+    monkeypatch.setattr(upgrade, "_pip_install", lambda v, s: None)
+    monkeypatch.setattr(upgrade, "_stop_service", lambda u, timeout_s=30: None)
+    verify_calls = {"n": 0}
+    def fake_verify(*a, **kw):
+        verify_calls["n"] += 1
+        if verify_calls["n"] == 1:
+            raise upgrade.VerifyFailed("simulated post-upgrade fail")
+    monkeypatch.setattr(upgrade, "_start_and_verify", fake_verify)
+    rollback_calls = {"n": 0}
+    def fake_rollback(src, venv, sha):
+        rollback_calls["n"] += 1
+        assert sha == prior_sha
+    monkeypatch.setattr(upgrade, "_rollback_to", fake_rollback)
+
+    def fake_run(*args, **kw):
+        argv = args[0] if args else []
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(args, 0, prior_sha + "\n", "")
+        if "backup-now" in argv:
+            return subprocess.CompletedProcess(
+                args, 0, "backup-now: pushed generation 7\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+
+    rc = upgrade.cmd_upgrade(_upgrade_args(tmp_path))
+    assert verify_calls["n"] == 2
+    assert rollback_calls["n"] == 1
+    assert rc != 0   # upgrade failed even though rollback succeeded
+
+
+def test_cmd_upgrade_refuses_schema_migration_without_flag(monkeypatch, tmp_path):
+    _seed_min_src(tmp_path / "src")
+    _seed_schema_db(tmp_path / "db.sqlite", 15)
+    monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
+                        lambda **kw: "v0.0.2")
+    monkeypatch.setattr(upgrade, "_schema_would_migrate",
+                        lambda src, db: (True, 16, 15))
+    monkeypatch.setattr(upgrade, "_fetch_and_checkout", lambda src, ref: None)
+    monkeypatch.setattr(upgrade, "_rollback_to", lambda src, venv, sha: None)
+    def fake_run(*args, **kw):
+        argv = args[0] if args else []
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(args, 0, "b" * 40 + "\n", "")
+        if "backup-now" in argv:
+            return subprocess.CompletedProcess(
+                args, 0, "backup-now: pushed generation 7\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    rc = upgrade.cmd_upgrade(_upgrade_args(tmp_path))
+    assert rc != 0
+
+
+def test_cmd_upgrade_noop_when_already_at_target(monkeypatch, tmp_path):
+    prior_sha = _seed_min_src(tmp_path / "src")
+    _seed_schema_db(tmp_path / "db.sqlite", 15)
+    monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
+                        lambda **kw: prior_sha)
+    fetched = {"v": False}
+    monkeypatch.setattr(upgrade, "_fetch_and_checkout",
+                        lambda s, r: fetched.__setitem__("v", True))
+    monkeypatch.setattr(upgrade, "_pip_install",
+                        lambda v, s: (_ for _ in ()).throw(
+                            AssertionError("should not pip-install on no-op")))
+    monkeypatch.setattr(upgrade, "_stop_service",
+                        lambda u, timeout_s=30: (_ for _ in ()).throw(
+                            AssertionError("should not stop on no-op")))
+    def fake_run(*args, **kw):
+        argv = args[0] if args else []
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(args, 0, prior_sha + "\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    rc = upgrade.cmd_upgrade(_upgrade_args(tmp_path, ref=prior_sha))
+    assert rc == 0
+    assert fetched["v"] is False
