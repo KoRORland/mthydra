@@ -433,88 +433,115 @@ The `verified_count` field should be `1`.
 
 ---
 
-# Part 7 — First RU box (20 min)
+# Part 7 — First RU box (15 min)
 
-Now you can use the per-box bring-up wizard. It mints a provisioning seed, you boot a TimeWeb VM with that seed as cloud-init, you give the wizard the resulting IP, and it marks the box live.
+Spec P put most of the busywork on the EU controller itself. The flow is now: one command to register the mtg image, one command to publish the ru-agent tarball, one command to bring up the box. The operator's only RU-side touchpoint is pasting the cloud-init bundle into the TimeWeb console and reporting the public IP.
 
-### 7.1 Get the mtg release URL and SHA256
+### 7.1 Register and promote the mtg image (one command)
 
-The RU box needs to download the `mtg` proxy binary at boot. For MVP, host it on your S3 bucket so the URL is signed and you control it:
+On the EU host as the `mthydra` user:
+```bash
+mthydra-ops image-prepare --yes
+```
 
-1. Download the latest mtg release to your laptop: https://github.com/9seconds/mtg/releases — pick the `linux-amd64.tar.gz` (or `linux-arm64.tar.gz` if you'll use Arm RU boxes).
-2. Compute the sha256: `sha256sum mtg-2.1.7-linux-amd64.tar.gz` — save this. Call it `MTG_SHA256`.
-3. Upload to S3: AWS Console → your bucket → **Upload** → drop the file. Note the object key (e.g. `mtg-2.1.7-linux-amd64.tar.gz`).
-4. Create a **presigned URL** so the RU box can download it without AWS credentials:
-   ```bash
-   # On your laptop with aws cli installed:
-   aws s3 presign s3://mthydra-yourname-state/mtg-2.1.7-linux-amd64.tar.gz --expires-in 86400 --region eu-west-1
-   ```
-   Save the URL. Call it `AGENT_SOURCE_URL`.
-5. Similarly, the RU box needs a descriptor-refresh URL — a small file in S3 that the controller updates whenever it signs a new descriptor. For MVP, point at `s3://your-bucket/descriptors/current` (the controller writes here automatically once running). Presign it:
-   ```bash
-   aws s3 presign s3://mthydra-yourname-state/descriptors/current --expires-in 2592000 --region eu-west-1
-   ```
-   30-day expiry. Save as `DESCRIPTOR_REFRESH_URL`.
+This resolves the latest `9seconds/mtg` release on GitHub, picks `linux-amd64`, downloads + sha-verifies the tarball, uploads it to your S3 bucket, generates a minimal placeholder profile, registers the candidate row, and promotes the image. After this:
+```bash
+mthydra-controller image-current
+```
+shows a promoted image (`iv-v2.2.8` or whatever the current upstream release is).
 
-### 7.2 Run the bring-up wizard
+If you want a specific release instead of "latest", pass `--release v2.2.8 --arch linux-amd64`. If you want to inspect the result before promoting, drop `--yes` and the wizard prompts `[y/N]` after build.
 
-On the EU host as the mthydra user:
+### 7.2 Publish the ru-agent tarball (one command)
+
+```bash
+mthydra-ops agent-publish
+```
+
+This tars `mthydra/ru_agent` from your installed source, uploads it to your S3 bucket under `agent/mthydra-ru-agent-<sha12>.tar.gz` (content-addressed — re-publishing the same code is a no-op), presigns the URL for 7 days, and writes `/var/lib/mthydra/agent.json`. The bring-up wizard reads that file automatically — you never copy the URL anywhere.
+
+### 7.3 Presign the descriptor-refresh URL (one time)
+
+The RU box needs to poll the controller's signed descriptor (which is updated whenever the controller rotates it). Presign that S3 object once, for 30 days:
+```bash
+# On your laptop with aws cli installed and AWS creds in your env:
+aws s3 presign s3://mthydra-yourname-state/descriptors/current --expires-in 2592000 --region eu-west-1
+```
+Save the URL. Call it `DESCRIPTOR_REFRESH_URL`. (You'll re-presign every ~25 days; setting up a self-presigning automation is a separate spec.)
+
+### 7.4 Bring up the RU box (one command)
+
 ```bash
 mthydra-ops ru-bringup \
-    --provider timeweb --region ru-moscow-1 \
-    --agent-source-url "<AGENT_SOURCE_URL>" \
-    --agent-source-sha256 "<MTG_SHA256>" \
+    --provider timeweb --region ru-msk-1 \
     --descriptor-refresh-url "<DESCRIPTOR_REFRESH_URL>"
 ```
 
 The wizard:
-1. Mints a provision-seed (assigns your cover domain, generates an onward credential, etc.) — outputs a `box_id` like `b-7f3a...`.
-2. Writes a cloud-init file at `/tmp/ru-cloud-init-b-...yaml`.
-3. Prints "Paste the cloud-init file as user-data in your provider's console, boot the VM, then come back with the public IP."
-4. Prompts: `Public IP when VM is up (Ctrl-C to defer):`.
+1. Reads `/var/lib/mthydra/agent.json` for the agent URL + sha (re-publishes automatically if it's missing or expiring within 24h).
+2. Mints a provision-seed (atomically claims a cover domain + image + onward credential) → outputs a `box_id`.
+3. Writes a cloud-init bundle to `/tmp/ru-cloud-init-<box>.yaml` (mode 0600).
+4. Prints "Paste the cloud-init … come back with the public IP" and prompts: `Public IP when VM is up (Ctrl-C to defer):`.
 
-### 7.3 Boot the TimeWeb VM with that cloud-init
+### 7.5 Boot the TimeWeb VM with that cloud-init
 
 1. `cat /tmp/ru-cloud-init-*.yaml` — copy the entire content to your clipboard.
 2. TimeWeb dashboard → **Cloud** → **Create server**:
-   - Smallest plan
-   - OS: **Ubuntu 24.04**
-   - Region: **Moscow**
-   - SSH key: optional (you won't SSH in)
-   - **Cloud-init / user-data** field (might be hidden under "Advanced"): paste the cloud-init YAML.
-3. Create. Wait ~2 minutes for boot + the agent to download the binary + start.
+   - Smallest plan.
+   - OS: **Ubuntu 24.04**.
+   - Region: **Moscow**.
+   - SSH key: optional (you won't SSH in).
+   - **Cloud-init / user-data** field (sometimes hidden under "Advanced"): paste the YAML.
+3. Create. Wait ~2 minutes for boot + agent download + start.
 4. Copy the assigned **public IPv4**.
 
-### 7.4 Give the wizard the IP
+### 7.6 Give the wizard the IP
 
-Paste the public IPv4 into the wizard prompt + press Enter. The wizard now:
-- Connects to `<IP>:443` and attempts a TLS handshake (the proxy's Fake-TLS layer).
-- On success: marks the box live in the controller's DB.
-- Prints `done: box b-... live @ <IP>; CANARY — next: §3.4 soak (submit probe-record ...)`.
+Paste the IPv4 into the wizard prompt + Enter. The wizard:
+- Connects to `<IP>:443` and attempts a TLS handshake.
+- On success: marks the box live.
+- Prints `done: box b-... live @ <IP>; CANARY — next: §3.4 soak ...` (the "soak" note now means "the probe runner will pick this box up automatically on its next tick" — no manual `probe-record` needed).
 
-If the wizard times out: SSH into the TimeWeb console for the new VM (via TimeWeb's web console — the VM has no SSH key by default) and run `journalctl -u cloud-final -n 50 --no-pager` to see what cloud-init did. Most often, the issue is the VM having no outbound internet (check TimeWeb firewall) or the presigned URL having expired.
+If the wizard times out, open the TimeWeb web console for the VM and run `journalctl -u cloud-final -n 80 --no-pager` to see what cloud-init did. Most often the VM has no outbound internet (check TimeWeb firewall) or the agent presigned URL expired (`mthydra-ops agent-publish` again to refresh).
 
-### 7.5 Record at least one probe from your vantage
+### 7.7 Wire your vantage for automatic probes
 
-The controller will fire a CRIT alert in 6 hours if no probe has been recorded for this box. From your vantage:
+The spec-P probe runner SSHes into each registered vantage every 30 minutes and runs `tls_fall_through` / `cover_domain_consistency` / `surface_scan` for every live box. Set that up once per vantage.
+
+On the EU host, put your SSH private key (one you generate locally) somewhere only `mthydra` can read:
 ```bash
-ssh root@<VANTAGE_IPv4> "openssl s_client -connect <RU_BOX_IP>:443 -servername www.cloudflare.com < /dev/null 2>&1 | head -5"
+sudo mkdir -p /var/lib/mthydra/ssh
+sudo ssh-keygen -t ed25519 -N '' -f /var/lib/mthydra/ssh/ru-msk-1.key -C "mthydra-probe-runner@eu1"
+sudo cat /var/lib/mthydra/ssh/ru-msk-1.key.pub        # the PUBLIC half
+sudo chown -R mthydra:mthydra /var/lib/mthydra/ssh
+sudo chmod 700 /var/lib/mthydra/ssh
+sudo chmod 600 /var/lib/mthydra/ssh/ru-msk-1.key
 ```
-You should see a TLS handshake. Save the output / a one-line summary.
 
-Back on the EU host as the mthydra user, record the probe:
+On the vantage VPS (`ssh root@<VANTAGE_IPv4>`):
 ```bash
-mthydra-controller probe-record \
-    --box-id <b-... from step 7.2> \
-    --vantage ru-msk-1 \
-    --check tls_fall_through \
-    --status pass \
-    --cycle-at "$(date -u -Iseconds | sed 's/+00:00/Z/')" \
-    --evidence "openssl s_client to <RU_BOX_IP>:443 OK with cover sni www.cloudflare.com" \
+adduser --disabled-password --gecos '' probe
+mkdir -p /home/probe/.ssh && chmod 700 /home/probe/.ssh
+echo '<PASTE THE .pub LINE HERE>' >> /home/probe/.ssh/authorized_keys
+chown -R probe:probe /home/probe/.ssh && chmod 600 /home/probe/.ssh/authorized_keys
+apt-get install -y openssl ncat   # the probers shell to these
+```
+
+Pin the host key once (avoids prompts at runtime):
+```bash
+sudo -u mthydra ssh-keyscan -H <VANTAGE_IPv4> >> /var/lib/mthydra/ssh/known_hosts
+```
+
+Register the SSH config with the controller:
+```bash
+mthydra-controller vantage-set-ssh ru-msk-1 \
+    --host <VANTAGE_IPv4> --user probe \
+    --key-path /var/lib/mthydra/ssh/ru-msk-1.key \
+    --known-hosts /var/lib/mthydra/ssh/known_hosts \
     --db-path /var/lib/mthydra/state.sqlite
 ```
 
-Repeat this once a day for the first week — eventually we'll automate it (the design has a probe-runner spec deferred for later).
+Within 30 minutes (or restart `mthydra-controller` to force the next tick), `mthydra-controller probe-due --json` should show recent probes for your box. From this point forward, `probe_coverage_pending` will stay green automatically.
 
 ---
 
@@ -604,12 +631,12 @@ sudo systemctl list-timers 'mthydra-*'
 **Every day (~30 seconds):**
 - Glance at your inbox. Did the hourly heartbeat arrive overnight? If yes, you're good. If you didn't see one in the last 2 hours — check `systemctl status mthydra-controller`.
 
-**Weekly (~5 minutes):**
-- Run one probe from your vantage against each live RU box (see step 7.5) and submit `probe-record`. Without this, the box silently shows "no recent probe coverage" and after 6h alerts fire.
+**Weekly (~2 minutes):**
+- `mthydra-controller probe-due --json` — confirm recent probe results exist for each live box. The spec-P probe runner SSHes into each registered vantage every 30 minutes and ingests automatically, so this should always be green; if it's not, your vantage's SSH config (step 7.7) is broken.
 
 **When the operator-alert Telegram bot pings you:**
 - Read the message. The `dedupe_key` says which kind of problem. Most common at MVP scale:
-  - `probe_coverage_pending::<box>` — you forgot to submit a probe-record. Do step 7.5.
+  - `probe_coverage_pending::<box>` — the probe runner can't reach a vantage. SSH manually to confirm the vantage is up; check `journalctl -u mthydra-controller -n 100 | grep probe_runner`; re-pin the host key with `ssh-keyscan` if the vantage was rebuilt.
   - `cover_pool_rotation_frozen` — your cover pool has too few verified domains. Add and attest another one (Part 6 with a new domain).
   - Anything containing `probe_kill_pending` — the box's probe results look bad. Take it seriously: read the alert, decide whether the box is compromised, run `mthydra-controller ru-box-terminate <box> --reason compromise` if so.
 
@@ -657,8 +684,8 @@ You have backups in S3, encrypted with your age key:
 # What this MVP intentionally doesn't have
 
 - A warm standby (run `install-standby` on a second EC2 instance whenever you're ready — it polls the active's heartbeat).
-- A new-image promotion pipeline (`ru-image-cycle` exists for when you need to roll out a new mtg release with canary soaking — for MVP, the binary you uploaded in 7.1 is fine).
-- Automated probe execution (you submit `probe-record` by hand from a vantage — there's a deferred spec for an automated probe runner).
+- A real captured profile per image (`image-prepare --yes` writes a minimal placeholder; capture and pin a real one after the first canary soaks if you intend to rely on the harder probe verdicts).
+- The two operator-driven `mtg`-release-cycle probers (`valid_path_liveness`, `latency_loss`, `behavioural_identity`) — the three MVP probers (`tls_fall_through`, `cover_domain_consistency`, `surface_scan`) run automatically; the other three need a circle-member relay and stay manual.
 - Multiple vantages / multiple cover domains (recommended for production: ≥2 of each, rotated every 14–30 days).
 
 When you're ready to grow past MVP, the relevant runbook sections cover those motions. For now, **stop here**. A small private fleet that works reliably is better than a large one that drifts.
