@@ -134,3 +134,51 @@ def _schema_would_migrate(src_dir: Path, db_path: str
     target = _parse_schema_version_constant(schema_py)
     current = _current_schema_version(db_path)
     return (target > current, target, current)
+
+
+def _fetch_and_checkout(src_dir: Path, ref: str) -> None:
+    """`git fetch origin <ref>` + `git reset --hard FETCH_HEAD` — same pattern
+    as scripts/install.sh. Works for branches, tags, and SHAs."""
+    src = str(Path(src_dir))
+    res = subprocess.run(
+        ["git", "-C", src, "fetch", "origin", ref],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        raise UpgradeError(
+            f"git fetch origin {ref!r} failed: {res.stderr.strip()}")
+    res = subprocess.run(
+        ["git", "-C", src, "reset", "--hard", "FETCH_HEAD"],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        raise UpgradeError(
+            f"git reset --hard FETCH_HEAD failed: {res.stderr.strip()}")
+
+
+def _pip_install(venv_dir: Path, src_dir: Path) -> None:
+    """`<venv>/bin/pip install -e <src>` — re-installs editable mode against
+    the freshly-checked-out source."""
+    pip = str(Path(venv_dir) / "bin" / "pip")
+    res = subprocess.run(
+        [pip, "install", "-e", str(src_dir)],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        raise UpgradeError(
+            f"pip install failed (exit {res.returncode}): "
+            f"{res.stderr.strip() or res.stdout.strip()}")
+
+
+def _rollback_to(src_dir: Path, venv_dir: Path, prior_sha: str) -> None:
+    """Hard-reset to prior_sha + reinstall venv. Caller runs verify next."""
+    src = str(Path(src_dir))
+    res = subprocess.run(
+        ["git", "-C", src, "reset", "--hard", prior_sha],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        raise UpgradeError(
+            f"rollback git reset --hard {prior_sha!r} failed: "
+            f"{res.stderr.strip()}")
+    _pip_install(venv_dir, src_dir)

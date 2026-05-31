@@ -140,3 +140,47 @@ def test_record_prior_raises_when_backup_gen_unparsable(monkeypatch, tmp_path):
     monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
     with pytest.raises(upgrade.UpgradeError, match="generation"):
         upgrade._record_prior(src, "/tmp/db.sqlite", "/tmp/c.toml")
+
+
+def test_fetch_and_checkout_invokes_git_correctly(monkeypatch):
+    calls = []
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    upgrade._fetch_and_checkout(Path("/opt/mthydra/src"), "v0.0.2")
+    assert calls[0] == ["git", "-C", "/opt/mthydra/src", "fetch", "origin", "v0.0.2"]
+    assert calls[1] == ["git", "-C", "/opt/mthydra/src", "reset", "--hard", "FETCH_HEAD"]
+
+
+def test_fetch_and_checkout_raises_on_failure(monkeypatch):
+    def fake_run(argv, **kw):
+        return subprocess.CompletedProcess(argv, 128, "", "fatal: bad ref")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    with pytest.raises(upgrade.UpgradeError, match="git fetch"):
+        upgrade._fetch_and_checkout(Path("/opt/mthydra/src"), "v9.9.9")
+
+
+def test_pip_install_invokes_venv_pip(monkeypatch):
+    seen = []
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    upgrade._pip_install(Path("/opt/mthydra/venv"), Path("/opt/mthydra/src"))
+    assert seen[0] == ["/opt/mthydra/venv/bin/pip", "install", "-e",
+                       "/opt/mthydra/src"]
+
+
+def test_rollback_to_resets_and_reinstalls(monkeypatch):
+    seen = []
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    upgrade._rollback_to(Path("/src"), Path("/venv"), "deadbeef" * 5)
+    subs = [a[0] for a in seen]
+    assert "git" in subs and "/venv/bin/pip" in subs
+    git_call = next(a for a in seen if a[0] == "git")
+    assert "reset" in git_call and "--hard" in git_call
+    assert ("deadbeef" * 5) in git_call
