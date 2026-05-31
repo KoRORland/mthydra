@@ -32,3 +32,25 @@ def test_pyproject_version_reads_project_section(tmp_path):
 
 def test_pyproject_version_returns_unknown_when_missing(tmp_path):
     assert upgrade._pyproject_version(tmp_path) == "unknown"
+
+
+def test_resolve_target_ref_explicit_wins(monkeypatch):
+    monkeypatch.setattr(
+        upgrade, "_call_resolve_latest_tag",
+        lambda **kw: (_ for _ in ()).throw(
+            AssertionError("should not call GitHub when --ref given")))
+    assert upgrade._resolve_target_ref(
+        ref="v0.0.5",
+        upstream_repo="KoRORland/mthydra",
+        github_api_url="https://api.github.com",
+    ) == "v0.0.5"
+
+
+def test_resolve_target_ref_falls_back_to_latest(monkeypatch):
+    monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
+                        lambda **kw: "v0.1.0")
+    assert upgrade._resolve_target_ref(
+        ref=None,
+        upstream_repo="KoRORland/mthydra",
+        github_api_url="https://api.github.com",
+    ) == "v0.1.0"

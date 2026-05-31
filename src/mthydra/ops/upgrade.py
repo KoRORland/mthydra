@@ -36,3 +36,20 @@ def _pyproject_version(src_dir: Path) -> str:
         return "unknown"
     data = tomllib.loads(p.read_text())
     return str(data.get("project", {}).get("version", "unknown"))
+
+
+def _call_resolve_latest_tag(*, upstream_repo: str, github_api_url: str) -> str:
+    """Thin wrapper around image_ops.resolve_latest_tag so tests can
+    monkeypatch this name without touching image_ops itself."""
+    from . import image_ops
+    return image_ops.resolve_latest_tag(
+        upstream_repo=upstream_repo, github_api_url=github_api_url)
+
+
+def _resolve_target_ref(*, ref: str | None, upstream_repo: str,
+                        github_api_url: str) -> str:
+    """Explicit --ref wins; else default to the latest GitHub release tag."""
+    if ref:
+        return ref
+    return _call_resolve_latest_tag(
+        upstream_repo=upstream_repo, github_api_url=github_api_url)
