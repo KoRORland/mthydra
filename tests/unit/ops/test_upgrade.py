@@ -184,3 +184,55 @@ def test_rollback_to_resets_and_reinstalls(monkeypatch):
     git_call = next(a for a in seen if a[0] == "git")
     assert "reset" in git_call and "--hard" in git_call
     assert ("deadbeef" * 5) in git_call
+
+
+def test_stop_service_invokes_systemctl_and_waits(monkeypatch):
+    calls = []
+    states = iter(["active", "active", "inactive"])
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        if argv[:3] == ["systemctl", "is-active", "x"]:
+            state = next(states)
+            return subprocess.CompletedProcess(
+                argv, 0 if state == "active" else 3, state + "\n", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    monkeypatch.setattr(upgrade.time, "sleep", lambda s: None)
+    upgrade._stop_service("x", timeout_s=5)
+    assert ["systemctl", "stop", "x"] in calls
+    assert calls.count(["systemctl", "is-active", "x"]) >= 1
+
+
+def test_start_and_verify_success(monkeypatch):
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "is-active", "x"]:
+            return subprocess.CompletedProcess(argv, 0, "active\n", "")
+        # startup-check + obs-heartbeat-now both succeed.
+        return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    monkeypatch.setattr(upgrade.time, "sleep", lambda s: None)
+    upgrade._start_and_verify("x", "/db", "/cfg", verify_timeout_s=5)
+
+
+def test_start_and_verify_raises_on_startup_check_fail(monkeypatch):
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "is-active", "x"]:
+            return subprocess.CompletedProcess(argv, 0, "active\n", "")
+        if "startup-check" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "broken")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    monkeypatch.setattr(upgrade.time, "sleep", lambda s: None)
+    with pytest.raises(upgrade.VerifyFailed, match="startup-check"):
+        upgrade._start_and_verify("x", "/db", "/cfg", verify_timeout_s=5)
+
+
+def test_start_and_verify_raises_when_service_never_active(monkeypatch):
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "is-active", "x"]:
+            return subprocess.CompletedProcess(argv, 3, "activating\n", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    monkeypatch.setattr(upgrade.time, "sleep", lambda s: None)
+    with pytest.raises(upgrade.VerifyFailed, match="never became active"):
+        upgrade._start_and_verify("x", "/db", "/cfg", verify_timeout_s=1)

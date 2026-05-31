@@ -6,6 +6,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -182,3 +183,57 @@ def _rollback_to(src_dir: Path, venv_dir: Path, prior_sha: str) -> None:
             f"rollback git reset --hard {prior_sha!r} failed: "
             f"{res.stderr.strip()}")
     _pip_install(venv_dir, src_dir)
+
+
+def _systemctl(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["systemctl", *args], capture_output=True, text=True,
+    )
+
+
+def _wait_for(predicate, *, timeout_s: int, poll_s: float = 1.0) -> bool:
+    """Block until predicate() returns True or timeout. Returns ok."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(poll_s)
+    return predicate()
+
+
+def _stop_service(unit: str, timeout_s: int = 30) -> None:
+    _systemctl("stop", unit)
+    def _inactive() -> bool:
+        return _systemctl("is-active", unit).returncode != 0
+    if not _wait_for(_inactive, timeout_s=timeout_s):
+        raise UpgradeError(
+            f"service {unit!r} did not stop within {timeout_s}s")
+
+
+def _start_and_verify(unit: str, db_path: str, config_path: str,
+                      verify_timeout_s: int = 120) -> None:
+    """Start the unit, wait for is-active, then run startup-check + heartbeat.
+    Raises VerifyFailed on any check failure."""
+    _systemctl("start", unit)
+    def _active() -> bool:
+        return _systemctl("is-active", unit).returncode == 0
+    if not _wait_for(_active, timeout_s=verify_timeout_s):
+        raise VerifyFailed(
+            f"service {unit!r} never became active within {verify_timeout_s}s")
+    res = subprocess.run(
+        [_controller_bin(), "startup-check", "--db-path", db_path],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        raise VerifyFailed(
+            f"startup-check failed (exit {res.returncode}): "
+            f"{res.stderr.strip() or res.stdout.strip()}")
+    res = subprocess.run(
+        [_controller_bin(), "obs-heartbeat-now",
+         "--db-path", db_path, "--config", config_path],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        raise VerifyFailed(
+            f"obs-heartbeat-now failed (exit {res.returncode}): "
+            f"{res.stderr.strip() or res.stdout.strip()}")
