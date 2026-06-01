@@ -468,6 +468,114 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
     assert creds_legacy.secret_key == "legacysecretnocolon"
 
 
+def test_build_destination_derives_region_from_aws_endpoint(monkeypatch, tmp_path):
+    """R-D2: AWS endpoint URL encodes the region (s3.<region>.amazonaws.com);
+    boto3's SigV4 must sign with that region, not the us-east-1 default,
+    otherwise non-us-east-1 buckets get SignatureDoesNotMatch.
+
+    Discovered 2026-05-31 against an eu-west-1 bucket — the user had to
+    set MTHYDRA_BACKUP_REGION=eu-west-1 manually before every backup-now.
+    """
+    monkeypatch.delenv("MTHYDRA_BACKUP_REGION", raising=False)
+    from mthydra.controller.cli import _build_destination
+    from mthydra.controller.config import (
+        BackupConfig, Config, CoverPoolConfig, DescriptorConfig,
+        DistributionConfig, GapMonitorConfig, ImageCanaryConfig, ImageConfig,
+        NodeConfig, ObligationsConfig, ObservabilityConfig, ProbeConfig,
+        RetentionConfig, ShardManagerConfig, StandbyConfig,
+    )
+
+    def _mk_cfg(endpoint: str) -> Config:
+        return Config(
+            node=NodeConfig(role="active", hostname="h"),
+            backup=BackupConfig(
+                floor_interval_hours=24, on_change_debounce_seconds=30,
+                endpoint=endpoint, bucket="b", access_key_id="id",
+                retention=RetentionConfig(keep_daily=30, keep_monthly=12,
+                                          object_lock_days=365),
+            ),
+            gap_monitor=GapMonitorConfig(
+                poll_interval_minutes=30, alarm_threshold_hours=48,
+                recipient_email="op@example.org"),
+            obligations=ObligationsConfig(),
+            descriptor=DescriptorConfig(rotation_interval_hours=1,
+                                        validity_window_hours=24),
+            cover_pool=CoverPoolConfig(
+                rotation_ttl_days=14, reverify_after_days=30,
+                freeze_threshold=2, reverify_sweep_interval_seconds=3600,
+                rotation_sweep_interval_seconds=3600,
+                replenishment_interval_days=90),
+            standby=StandbyConfig(
+                node_id="", heartbeat_interval_seconds=60,
+                heartbeat_poll_interval_seconds=300,
+                staleness_alert_seconds=600),
+            image=ImageConfig(
+                upstream_repo="9seconds/mtg",
+                upstream_release_asset="mtg-linux-amd64",
+                upstream_check_interval_seconds=168 * 3600,
+                github_api_url="https://api.github.com",
+                build_tmp_dir="/var/lib/mthydra/tmp",
+                canary=ImageCanaryConfig(min_boxes=1, min_cycles_per_box=4)),
+            shard_manager=ShardManagerConfig(
+                target_size=2, max_size=3,
+                reshuffle_interval_days=14,
+                reshuffle_sweep_interval_seconds=3600),
+            probe=ProbeConfig(
+                soft_fail_window_M=4, soft_fail_threshold_N=3,
+                min_distinct_vantages=2, coverage_window_seconds=3600,
+                probe_vantage_ttl_days=14,
+                probe_audit_sweep_interval_seconds=300),
+            observability=ObservabilityConfig(
+                alerter_sweep_interval_seconds=120,
+                heartbeat_interval_seconds=3600,
+                heartbeat_breach_threshold=3,
+                alert_dedupe_window_warn_seconds=3600,
+                alert_dedupe_window_crit_seconds=900,
+                alert_dedupe_window_info_seconds=21600,
+                telegram=None, email=None),
+            distribution=DistributionConfig(
+                publish_sweep_interval_seconds=300,
+                user_heartbeat_interval_seconds=86400,
+                heartbeat_breach_threshold=3,
+                telegram=None, email=None),
+        )
+
+    # AWS regional endpoint → region must come from the URL.
+    dest_eu = _build_destination(
+        _mk_cfg("https://s3.eu-west-1.amazonaws.com"),
+        "k:s", mode="production", bucket_override=None,
+    )
+    assert dest_eu.region == "eu-west-1"
+
+    dest_us = _build_destination(
+        _mk_cfg("https://s3.us-east-2.amazonaws.com"),
+        "k:s", mode="production", bucket_override=None,
+    )
+    assert dest_us.region == "us-east-2"
+
+    # B2 / non-AWS endpoint → fallback to us-east-1 (B2 ignores region).
+    dest_b2 = _build_destination(
+        _mk_cfg("https://s3.us-west-002.backblazeb2.com"),
+        "k:s", mode="production", bucket_override=None,
+    )
+    assert dest_b2.region == "us-east-1"
+
+    # Empty endpoint (vanilla AWS without endpoint_url) → fallback.
+    dest_default = _build_destination(
+        _mk_cfg(""),
+        "k:s", mode="production", bucket_override=None,
+    )
+    assert dest_default.region == "us-east-1"
+
+    # MTHYDRA_BACKUP_REGION env wins over derivation.
+    monkeypatch.setenv("MTHYDRA_BACKUP_REGION", "ap-southeast-2")
+    dest_override = _build_destination(
+        _mk_cfg("https://s3.eu-west-1.amazonaws.com"),
+        "k:s", mode="production", bucket_override=None,
+    )
+    assert dest_override.region == "ap-southeast-2"
+
+
 # ---------------------------------------------------------------------------
 # Spec B CLI subcommands
 # ---------------------------------------------------------------------------
