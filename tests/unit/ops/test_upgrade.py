@@ -515,3 +515,96 @@ def test_cmd_upgrade_aborts_if_schema_migrate_fails(monkeypatch, tmp_path):
 
     rc = upgrade.cmd_upgrade(_upgrade_args(tmp_path, allow_schema_migration=True))
     assert rc != 0
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight health check (2026-06-01 fix for user's stale-heartbeat block)
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_health_returns_0_on_success(monkeypatch, tmp_path):
+    """Pre-flight runs startup-check + obs-heartbeat-now. Both succeeding
+    returns rc=0 and the upgrade proceeds."""
+    calls = []
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "ok", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+
+    rc = upgrade._preflight_health(
+        "/var/lib/mthydra/state.sqlite",
+        "/etc/mthydra/controller.toml",
+        "mthydra-controller",
+    )
+    assert rc == 0
+    # Both checks ran (and in the right order).
+    bins = [c[1] for c in calls]
+    assert bins == ["startup-check", "obs-heartbeat-now"]
+
+
+def test_preflight_health_aborts_on_startup_check_fail(monkeypatch, tmp_path, capsys):
+    """If startup-check refuses pre-upgrade, return 11 without forcing a
+    heartbeat. The whole point is to NOT proceed if the host is broken."""
+    def fake_run(argv, **kw):
+        if "startup-check" in argv:
+            return subprocess.CompletedProcess(
+                argv, 10, "", "check 42: stale heartbeat\n")
+        # Should never get here.
+        raise AssertionError(f"unexpected call: {argv}")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+
+    rc = upgrade._preflight_health("/db", "/cfg", "u")
+    assert rc == 11
+    assert "check 42" in capsys.readouterr().err
+
+
+def test_preflight_health_aborts_on_heartbeat_fail(monkeypatch, tmp_path, capsys):
+    """Startup-check passes but heartbeat refuses (SMTP broken). Return 12
+    + tell the operator they can't get alerts."""
+    def fake_run(argv, **kw):
+        if "startup-check" in argv:
+            return subprocess.CompletedProcess(argv, 0, "ok", "")
+        if "obs-heartbeat-now" in argv:
+            return subprocess.CompletedProcess(
+                argv, 2, "", "smtp 530 auth failed\n")
+        raise AssertionError(f"unexpected call: {argv}")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+
+    rc = upgrade._preflight_health("/db", "/cfg", "u")
+    assert rc == 12
+    err = capsys.readouterr().err
+    assert "smtp 530" in err
+    assert "Fix the email/Telegram sink" in err
+
+
+def test_cmd_upgrade_aborts_on_preflight_fail_without_backup(monkeypatch, tmp_path):
+    """If pre-flight fails, NO backup is taken, NO checkout happens,
+    NO pip install runs. The host stays untouched so the operator
+    can fix the root cause and retry cleanly."""
+    _seed_min_src(tmp_path / "src")
+    _seed_schema_db(tmp_path / "db.sqlite", 15)
+    monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
+                        lambda **kw: "v0.0.8")
+    # Pre-flight fails → no other helper should be called.
+    monkeypatch.setattr(upgrade, "_record_prior",
+                        lambda *a: (_ for _ in ()).throw(
+                            AssertionError("record_prior must not run")))
+    monkeypatch.setattr(upgrade, "_fetch_and_checkout",
+                        lambda *a: (_ for _ in ()).throw(
+                            AssertionError("fetch must not run")))
+    monkeypatch.setattr(upgrade, "_pip_install",
+                        lambda *a: (_ for _ in ()).throw(
+                            AssertionError("pip_install must not run")))
+
+    def fake_run(argv, **kw):
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(
+                argv, 0, "a" * 40 + "\n", "")
+        if "startup-check" in argv:
+            return subprocess.CompletedProcess(
+                argv, 10, "", "check 42: stale heartbeat at startup\n")
+        raise AssertionError(f"unexpected call: {argv}")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+
+    rc = upgrade.cmd_upgrade(_upgrade_args(tmp_path))
+    assert rc == 11  # pre-flight startup-check failure

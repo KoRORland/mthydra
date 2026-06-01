@@ -7,6 +7,51 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
+## v0.0.8 — 2026-06-01
+
+**Two upgrade-flow fixes** caught by a real `mthydra-ops upgrade` run.
+
+- **check-42 staleness threshold is now cadence-aware.** With W-1's
+  daily heartbeat default, the hardcoded 2h staleness window in the
+  startup invariant was tripping on every restart that took longer
+  than 2h — i.e. all of them under a daily cadence. Threshold is now
+  `max(2h, heartbeat_interval × 2)`, matching the
+  `obs_heartbeat_proven` obligation's next-due semantics. The 2h
+  floor protects against an aggressive ½h cadence yielding a flaky
+  1h window.
+
+- **`mthydra-ops upgrade` runs pre-flight health BEFORE any state
+  change.** Previously the tool went straight from `resolve-target`
+  → `record-prior (backup)` → `fetch` → ... → `verify`. If the host
+  was already unhealthy (stale heartbeat, broken sink), the verify
+  AFTER the upgrade failed AND auto-rollback failed for the same
+  reason (DB state, not code). Operator was left mid-upgrade with
+  the controller refusing to start.
+
+  Now: new `phase 2b: pre-flight health check + heartbeat` runs
+  startup-check and then forces a fresh heartbeat BEFORE the backup.
+  - startup-check fail → exit 11, no state change
+  - heartbeat fail → exit 12, no state change (operator needs to fix
+    the sink first since post-restart alerts wouldn't be deliverable
+    anyway)
+
+  Forcing the heartbeat also advances the dead-man's-switch clock
+  so the post-restart startup-check has fresh ground to stand on.
+
+**Operator action when upgrading from 0.0.7:** none required. The
+upgrade tool now self-protects against the failure mode the user hit
+in 0.0.6 → 0.0.7 (stale heartbeat at restart).
+
+```bash
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+```
+
+If pre-flight fails: fix the reported issue (likely SMTP creds or a
+stale heartbeat — force one via `mthydra-controller obs-heartbeat-now`
+manually) and retry. The upgrade is idempotent on retry.
+
+---
+
 ## v0.0.7 — 2026-06-01
 
 **Incremental-upgrade backfills.** User on a host that went 0.0.1 →

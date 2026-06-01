@@ -272,6 +272,58 @@ def _err(msg: str) -> None:
     print(f"[mthydra-upgrade] ERROR: {msg}", file=sys.stderr, flush=True)
 
 
+def _preflight_health(
+    db_path: str, config_path: str, unit: str, *, verify_timeout_s: int = 120,
+) -> int:
+    """Pre-upgrade health check. Run BEFORE any state change so we abort
+    on a broken host without taking a backup or touching code.
+
+    Two parts:
+      1. startup-check — same invariant suite the post-restart verify
+         uses. If it fails NOW (before we change anything), aborting is
+         the right move: a verify-failure post-upgrade would just trigger
+         a rollback that ALSO fails verify (same DB state).
+      2. obs-heartbeat-now — force a fresh heartbeat. Two benefits:
+         (a) advances the last-successful-heartbeat clock so the
+             post-restart startup-check #42 invariant doesn't trip due
+             to upgrade latency.
+         (b) proves SMTP / Telegram are working RIGHT NOW. If sinks
+             are broken, an upgrade-induced restart wouldn't have
+             produced an alert anyway — better to know now.
+
+    Returns:
+      0  — host healthy, safe to proceed
+      11 — startup-check failed (pre-existing host issue)
+      12 — heartbeat failed (sink broken)
+    """
+    bin_ = _controller_bin()
+    _say("  running startup-check...")
+    res = subprocess.run(
+        [bin_, "startup-check", "--db-path", db_path, "--config", config_path],
+        capture_output=True, text=True, timeout=60,
+    )
+    if res.returncode != 0:
+        _err(f"startup-check refused: "
+             f"{res.stderr.strip() or res.stdout.strip()}")
+        return 11
+    _say("  forcing fresh heartbeat (advances dead-man's-switch clock)...")
+    res = subprocess.run(
+        [bin_, "obs-heartbeat-now",
+         "--db-path", db_path, "--config", config_path],
+        capture_output=True, text=True, timeout=60,
+    )
+    if res.returncode != 0:
+        _err(f"obs-heartbeat-now refused: "
+             f"{res.stderr.strip() or res.stdout.strip()}")
+        _err("the controller is healthy but cannot deliver alerts. "
+             "Fix the email/Telegram sink before upgrading, otherwise "
+             "post-restart verify will fail and there will be no alert "
+             "to tell you why.")
+        return 12
+    _say("  pre-flight OK")
+    return 0
+
+
 def cmd_upgrade(args) -> int:  # noqa: C901 — orchestrator
     """One-command controller upgrade (spec Q).
 
@@ -330,6 +382,23 @@ def cmd_upgrade(args) -> int:  # noqa: C901 — orchestrator
         _err(f"resolve-target: {e}")
         return 3
     _say(f"  target ref: {target_ref}")
+
+    # Phase 2b (post-upgrade-failure fix): pre-flight health check.
+    # Run startup-check + force a fresh heartbeat BEFORE taking the
+    # pre-upgrade backup, so we never start an upgrade on a host that's
+    # already broken. The forced heartbeat also advances the
+    # last-successful-heartbeat clock to defend the post-restart
+    # startup-check against the dead-man's-switch invariant (#42)
+    # tripping due to upgrade latency.
+    _say("phase 2b: pre-flight health check + heartbeat")
+    health_rc = _preflight_health(
+        args.db_path, args.config, args.unit,
+        verify_timeout_s=args.verify_timeout,
+    )
+    if health_rc != 0:
+        _err(f"pre-flight health check failed (rc={health_rc}); "
+             "fix the underlying issue before retrying. No state changed.")
+        return health_rc
 
     # No-op short-circuit when already at target (works for SHAs; for tags
     # we still take the safer path through fetch-and-checkout below).
