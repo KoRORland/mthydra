@@ -35,7 +35,15 @@ class _FailingSink:
         return SinkResult(sink="email", success=False, error=self.err)
 
 
-def _pub(db, *, sink, clock=NOW, threshold=3):
+_FIXED_IDENTITY = {
+    "version": "0.0.3",
+    "hostname": "test-host",
+    "schema_version": "15",
+    "head_sha": "abcdef012345",
+}
+
+
+def _pub(db, *, sink, clock=NOW, threshold=3, identity=None):
     return ObsHeartbeatPublisher(
         db_path=db,
         email_sink=sink,
@@ -43,7 +51,25 @@ def _pub(db, *, sink, clock=NOW, threshold=3):
         breach_threshold=threshold,
         mode="production",
         clock=lambda: clock,
+        identity=identity if identity is not None else _FIXED_IDENTITY,
     )
+
+
+def test_heartbeat_subject_and_body_carry_identity(db):
+    """R-D8: heartbeat emails must identify the running version + host so
+    operators can tell which controller went silent. Previously the subject
+    was just 'mthydra heartbeat @ <iso>' with no host/version, making fleet
+    observability blind."""
+    em = DryRunSink(label="email")
+    pub = _pub(db, sink=em)
+    pub.run_once()
+    payload = em.calls[0]
+    assert "test-host" in payload.subject
+    assert "v0.0.3" in payload.subject
+    assert "version: 0.0.3" in payload.body
+    assert "hostname: test-host" in payload.body
+    assert "schema: v15" in payload.body
+    assert "HEAD: abcdef012345" in payload.body
 
 
 def test_success_dispatches_to_email_only_and_proves(db):

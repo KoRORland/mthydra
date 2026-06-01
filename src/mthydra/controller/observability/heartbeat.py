@@ -9,6 +9,8 @@ heartbeat clears it.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,6 +25,47 @@ from mthydra.controller.state import alert_log as _al
 from mthydra.controller.state.audit import log_event
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.obligations import set_obligation
+
+
+def collect_identity(db_path: Path | str) -> dict[str, str]:
+    """R-D8: identification fields embedded in every heartbeat. Lets an
+    operator reading a heartbeat email tell what version is running on
+    which host — silence then carries real information ('which version
+    went silent') instead of just 'something is off'."""
+    from importlib import metadata
+    try:
+        version = metadata.version("mthydra")
+    except metadata.PackageNotFoundError:
+        version = "unknown"
+    hostname = os.uname().nodename
+    try:
+        conn = connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT version FROM schema_version WHERE rowid=1"
+            ).fetchone()
+            schema_version = str(row[0]) if row else "unknown"
+        finally:
+            conn.close()
+    except Exception:
+        schema_version = "unknown"
+    # HEAD SHA is best-effort — packaged installs (no .git) report 'unknown'.
+    head_sha = "unknown"
+    try:
+        res = subprocess.run(
+            ["git", "-C", "/opt/mthydra/src", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if res.returncode == 0:
+            head_sha = res.stdout.strip()[:12] or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {
+        "version": version,
+        "hostname": hostname,
+        "schema_version": schema_version,
+        "head_sha": head_sha,
+    }
 
 
 def _default_clock() -> str:
@@ -49,6 +92,7 @@ class ObsHeartbeatPublisher:
         breach_threshold: int = 3,
         mode: str = "production",
         clock: Callable[[], str] | None = None,
+        identity: dict[str, str] | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.email_sink = email_sink
@@ -58,6 +102,9 @@ class ObsHeartbeatPublisher:
         self._clock = clock or _default_clock
         self._consecutive_failures = 0
         self._scheduler: BackgroundScheduler | None = None
+        # R-D8: identity is fetched once at construction so per-tick heartbeats
+        # don't shell out to git on every fire. Tests can inject a fixed dict.
+        self._identity = identity if identity is not None else collect_identity(db_path)
 
     def arm(self) -> None:
         if self.mode == "offline":
@@ -80,8 +127,19 @@ class ObsHeartbeatPublisher:
         conn = connect(self.db_path)
         try:
             snap = collect_snapshot(conn, now=now)
-            subject = f"mthydra heartbeat @ {now}"
-            body = snap.summary_line
+            ident = self._identity
+            subject = (
+                f"mthydra heartbeat @ {now} — "
+                f"{ident['hostname']} v{ident['version']}"
+            )
+            body = (
+                f"version: {ident['version']}\n"
+                f"hostname: {ident['hostname']}\n"
+                f"schema: v{ident['schema_version']}\n"
+                f"HEAD: {ident['head_sha']}\n"
+                f"\n"
+                f"{snap.summary_line}"
+            )
             payload = AlertPayload(
                 severity="heartbeat", kind="heartbeat", target=None,
                 dedupe_key=f"heartbeat::{now}",
