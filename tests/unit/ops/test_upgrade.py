@@ -398,6 +398,58 @@ def test_cmd_upgrade_noop_when_already_at_target(monkeypatch, tmp_path):
     assert fetched["v"] is False
 
 
+def test_cmd_upgrade_resumes_when_partial_state_detected(monkeypatch, tmp_path, capsys):
+    """S-Task 3: when a previous upgrade got past phase 4 (checkout) but
+    failed at phase 5 (pip-install), source HEAD == target_ref but the
+    installed venv is still the old version. Re-running must NOT
+    short-circuit as 'already at target' — it must redo phases 4-7 so
+    the venv catches up.
+
+    Discovered 2026-06-01: user's first prod mthydra-ops upgrade failed
+    EACCES at pip-install, leaving the source at v0.0.3 but the venv at
+    v0.0.2."""
+    prior_sha = _seed_min_src(tmp_path / "src")
+    _seed_schema_db(tmp_path / "db.sqlite", 15)
+    # Simulate the partial-state condition: source pyproject says 0.0.3,
+    # but importlib.metadata thinks 0.0.2 is installed (the failed prior
+    # upgrade left the venv un-updated).
+    (tmp_path / "src" / "pyproject.toml").write_text('[project]\nversion = "0.0.3"\n')
+    monkeypatch.setattr(upgrade, "_installed_version", lambda: "0.0.2")
+    monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
+                        lambda **kw: prior_sha)
+    monkeypatch.setattr(upgrade, "_schema_would_migrate",
+                        lambda src, db: (False, 15, 15))
+
+    fetched = {"v": False}
+    monkeypatch.setattr(upgrade, "_fetch_and_checkout",
+                        lambda s, r: fetched.__setitem__("v", True))
+    pip_called = {"v": 0}
+    monkeypatch.setattr(upgrade, "_pip_install",
+                        lambda v, s: pip_called.__setitem__("v", pip_called["v"] + 1))
+    monkeypatch.setattr(upgrade, "_stop_service", lambda u, timeout_s=30: None)
+    monkeypatch.setattr(upgrade, "_start_and_verify", lambda *a, **kw: None)
+
+    def fake_run(*args, **kw):
+        argv = args[0] if args else []
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(args, 0, prior_sha + "\n", "")
+        if "backup-now" in argv:
+            return subprocess.CompletedProcess(
+                args, 0, "backup-now: pushed generation 11\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+
+    rc = upgrade.cmd_upgrade(_upgrade_args(tmp_path, ref=prior_sha))
+    assert rc == 0
+    # The crucial assertion: pip-install ran exactly once (partial state did
+    # NOT trigger the no-op short-circuit), so the venv caught up.
+    assert pip_called["v"] == 1
+    # And the warning message landed in stdout so the operator knows why.
+    out = capsys.readouterr().out
+    assert "partial state detected" in out
+    assert "v0.0.2" in out and "v0.0.3" in out
+
+
 def test_cmd_upgrade_runs_schema_migrate_when_acknowledged(monkeypatch, tmp_path):
     """R-D7: when --allow-schema-migration is set AND a migration is needed,
     cmd_upgrade must invoke `mthydra-controller schema-migrate` after pip

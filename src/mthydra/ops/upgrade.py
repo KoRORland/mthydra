@@ -44,6 +44,17 @@ def _pyproject_version(src_dir: Path) -> str:
     return str(data.get("project", {}).get("version", "unknown"))
 
 
+def _installed_version() -> str:
+    """importlib.metadata.version of the currently-installed mthydra package.
+    Used by cmd_upgrade to detect drift between the source tree's pyproject
+    version and what the venv actually has installed (S-Task 3)."""
+    from importlib import metadata
+    try:
+        return metadata.version("mthydra")
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
 def _call_resolve_latest_tag(*, upstream_repo: str, github_api_url: str) -> str:
     """Thin wrapper around image_ops.resolve_latest_tag so tests can
     monkeypatch this name without touching image_ops itself."""
@@ -285,8 +296,27 @@ def cmd_upgrade(args) -> int:  # noqa: C901 — orchestrator
     except UpgradeError as e:
         _err(f"preflight: {e}")
         return 2
+    source_version = _pyproject_version(src_dir)
+    installed_version = _installed_version()
     _say(f"  current HEAD: {head_sha}")
-    _say(f"  current version: {_pyproject_version(src_dir)}")
+    _say(f"  source version: {source_version}")
+    _say(f"  installed version: {installed_version}")
+
+    # S-Task 3: detect partial state from a failed previous run. If the
+    # source tree advanced (git checkout succeeded) but pip-install never
+    # caught up, source_version and installed_version diverge. Surface
+    # this loudly and disable the no-op short-circuit so phases 5+ re-run.
+    partial_state = (
+        installed_version != "unknown"
+        and source_version != "unknown"
+        and installed_version != source_version
+    )
+    if partial_state:
+        _say(
+            f"  WARNING: partial state detected — venv has v{installed_version} "
+            f"but source is at v{source_version}. Previous upgrade likely "
+            f"failed mid-flight; will redo pip-install + restart."
+        )
 
     # Phase 2: resolve target ref
     _say("phase 2/8: resolve-target")
@@ -303,7 +333,8 @@ def cmd_upgrade(args) -> int:  # noqa: C901 — orchestrator
 
     # No-op short-circuit when already at target (works for SHAs; for tags
     # we still take the safer path through fetch-and-checkout below).
-    if target_ref == head_sha:
+    # Suppressed when partial_state — venv must catch up to the source.
+    if target_ref == head_sha and not partial_state:
         _say("already at target ref → nothing to do")
         return 0
 
