@@ -171,6 +171,40 @@ class S3Destination:
             "size_bytes": int(obj["ContentLength"]),
         }
 
+    _DESCRIPTOR_KEY = "descriptors/current"
+
+    def put_descriptor(self, blob: bytes) -> None:
+        """Upload the latest signed descriptor for RU agents to fetch
+        (T-Task 1). Uses Object Lock GOVERNANCE (mutable, since
+        descriptors rotate) — same pattern as index.json. The blob is
+        the binary wire format produced by
+        descriptor.sign.encode_descriptor_blob."""
+        retain_until = datetime.now(timezone.utc) + timedelta(days=self.object_lock_days)
+        self._client.put_object(
+            Bucket=self.bucket,
+            Key=self._DESCRIPTOR_KEY,
+            Body=blob,
+            ContentType="application/octet-stream",
+            ObjectLockMode="GOVERNANCE",
+            ObjectLockRetainUntilDate=retain_until,
+        )
+
+    def presigned_descriptor_url(
+        self, *, ttl_seconds: int = 2592000,
+    ) -> tuple[str, str]:
+        """Generate a presigned GET URL for the descriptor. Default TTL
+        30 days, matching the cadence the quickstart §7.3 used to ask
+        the operator to do by hand. Returns (url, expires_at_iso)."""
+        url = self._client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self.bucket, "Key": self._DESCRIPTOR_KEY},
+            ExpiresIn=ttl_seconds,
+        )
+        expires_at_iso = (
+            datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return url, expires_at_iso
+
     def presigned_image_url(
         self, *, image_version: str, ttl_seconds: int = 3600,
     ) -> tuple[str, str]:

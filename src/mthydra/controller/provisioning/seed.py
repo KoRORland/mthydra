@@ -17,7 +17,6 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
-import struct
 import uuid
 from dataclasses import dataclass
 
@@ -194,8 +193,9 @@ def provision_box(
     )
 
     # 6. Reconstruct the descriptor wire format (length-prefixed JSON + sig).
+    from mthydra.descriptor.sign import encode_descriptor_blob
     payload_bytes = desc_payload_text.encode("utf-8")
-    descriptor_blob = struct.pack(">H", len(payload_bytes)) + payload_bytes + desc_sig
+    descriptor_blob = encode_descriptor_blob(payload_bytes, desc_sig)
     initial_descriptor_b64 = base64.b64encode(descriptor_blob).decode("ascii")
 
     # 7. Atomic transaction — inlined SQL to avoid repo helpers' conn.commit() calls

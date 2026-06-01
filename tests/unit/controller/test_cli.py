@@ -697,6 +697,54 @@ def test_descriptor_show_after_sign(tmp_path):
     assert rc == 0
 
 
+def test_descriptor_publish_now_requires_signed_descriptor(tmp_path):
+    """T-Task 1: refuse cleanly when there's no descriptor to publish.
+    Operator runs descriptor-sign-now first."""
+    db, toml = _init_db(tmp_path)
+    # Seed a b2 credential so the credential lookup isn't the failure point.
+    conn = connect(db)
+    from mthydra.controller.state.tokens import set_provider_credential
+    set_provider_credential(conn, provider="b2", credential="k:s",
+                            at="2026-06-01T00:00:00Z")
+    conn.close()
+    rc = run(["descriptor-publish-now", "--db-path", str(db),
+              "--config", str(toml)])
+    assert rc == 3  # "no signed descriptor in DB"
+
+
+def test_descriptor_publish_now_uploads_and_returns_url(tmp_path, monkeypatch):
+    """T-Task 1: end-to-end happy path. Sign a descriptor, publish, assert
+    the S3Destination got the encoded blob and the URL flowed to stdout."""
+    db, toml = _init_db(tmp_path)
+    conn = connect(db)
+    from mthydra.controller.state.tokens import set_provider_credential
+    set_provider_credential(conn, provider="b2", credential="k:s",
+                            at="2026-06-01T00:00:00Z")
+    conn.close()
+    run(["descriptor-sign-now", "--db-path", str(db), "--config", str(toml)])
+
+    seen = {}
+    class _FakeDest:
+        def put_descriptor(self, blob):
+            seen["blob"] = blob
+        def presigned_descriptor_url(self, *, ttl_seconds=2592000):
+            seen["ttl"] = ttl_seconds
+            return ("https://example.s3/test?Signature=abc", "2026-07-01T00:00:00Z")
+
+    from mthydra.controller import cli as _cli
+    monkeypatch.setattr(_cli, "_build_destination",
+                        lambda cfg, secret, mode, bucket_override: _FakeDest())
+    rc = run(["descriptor-publish-now", "--db-path", str(db),
+              "--config", str(toml), "--ttl-seconds", "86400"])
+    assert rc == 0
+    # The blob must carry the 2-byte length prefix + payload + 64-byte sig.
+    import struct as _struct
+    assert seen["blob"]
+    n = _struct.unpack(">H", seen["blob"][:2])[0]
+    assert len(seen["blob"]) == 2 + n + 64
+    assert seen["ttl"] == 86400
+
+
 def test_descriptor_verify_on_fresh_signed(tmp_path):
     db, toml = _init_db(tmp_path)
     run(["descriptor-sign-now", "--db-path", str(db), "--config", str(toml)])

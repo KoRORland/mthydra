@@ -158,3 +158,43 @@ def test_sign_no_active_key_raises(tmp_path):
         sign_new_descriptor(
             conn, now_iso="2026-05-19T00:00:00Z", valid_until_iso="2026-05-19T01:00:00Z"
         )
+
+
+# ---------------------------------------------------------------------------
+# encode_descriptor_blob — T-Task 1 wire format
+# ---------------------------------------------------------------------------
+
+
+def test_encode_descriptor_blob_format():
+    """T-Task 1: wire format must be [2-byte BE length][payload][64-byte sig].
+    Same encoding the RU agent's RefreshLoop._verify expects, and identical
+    to what provisioning.seed.provision_box constructs inline for the
+    initial_descriptor field in the seed bundle."""
+    from mthydra.descriptor.sign import encode_descriptor_blob
+    payload = b'{"version":"v2","id":"x"}'
+    sig = b"\xaa" * 64
+    blob = encode_descriptor_blob(payload, sig)
+    import struct as _struct
+    assert _struct.unpack(">H", blob[:2])[0] == len(payload)
+    assert blob[2:2 + len(payload)] == payload
+    assert blob[2 + len(payload):] == sig
+
+
+def test_encode_descriptor_blob_rejects_wrong_signature_length():
+    from mthydra.descriptor.sign import encode_descriptor_blob
+    with pytest.raises(SignError, match="64 bytes"):
+        encode_descriptor_blob(b"payload", b"too-short")
+
+
+def test_encode_descriptor_blob_matches_seed_inline_encoding():
+    """Refactor regression check: extracted encoder must produce the
+    byte-identical blob the original inline encoding produced. Otherwise
+    in-flight RU boxes (which were provisioned against the inline form)
+    would mismatch fetched descriptors against their initial_descriptor."""
+    import struct as _struct
+    from mthydra.descriptor.sign import encode_descriptor_blob
+    payload = b'{"generation":7,"valid_until":"2026-12-31T23:59:59Z"}'
+    sig = bytes(range(64))
+    extracted = encode_descriptor_blob(payload, sig)
+    inline = _struct.pack(">H", len(payload)) + payload + sig
+    assert extracted == inline

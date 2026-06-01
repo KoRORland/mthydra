@@ -156,3 +156,27 @@ def test_presigned_image_url_returns_signed_url_and_expiry(s3_env, tmp_path):
     assert "ivX" in url
     assert "Signature" in url  # X-Amz-Signature or just Signature, depending on signer
     assert expires_at  # ISO-8601 string
+
+
+def test_put_descriptor_uploads_to_descriptors_current(s3_env):
+    """T-Task 1: descriptor blob lands at descriptors/current with GOVERNANCE
+    retention (mutable, like index.json). RU agents fetch this URL via the
+    presigned URL returned by presigned_descriptor_url."""
+    dest = _make_dest(s3_env)
+    blob = b"\x00\x05hello" + b"\xff" * 64
+    dest.put_descriptor(blob)
+    obj = s3_env.get_object(Bucket=BUCKET, Key="descriptors/current")
+    assert obj["Body"].read() == blob
+    assert obj["ObjectLockMode"] == "GOVERNANCE"
+
+
+def test_presigned_descriptor_url_returns_signed_url_and_expiry(s3_env):
+    """T-Task 1: presigned URL with default 30-day TTL replaces the manual
+    `aws s3 presign` step from quickstart §7.3."""
+    dest = _make_dest(s3_env)
+    dest.put_descriptor(b"\x00\x04test" + b"\x00" * 64)
+    url, expires_at = dest.presigned_descriptor_url()
+    assert url.startswith("https://") or url.startswith("http://")
+    assert "descriptors%2Fcurrent" in url or "descriptors/current" in url
+    assert "Signature" in url
+    assert expires_at

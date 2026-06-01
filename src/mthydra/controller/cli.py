@@ -171,6 +171,18 @@ def build_parser() -> argparse.ArgumentParser:
     # ----- spec B subcommands -----
 
     # descriptor-sign-now
+    dpn = sub.add_parser(
+        "descriptor-publish-now",
+        help="upload latest signed descriptor to S3 + presign URL for RU agents (T-Task 1)",
+    )
+    dpn.add_argument("--db-path", default=DEFAULT_DB)
+    dpn.add_argument("--config", default="/etc/mthydra/controller.toml")
+    dpn.add_argument(
+        "--ttl-seconds", type=int, default=2592000,
+        help="presigned URL TTL (default 30 days, matching the manual cadence "
+             "quickstart §7.3 used to require)",
+    )
+
     dsn = sub.add_parser("descriptor-sign-now", help="force-sign a new descriptor immediately")
     dsn.add_argument("--db-path", default=DEFAULT_DB)
     dsn.add_argument("--config", default="/etc/mthydra/controller.toml")
@@ -914,6 +926,9 @@ def run(argv: list[str]) -> int:
     if args.cmd == "descriptor-sign-now":
         return _cmd_descriptor_sign_now(args)
 
+    if args.cmd == "descriptor-publish-now":
+        return _cmd_descriptor_publish_now(args, mode)
+
     if args.cmd == "descriptor-show":
         return _cmd_descriptor_show(args)
 
@@ -1180,6 +1195,64 @@ def _cmd_descriptor_sign_now(args) -> int:
         return 3
     finally:
         conn.close()
+
+
+def _cmd_descriptor_publish_now(args, mode: str) -> int:
+    """T-Task 1: upload latest signed descriptor to S3 + return presigned URL.
+
+    Replaces quickstart §7.3's manual `aws s3 presign` step. The controller
+    already has S3 write credentials (used for backup-now / agent-publish);
+    let it use them for the descriptor too.
+
+    Out of scope: storing the URL in the DB and having ru-bringup auto-read
+    it. Operator currently still pipes this command's stdout into the
+    --descriptor-refresh-url flag of ru-bringup. A follow-up T-Task will
+    close that loop.
+    """
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.descriptor import latest_descriptor_with_signature
+    from mthydra.controller.state.tokens import get_provider_credential
+    from mthydra.descriptor.sign import encode_descriptor_blob
+
+    if mode == "offline":
+        print("descriptor-publish-now refused: controller is in offline mode",
+              file=sys.stderr)
+        return 1
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"descriptor-publish-now: config error: {e}", file=sys.stderr)
+        return 2
+
+    conn = connect(args.db_path)
+    try:
+        result = latest_descriptor_with_signature(conn)
+        if result is None:
+            print("descriptor-publish-now: no signed descriptor in DB; "
+                  "run descriptor-sign-now first", file=sys.stderr)
+            return 3
+        generation, payload, signature = result
+        try:
+            secret = get_provider_credential(conn, "b2")
+        except (KeyError, LookupError):
+            print("descriptor-publish-now: b2 credential not in DB",
+                  file=sys.stderr)
+            return 7
+    finally:
+        conn.close()
+
+    blob = encode_descriptor_blob(payload, signature)
+    dest = _build_destination(cfg, secret, mode=mode,
+                              bucket_override=args.bucket_override)
+    dest.put_descriptor(blob)
+    url, expires_at = dest.presigned_descriptor_url(ttl_seconds=args.ttl_seconds)
+    print(
+        f"descriptor-publish-now: published generation {generation} "
+        f"(blob {len(blob)} bytes); expires {expires_at}\n"
+        f"{url}"
+    )
+    return 0
 
 
 def _cmd_descriptor_show(args) -> int:

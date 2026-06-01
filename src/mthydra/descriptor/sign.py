@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import struct
 
 from mthydra.controller.state.audit import log_event
 from mthydra.controller.state.descriptor import (
@@ -21,6 +22,24 @@ from mthydra.descriptor.payload import (
 
 class SignError(RuntimeError):
     pass
+
+
+def encode_descriptor_blob(payload: bytes, signature: bytes) -> bytes:
+    """Encode the descriptor in the wire format the RU agent expects:
+    [2-byte BE payload-length][payload bytes][64-byte Ed25519 signature].
+
+    Same encoding used inline at provisioning.seed.provision_box (which
+    base64-encodes the result for embedding in cloud-init). Extracted here
+    so the descriptor-publish-now path produces an identical blob — the
+    RU agent's RefreshLoop._verify is the consumer in both cases.
+    """
+    if len(signature) != 64:
+        raise SignError(
+            f"signature must be 64 bytes (got {len(signature)})")
+    if len(payload) > 65535:
+        raise SignError(
+            f"payload too long for 2-byte length prefix ({len(payload)})")
+    return struct.pack(">H", len(payload)) + payload + signature
 
 
 def _active_signing_key(conn: sqlite3.Connection) -> tuple[int, bytes, bytes]:
