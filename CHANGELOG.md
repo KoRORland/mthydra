@@ -43,6 +43,29 @@ worked but `agent-publish` refused. `_get_s3_credentials` now mirrors
 the `_build_destination` split-or-fallback logic. No operator action;
 fix is code-only.
 
+**Agent-publish then crashed on `cfg.backup.region`** —
+`AttributeError: 'BackupConfig' object has no attribute 'region'`.
+`agent_ops._make_s3_client` had its own boto3-client construction that
+read a `region` field that does not exist on `BackupConfig` (region is
+derived from the endpoint, R-D2). This — and the credential bug above —
+reached prod because every `agent_ops` test mocked `_make_s3_client`
+out, and the test fixture invented a `region` attribute the real config
+lacks. Root-caused and fixed at the class level:
+- New shared `s3_dest.resolve_region(endpoint)` is now the single
+  region resolver; `controller.cli._resolve_backup_region` delegates to
+  it and `agent_ops._make_s3_client` uses it (plus `endpoint or None`
+  to match `_build_destination` exactly).
+- The lying test fixture is corrected to mirror the real `BackupConfig`
+  field set, and two new moto-backed integration tests exercise the
+  real `_make_s3_client` / `publish_agent` path end-to-end (no S3 mock)
+  against the actual `BackupConfig` dataclass — so a config-shape
+  divergence can't slip past mocked tests again.
+- Audit confirmed `agent_ops` was the only module that reimplemented the
+  S3 client + credential parsing; `ru_bringup` shells out to
+  `mthydra-controller` (inherits correct handling) and all 9 cli
+  credential consumers route through `_build_destination`.
+No operator action; fix is code-only.
+
 **T-2 — Installer now writes `/var/lib/mthydra/.bash_profile`** so
 `sudo -u mthydra -i` gives a login shell with `mthydra-controller` and
 `mthydra-ops` on PATH. No more typing `/opt/mthydra/venv/bin/` prefixes.

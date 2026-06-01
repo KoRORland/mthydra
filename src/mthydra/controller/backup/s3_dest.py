@@ -2,12 +2,38 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
+
+
+_AWS_REGION_RE = re.compile(r"^https?://s3[.\-]([a-z0-9-]+)\.amazonaws\.com/?$")
+
+
+def resolve_region(endpoint: str | None) -> str:
+    """Canonical S3 region resolution (R-D2), shared by every boto3 client
+    in the codebase. MTHYDRA_BACKUP_REGION env wins; else parse the AWS
+    endpoint URL (s3.<region>.amazonaws.com); else fall back to us-east-1
+    (B2/MinIO ignore region). Avoids the SignatureDoesNotMatch trap on
+    non-us-east-1 buckets.
+
+    BackupConfig has NO `region` field — region is always derived from the
+    endpoint. Any boto3 client built from cfg.backup MUST call this rather
+    than reaching for a (non-existent) cfg.backup.region attribute.
+    """
+    env = os.environ.get("MTHYDRA_BACKUP_REGION")
+    if env:
+        return env
+    if endpoint:
+        m = _AWS_REGION_RE.match(endpoint)
+        if m:
+            return m.group(1)
+    return "us-east-1"
 
 
 class S3Destination:

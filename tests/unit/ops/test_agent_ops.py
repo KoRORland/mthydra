@@ -58,10 +58,14 @@ class _FakeS3Client:
 
 
 class _FakeCfg:
+    # Must mirror the REAL BackupConfig field set. BackupConfig has NO
+    # `region` field — region is derived from the endpoint. A fixture that
+    # invents a `region` attr is exactly how the cfg.backup.region
+    # AttributeError slipped past mocked tests into prod (2026-06-02).
     class backup:
         endpoint = "https://s3.eu-west-1.amazonaws.com"
         bucket = "mthydra-prod"
-        region = "eu-west-1"
+        access_key_id = "AKIACFG"
 
 
 def test_publish_agent_uploads_and_writes_manifest(monkeypatch, tmp_path):
@@ -275,3 +279,79 @@ def test_get_s3_credentials_raises_when_secret_only_and_no_config_keyid(monkeypa
     c.close()
     with pytest.raises(RuntimeError, match="access_key_id is unset"):
         agent_ops._get_s3_credentials(_cfg_with_key_id(""), str(db))
+
+
+# ---------------------------------------------------------------------------
+# Integration: run the REAL _make_s3_client / publish_agent path (no mock of
+# the S3 client) against the REAL BackupConfig dataclass + moto. This is the
+# coverage that was missing — every prior test mocked _make_s3_client, so the
+# cfg.backup.region AttributeError and the secret-only credential bug both
+# reached prod. (2026-06-02)
+# ---------------------------------------------------------------------------
+
+
+def _real_backup_cfg(endpoint: str, bucket: str, access_key_id: str = "AKIACFG"):
+    from types import SimpleNamespace
+    from mthydra.controller.config import BackupConfig, RetentionConfig
+    return SimpleNamespace(backup=BackupConfig(
+        floor_interval_hours=24,
+        on_change_debounce_seconds=30,
+        endpoint=endpoint,
+        bucket=bucket,
+        access_key_id=access_key_id,
+        retention=RetentionConfig(keep_daily=30, keep_monthly=12,
+                                  object_lock_days=30),
+    ))
+
+
+def _seed_b2_cred(tmp_path, credential: str):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.tokens import set_provider_credential
+    db = tmp_path / "state.sqlite"
+    c = connect(db)
+    apply_schema(c)
+    set_provider_credential(c, provider="b2", credential=credential,
+                            at="2026-06-02T00:00:00Z")
+    c.close()
+    return db
+
+
+def test_make_s3_client_real_against_backupconfig_dataclass(monkeypatch, tmp_path):
+    """Exercises _make_s3_client with the REAL BackupConfig (no `region`
+    field) so a config-shape divergence cannot slip past again. Asserts the
+    region was derived from the endpoint, NOT read off a (non-existent)
+    cfg.backup.region attribute."""
+    from moto import mock_aws
+    monkeypatch.delenv("MTHYDRA_BACKUP_REGION", raising=False)
+    db = _seed_b2_cred(tmp_path, "AKIA:realsecret")
+    cfg = _real_backup_cfg("https://s3.eu-west-1.amazonaws.com", "b")
+    with mock_aws():
+        client = agent_ops._make_s3_client(cfg, str(db))
+    assert client.meta.region_name == "eu-west-1"
+
+
+def test_publish_agent_end_to_end_real_client_moto(monkeypatch, tmp_path):
+    """Full path: real BackupConfig + real DB credential + real boto3 client
+    (moto) → put_object + presign + manifest write. No _make_s3_client mock.
+    This would have caught BOTH the cfg.backup.region crash AND the
+    secret-only credential RuntimeError."""
+    import boto3
+    from moto import mock_aws
+    monkeypatch.delenv("MTHYDRA_BACKUP_REGION", raising=False)
+    monkeypatch.setattr(agent_ops, "AGENT_MANIFEST_PATH", tmp_path / "agent.json")
+    # secret-only credential (the R-D1 workaround form) + empty endpoint
+    # (vanilla AWS) — the two conditions that broke prod, combined.
+    db = _seed_b2_cred(tmp_path, "just-the-secret")
+    cfg = _real_backup_cfg("", "mthydra-agent-bucket", access_key_id="AKIAFROMCFG")
+    sha = "a" * 64
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(
+            Bucket="mthydra-agent-bucket")
+        m = agent_ops.publish_agent(cfg, tar_bytes=b"tar-content",
+                                    sha=sha, db_path=str(db), ttl_days=7)
+    assert m.sha256 == sha
+    assert "agent/mthydra-ru-agent-aaaaaaaaaaaa.tar.gz" in m.url
+    # Manifest actually written to disk.
+    on_disk = json.loads((tmp_path / "agent.json").read_text())
+    assert on_disk["sha256"] == sha

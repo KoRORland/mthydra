@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sqlite3
 import sys
 import tempfile
@@ -1658,22 +1657,11 @@ def _build_destination(cfg, secret: str, mode: str, bucket_override: str | None)
     )
 
 
-_AWS_REGION_RE = re.compile(r"^https?://s3[.\-]([a-z0-9-]+)\.amazonaws\.com/?$")
-
-
 def _resolve_backup_region(endpoint: str | None) -> str:
-    """R-D2: MTHYDRA_BACKUP_REGION env wins; else parse the AWS endpoint URL
-    (s3.<region>.amazonaws.com); else fall back to us-east-1 (B2/MinIO ignore
-    region). Avoids the SignatureDoesNotMatch trap on non-us-east-1 buckets
-    that the user hit on 2026-05-31."""
-    env = os.environ.get("MTHYDRA_BACKUP_REGION")
-    if env:
-        return env
-    if endpoint:
-        m = _AWS_REGION_RE.match(endpoint)
-        if m:
-            return m.group(1)
-    return "us-east-1"
+    """Thin alias for the canonical resolver in s3_dest (R-D2). Kept as a
+    name here because several call sites + tests reference it."""
+    from mthydra.controller.backup.s3_dest import resolve_region
+    return resolve_region(endpoint)
 
 
 def _cmd_serve(args) -> int:

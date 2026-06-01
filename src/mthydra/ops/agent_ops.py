@@ -112,13 +112,18 @@ def _get_s3_credentials(cfg, db_path: str) -> tuple[str, str]:
 
 
 def _make_s3_client(cfg, db_path: str):
+    # Match controller.cli._build_destination exactly: BackupConfig has NO
+    # `region` field (region is derived from the endpoint via R-D2), and an
+    # empty endpoint must become None so boto3 uses the default AWS endpoint.
+    from mthydra.controller.backup.s3_dest import resolve_region
+
     key_id, secret = _get_s3_credentials(cfg, db_path)
     return boto3.client(
         "s3",
-        endpoint_url=cfg.backup.endpoint,
+        endpoint_url=cfg.backup.endpoint or None,
         aws_access_key_id=key_id,
         aws_secret_access_key=secret,
-        region_name=cfg.backup.region,
+        region_name=resolve_region(cfg.backup.endpoint),
     )
 
 
