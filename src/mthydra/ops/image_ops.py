@@ -177,28 +177,44 @@ def cmd_image_prepare(args) -> int:
     else:
         profile_path = args.profile_json
 
+    # image-build's stdout is the only place that carries the canonical
+    # image_version — the sha256 of the actual binary, NOT the upstream tag.
+    # image-promote needs THAT sha (it's the primary key in ru_images);
+    # passing `iv-{tag}` as we used to fails with "image_profiles row missing".
     try:
-        _run_controller(
+        res = _run_controller(
             "image-build", "--release", tag, "--asset", asset,
             "--profile-json", profile_path,
             "--db-path", args.db_path, "--config", args.config,
-            check=True,
+            check=True, capture=True,
         )
     except subprocess.CalledProcessError as e:
         _main._err(f"image-build failed (exit {e.returncode}): see above")
         return e.returncode
+    # Echo the captured output so the operator can still see what happened.
+    if res.stdout:
+        print(res.stdout, end="")
+    image_version = _parse_image_version_from_build_output(res.stdout or "")
+    if image_version is None:
+        _main._err(
+            "image-build succeeded but stdout did not contain the canonical "
+            "image_version line ('candidate <sha> registered'); cannot drive "
+            "image-promote automatically. Run image-promote by hand using "
+            "the version printed above.")
+        return 4
+    _say(f"image_version = {image_version}")
 
     if not args.yes:
         if args.non_interactive:
-            _say(f"non-interactive without --yes — image iv-{tag} stays candidate")
+            _say(f"non-interactive without --yes — image {image_version} stays candidate")
             return 0
-        ans = input(f"Promote iv-{tag}? [y/N] ").strip().lower()
+        ans = input(f"Promote {image_version}? [y/N] ").strip().lower()
         if ans not in ("y", "yes"):
-            _say(f"promotion declined — iv-{tag} stays candidate")
+            _say(f"promotion declined — {image_version} stays candidate")
             return 0
     try:
         _run_controller(
-            "image-promote", f"iv-{tag}",
+            "image-promote", image_version,
             "--evidence", f"mthydra-ops image-prepare auto-promote {tag}",
             "--db-path", args.db_path, "--config", args.config,
             check=True,
@@ -206,5 +222,18 @@ def cmd_image_prepare(args) -> int:
     except subprocess.CalledProcessError as e:
         _main._err(f"image-promote failed (exit {e.returncode}): see above")
         return e.returncode
-    _say(f"iv-{tag} promoted")
+    _say(f"{image_version} promoted")
     return 0
+
+
+_BUILD_OUTPUT_RE = re.compile(
+    r"^image-build: candidate ([0-9a-f]{64}) registered", re.MULTILINE,
+)
+
+
+def _parse_image_version_from_build_output(text: str) -> str | None:
+    """image-build prints 'image-build: candidate <sha256> registered ...'
+    The sha is the canonical primary key in ru_images. Returns it or None
+    when the expected line is absent (defensive against output reshaping)."""
+    m = _BUILD_OUTPUT_RE.search(text)
+    return m.group(1) if m else None

@@ -104,6 +104,28 @@ def test_default_profile_json_has_required_schema_fields():
     assert p["notes"].startswith("MVP placeholder")
 
 
+_FAKE_BUILD_SHA = "f" * 64
+
+
+def _build_stdout() -> str:
+    """Stand-in for image-build's actual stdout; image-prepare parses the
+    'candidate <sha> registered' line to drive image-promote."""
+    return (
+        f"image-build: candidate {_FAKE_BUILD_SHA} registered with pinned "
+        "profile (release=v2.2.8, profile_recorded_by='operator')\n"
+    )
+
+
+def _fake_run_with_build_output(calls):
+    """Factory for the _run_controller monkeypatch: image-build returns
+    canonical stdout, everything else returns empty success."""
+    def fake_run(*args, check=True, capture=False, env=None):
+        calls.append(list(args))
+        stdout = _build_stdout() if args[:1] == ("image-build",) else ""
+        return subprocess.CompletedProcess(args, 0, stdout, "")
+    return fake_run
+
+
 def _prepare_args(tmp_path, **over):
     base = dict(
         release="latest", arch="linux-amd64", profile_json="auto",
@@ -122,10 +144,8 @@ def test_cmd_image_prepare_end_to_end(monkeypatch, tmp_path):
     monkeypatch.setattr(image_ops, "resolve_latest_tag",
                         lambda **kw: "v2.2.8")
     calls = []
-    def fake_run(*args, check=True, capture=False, env=None):
-        calls.append(list(args))
-        return subprocess.CompletedProcess(args, 0, "", "")
-    monkeypatch.setattr(image_ops, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(image_ops, "_run_controller",
+                        _fake_run_with_build_output(calls), raising=False)
     rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path))
     assert rc == 0
     subs = [a[0] for a in calls]
@@ -146,10 +166,8 @@ def test_cmd_image_prepare_handles_tag_without_v_prefix(monkeypatch, tmp_path):
     monkeypatch.setattr(image_ops, "resolve_latest_tag",
                         lambda **kw: "2.3.0")
     calls = []
-    def fake_run(*args, check=True, capture=False, env=None):
-        calls.append(list(args))
-        return subprocess.CompletedProcess(args, 0, "", "")
-    monkeypatch.setattr(image_ops, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(image_ops, "_run_controller",
+                        _fake_run_with_build_output(calls), raising=False)
     rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path))
     assert rc == 0
     ib = next(a for a in calls if a[0] == "image-build")
@@ -162,8 +180,7 @@ def test_cmd_image_prepare_skips_promote_without_yes(monkeypatch, tmp_path):
     monkeypatch.setattr("builtins.input", lambda _p: "n")
     calls = []
     monkeypatch.setattr(image_ops, "_run_controller",
-        lambda *a, **k: calls.append(list(a))
-        or subprocess.CompletedProcess(a, 0, "", ""), raising=False)
+                        _fake_run_with_build_output(calls), raising=False)
     rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path, yes=False,
                                                    non_interactive=False))
     assert rc == 0
@@ -197,10 +214,8 @@ def test_cmd_image_prepare_auto_detects_arch_when_not_passed(monkeypatch, tmp_pa
     monkeypatch.setattr(image_ops, "detect_host_arch",
                         lambda: "linux-arm64")
     calls = []
-    def fake_run(*args, check=True, capture=False, env=None):
-        calls.append(list(args))
-        return subprocess.CompletedProcess(args, 0, "", "")
-    monkeypatch.setattr(image_ops, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(image_ops, "_run_controller",
+                        _fake_run_with_build_output(calls), raising=False)
     # Pass arch=None to simulate "operator didn't specify".
     rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path, arch=None))
     assert rc == 0
@@ -218,12 +233,45 @@ def test_cmd_image_prepare_honors_explicit_arch_override(monkeypatch, tmp_path):
     monkeypatch.setattr(image_ops, "detect_host_arch",
                         lambda: "linux-arm64")
     calls = []
-    def fake_run(*args, check=True, capture=False, env=None):
-        calls.append(list(args))
-        return subprocess.CompletedProcess(args, 0, "", "")
-    monkeypatch.setattr(image_ops, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(image_ops, "_run_controller",
+                        _fake_run_with_build_output(calls), raising=False)
     rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path, arch="linux-amd64"))
     assert rc == 0
     ib = next(a for a in calls if a[0] == "image-build")
     asset_idx = ib.index("--asset")
     assert ib[asset_idx + 1] == "mtg-2.2.8-linux-amd64.tar.gz"
+
+
+def test_cmd_image_prepare_passes_sha_to_promote_not_tag_alias(monkeypatch, tmp_path):
+    """Regression: image-prepare used to pass `iv-{tag}` to image-promote,
+    but image-build stores the image keyed by the binary's sha256. The two
+    names don't match → 'image_profiles row missing' on promote. The fix
+    parses the sha from image-build's stdout and passes THAT to promote.
+    Discovered 2026-06-01 on a real run."""
+    monkeypatch.setattr(image_ops, "resolve_latest_tag", lambda **kw: "v2.2.8")
+    calls = []
+    monkeypatch.setattr(image_ops, "_run_controller",
+                        _fake_run_with_build_output(calls), raising=False)
+    rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path))
+    assert rc == 0
+    promote = next(a for a in calls if a[0] == "image-promote")
+    # The argument right after 'image-promote' is the image_version.
+    # MUST be the binary's sha256, NOT 'iv-v2.2.8'.
+    assert promote[1] == _FAKE_BUILD_SHA
+    assert not promote[1].startswith("iv-")
+
+
+def test_parse_image_version_from_build_output():
+    """Helper extracts the sha256 from image-build's canonical line."""
+    out = (
+        "image-build: candidate "
+        + "a" * 64
+        + " registered with pinned profile (release=v2.2.8)\n"
+    )
+    assert image_ops._parse_image_version_from_build_output(out) == "a" * 64
+    # Missing line → None (defensive, caller errors clearly).
+    assert image_ops._parse_image_version_from_build_output(
+        "image-build: something else") is None
+    # Wrong shape (not 64 hex chars) → None.
+    assert image_ops._parse_image_version_from_build_output(
+        "image-build: candidate iv-v2.2.8 registered") is None
