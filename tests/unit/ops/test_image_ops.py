@@ -275,3 +275,25 @@ def test_parse_image_version_from_build_output():
     # Wrong shape (not 64 hex chars) → None.
     assert image_ops._parse_image_version_from_build_output(
         "image-build: candidate iv-v2.2.8 registered") is None
+
+
+def test_cmd_image_prepare_surfaces_build_stderr_on_failure(monkeypatch, tmp_path, capsys):
+    """Regression: when image-build is invoked with capture=True, a non-zero
+    exit raises CalledProcessError with stdout/stderr in the exception.
+    image-prepare must echo those streams before printing 'see above' —
+    otherwise the operator sees only 'exit 1: see above' with nothing above
+    to actually look at. Discovered 2026-06-01."""
+    monkeypatch.setattr(image_ops, "resolve_latest_tag", lambda **kw: "v2.2.8")
+    def fake_run(*args, check=True, capture=False, env=None):
+        if args[:1] == ("image-build",):
+            err = subprocess.CalledProcessError(1, args)
+            err.stdout = ""
+            err.stderr = "image-build: sha256 mismatch for the binary\n"
+            raise err
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(image_ops, "_run_controller", fake_run, raising=False)
+    rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path))
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "sha256 mismatch for the binary" in captured.err
+    assert "image-build failed (exit 1)" in captured.err

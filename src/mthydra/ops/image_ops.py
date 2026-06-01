@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 
@@ -189,6 +190,14 @@ def cmd_image_prepare(args) -> int:
             check=True, capture=True,
         )
     except subprocess.CalledProcessError as e:
+        # capture=True swallows the child's output streams into the
+        # exception; surface them so "see above" actually points at
+        # something. (Previously the operator just saw "exit N: see
+        # above" with no above.)
+        if e.stdout:
+            print(e.stdout, end="")
+        if e.stderr:
+            print(e.stderr, end="", file=sys.stderr)
         _main._err(f"image-build failed (exit {e.returncode}): see above")
         return e.returncode
     # Echo the captured output so the operator can still see what happened.
