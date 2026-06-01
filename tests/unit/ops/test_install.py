@@ -300,8 +300,36 @@ def test_build_active_phases_order(tmp_path):
     assert names == [
         "preconditions", "setup-host", "verify-install", "bootstrap",
         "preflight", "service", "first-descriptor", "maintenance-timers",
-        "summary",
+        "backup-smoke", "summary",
     ]
+
+
+def test_backup_smoke_runs_backup_now_and_raises_on_failure(tmp_path, monkeypatch):
+    """R-D5: install ends with a forced backup-now. Failure must raise
+    (so install exits non-zero) with the operator-facing diagnostic that
+    lists the three common causes."""
+    ctx = _ctx(tmp_path)
+    # Success path: phase returns without raising.
+    calls = []
+    def fake_run_controller(*args, **kw):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0,
+            "backup-now: pushed generation 1\n", "")
+    monkeypatch.setattr(ctx, "run_controller", fake_run_controller)
+    install._phase_backup_smoke(ctx)
+    assert calls[0][0] == "backup-now"
+    assert "install-validation" in calls[0]
+
+    # Failure path: CalledProcessError must surface as RuntimeError with
+    # the diagnostic hint in stderr (errors land in ctx.log).
+    def fail_run_controller(*args, **kw):
+        err = subprocess.CalledProcessError(1, args)
+        err.stdout = "backup-now: failed: An error occurred (AccessDenied)"
+        raise err
+    monkeypatch.setattr(ctx, "run_controller", fail_run_controller)
+    import pytest
+    with pytest.raises(RuntimeError, match="first backup failed"):
+        install._phase_backup_smoke(ctx)
 
 
 def test_active_dry_run_executes_no_side_effects(tmp_path, monkeypatch):

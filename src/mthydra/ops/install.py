@@ -589,6 +589,40 @@ def _phase_preflight(ctx: Ctx) -> None:
         )
 
 
+def _phase_backup_smoke(ctx: Ctx) -> None:
+    """R-D5: run a forced backup-now as the final install step.
+
+    Without this, the credential bug (R-D1), region mismatch (R-D2), and
+    broken IAM policy (R-D3) each fail silently for ~30 days until
+    retention-violation alerts fire. Here, the failure is loud and
+    immediate in the install output while the operator is still on the host.
+    """
+    c = ctx.config
+    try:
+        ctx.run_controller(
+            "backup-now",
+            "--db-path", c.db_path,
+            "--config", c.config_path,
+            "--reason", "install-validation",
+        )
+    except subprocess.CalledProcessError as e:
+        msg = (e.stdout or "").strip() or str(e)
+        ctx.err(f"backup-smoke FAILED: {msg}")
+        ctx.err(
+            "Common causes:\n"
+            "  - SignatureDoesNotMatch → wrong AWS secret access key (rotate "
+            "via mthydra-controller rotate-provider-credential b2 "
+            "--credential-file /tmp/.b2-cred)\n"
+            "  - AccessDenied → IAM policy missing s3:PutObjectRetention "
+            "(see quickstart §1.2)\n"
+            "  - NoSuchBucket → bucket name typo or wrong-region endpoint"
+        )
+        raise RuntimeError(
+            "first backup failed — fix the cause above and re-run "
+            "(install is idempotent)"
+        ) from e
+
+
 def _phase_summary(ctx: Ctx) -> None:
     ctx.say(
         "EU active host is live. Remaining OUT-OF-BAND steps:\n"
@@ -735,5 +769,6 @@ def build_active_phases(ctx: Ctx) -> list[Phase]:
             ),
             install_maintenance_timers,
         ),
+        Phase("backup-smoke", lambda c: False, _phase_backup_smoke),
         Phase("summary", lambda c: False, _phase_summary),
     ]
