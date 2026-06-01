@@ -148,6 +148,54 @@ def test_build_image_asset_missing(conn, tmp_path):
         )
 
 
+def test_build_image_resolves_project_specific_checksum_filename(conn, tmp_path):
+    """Upstream mtg ships its checksums as 'mtg-2.2.8-checksums.txt' — none of
+    the canonical names (SHA256SUMS, checksums.txt, <asset>.sha256). The
+    fallback substring match picks it up by 'checksum' in the filename.
+
+    Discovered 2026-06-01 on a real mthydra-ops image-prepare run."""
+    asset_bytes = b"arm64-mtg-binary-bytes" * 100
+    sha = hashlib.sha256(asset_bytes).hexdigest()
+    asset_name = "mtg-2.2.8-linux-arm64.tar.gz"
+    checksum_text = f"{sha}  {asset_name}\n"
+    release_json = {
+        "tag_name": "v2.2.8",
+        "assets": [
+            {"name": asset_name,
+             "browser_download_url": f"https://example/{asset_name}"},
+            {"name": "mtg-2.2.8-checksums.txt",
+             "browser_download_url": "https://example/mtg-2.2.8-checksums.txt"},
+        ],
+    }
+    def _get(url):
+        resp = MagicMock()
+        if url.endswith("/releases/tags/v2.2.8"):
+            resp.status = 200
+            resp.read.return_value = json.dumps(release_json).encode()
+        elif url.endswith(f"/{asset_name}"):
+            resp.status = 200
+            resp.read.return_value = asset_bytes
+        elif url.endswith("/mtg-2.2.8-checksums.txt"):
+            resp.status = 200
+            resp.read.return_value = checksum_text.encode()
+        else:
+            resp.status = 404
+            resp.read.return_value = b""
+        return resp
+    # Should not raise — fallback substring matcher picks up the file.
+    iv = build_image(
+        conn=conn, b2_destination=MagicMock(),
+        upstream_repo="9seconds/mtg",
+        upstream_release="v2.2.8",
+        asset_filename=asset_name,
+        github_api_url="https://api.github.com",
+        tmp_dir=tmp_path,
+        now="2026-06-01T00:00:00Z",
+        http_client=_get,
+    )
+    assert iv == sha
+
+
 def test_build_image_checksum_file_missing(conn, tmp_path):
     asset_bytes = b"binary"
     release_json = {

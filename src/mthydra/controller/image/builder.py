@@ -96,15 +96,29 @@ def build_image(
     binary_url = assets[asset_filename]
 
     # 3. Locate the checksum file.
+    # Exact-match the conventional names first (preserves existing behavior),
+    # then fall back to a substring scan for any asset that looks like a
+    # checksum manifest. mtg ships its checksums as
+    # 'mtg-<version>-checksums.txt' which doesn't match any of the canonical
+    # names; the substring fallback handles project-specific naming without
+    # forcing us to maintain an exhaustive candidate list.
     checksum_url: str | None = None
     for name in (f"{asset_filename}.sha256", *_CHECKSUM_ASSET_CANDIDATES):
         if name in assets:
             checksum_url = assets[name]
             break
     if checksum_url is None:
+        for name in sorted(assets):
+            lower = name.lower()
+            if "checksum" in lower or "sha256sums" in lower:
+                checksum_url = assets[name]
+                break
+    if checksum_url is None:
         raise BuildError(
             f"checksum file not in release {upstream_release!r}; "
-            f"expected one of: {asset_filename}.sha256, SHA256SUMS, checksums.txt"
+            f"looked for: {asset_filename}.sha256, SHA256SUMS, checksums.txt, "
+            f"or any asset whose name contains 'checksum' / 'sha256sums'. "
+            f"Available assets: {sorted(assets)}"
         )
 
     # 4. Download both.
