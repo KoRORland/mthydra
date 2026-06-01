@@ -7,6 +7,7 @@ Resilient Telegram access controller. See `doc/design.md` for the architecture, 
 - `CHANGELOG.md` — per-release operator-visible changes, including required actions when upgrading.
 - `doc/quickstart-mvp.md` — install + day-2 routine (Part 10 covers `mthydra-ops upgrade`).
 - `doc/runbook.md` — full operator reference; **§12** covers controller upgrades (auto + manual + pre-0.0.4 migration).
+- `doc/automation-roadmap.md` — what's automated, what's in flight, what's queued; the principle is "operator time-budget on a healthy fleet is ~30 min/week."
 
 ## Development
 
