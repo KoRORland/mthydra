@@ -428,6 +428,73 @@ def test_descriptor_verify_unreadable_payload_exits_2(tmp_path, capsys):
     assert "cannot read --payload-file" in capsys.readouterr().err
 
 
+def test_rotate_provider_credential_stamps_rotation_reminder(tmp_path):
+    """V-3: after rotation, credential_rotation_proven::<provider> must be
+    stamped with next_due_at ~= now + 90d (default for 'b2' actually
+    180d per the cadence map). Operator gets a calendar reminder
+    instead of waiting for the credential to silently fail."""
+    from mthydra.controller.state.obligations import list_obligations
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    run(["init", "--db-path", str(db), "--age-recipient-file", str(recipient_file),
+         "--provider-credential", "b2=old"])
+    run(["rotate-provider-credential", "b2",
+         "--db-path", str(db), "--credential", "new"])
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    conn.close()
+    assert "credential_rotation_proven::b2" in obs
+    ob = obs["credential_rotation_proven::b2"]
+    # Default for b2 is 180d.
+    from datetime import datetime, timezone
+    lpa = datetime.strptime(ob.last_proven_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    nda = datetime.strptime(ob.next_due_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    days = (nda - lpa).days
+    assert 179 <= days <= 181
+
+
+def test_rotate_provider_credential_honors_rotation_days_override(tmp_path):
+    """V-3: --rotation-days N overrides the provider default."""
+    from mthydra.controller.state.obligations import list_obligations
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    run(["init", "--db-path", str(db), "--age-recipient-file", str(recipient_file),
+         "--provider-credential", "aws=old"])
+    run(["rotate-provider-credential", "aws",
+         "--db-path", str(db), "--credential", "new",
+         "--rotation-days", "30"])
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    conn.close()
+    ob = obs["credential_rotation_proven::aws"]
+    from datetime import datetime, timezone
+    lpa = datetime.strptime(ob.last_proven_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    nda = datetime.strptime(ob.next_due_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    days = (nda - lpa).days
+    assert 29 <= days <= 31
+
+
+def test_init_seeds_rotation_reminder_per_provider(tmp_path):
+    """V-3: bootstrap stamps credential_rotation_proven::<provider> for every
+    credential seeded at init, so a fresh install has the calendar reminder
+    even before the operator runs rotate-provider-credential."""
+    from mthydra.controller.state.obligations import list_obligations
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    run(["init", "--db-path", str(db),
+         "--age-recipient-file", str(recipient_file),
+         "--provider-credential", "b2=secret",
+         "--provider-credential", "aws=other"])
+    conn = connect(db)
+    obs = {o.obligation_id for o in list_obligations(conn)}
+    conn.close()
+    assert "credential_rotation_proven::b2" in obs
+    assert "credential_rotation_proven::aws" in obs
+
+
 def test_rotate_provider_credential_writes_audit_row(tmp_path):
     from mthydra.controller.state.audit import recent_events
     db = tmp_path / "state.sqlite"

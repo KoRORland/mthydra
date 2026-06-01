@@ -30,6 +30,15 @@ from mthydra.controller.state.obligations import prove
 DEFAULT_DB = "/var/lib/mthydra/state.sqlite"
 DEFAULT_RECIPIENT_FILE = "/etc/mthydra/age-recipient.txt"
 
+# V-3: default rotation cadence (days) per provider type. Gmail app
+# passwords age ~90d; AWS rotation is org-policy (90d is a common
+# default); B2 has no expiry but operators should still rotate periodically.
+_CRED_ROTATION_DEFAULT_DAYS = {
+    "aws": 90,
+    "b2": 180,
+    "gmail": 90,
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -167,6 +176,11 @@ def build_parser() -> argparse.ArgumentParser:
     cred_g = rpc_p.add_mutually_exclusive_group(required=True)
     cred_g.add_argument("--credential", help="credential string")
     cred_g.add_argument("--credential-file", help="path to file containing the credential")
+    rpc_p.add_argument(
+        "--rotation-days", type=int, default=None,
+        help="days until next rotation reminder (V-3); default from provider "
+             "type (aws=90, gmail=90, b2=180, fallback=90)",
+    )
 
     # ----- spec B subcommands -----
 
@@ -928,16 +942,37 @@ def run(argv: list[str]) -> int:
                 )
                 return 2
         from mthydra.controller.state.audit import log_event
+        from mthydra.controller.state.obligations import set_obligation
         from mthydra.controller.state.tokens import set_provider_credential
         conn = connect(args.db_path)
         try:
-            set_provider_credential(conn, provider=args.provider, credential=cred, at=_now())
-            log_event(conn, ts=_now(), actor="operator",
+            now = _now()
+            set_provider_credential(conn, provider=args.provider, credential=cred, at=now)
+            log_event(conn, ts=now, actor="operator",
                       action="rotate_provider_credential", target=args.provider,
                       details_json=None)
+            # V-3: stamp the rotation obligation so the operator gets a
+            # calendar reminder before the credential ages out.
+            # cadence comes from _CRED_ROTATION_DEFAULT_DAYS; operator can
+            # override per provider with --rotation-days.
+            from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+            days = (args.rotation_days if args.rotation_days is not None
+                    else _CRED_ROTATION_DEFAULT_DAYS.get(args.provider, 90))
+            next_due = (
+                _dt.fromisoformat(now.replace("Z", "+00:00")) + _td(days=days)
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            set_obligation(
+                conn,
+                obligation_id=f"credential_rotation_proven::{args.provider}",
+                last_proven_at=now,
+                proven_by="rotate-provider-credential",
+                next_due_at=next_due,
+                details=None,
+            )
+            conn.commit()
         finally:
             conn.close()
-        print(f"rotated credential for {args.provider}")
+        print(f"rotated credential for {args.provider} (next rotation due in {days}d)")
         return 0
 
     if args.cmd == "descriptor-sign-now":

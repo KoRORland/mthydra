@@ -20,6 +20,25 @@ class BootstrapError(RuntimeError):
     pass
 
 
+# V-3: rotation cadence per provider — duplicated from cli._CRED_ROTATION_DEFAULT_DAYS
+# to avoid a circular import (cli imports bootstrap indirectly via state). Kept
+# in sync by convention; tests would catch divergence.
+_CRED_ROTATION_DEFAULT_DAYS = {"aws": 90, "b2": 180, "gmail": 90}
+
+
+def _stamp_credential_rotation(conn, *, provider: str, at: str) -> None:
+    days = _CRED_ROTATION_DEFAULT_DAYS.get(provider, 90)
+    next_due = _add_hours(at, days * 24)
+    set_obligation(
+        conn,
+        obligation_id=f"credential_rotation_proven::{provider}",
+        last_proven_at=at,
+        proven_by="bootstrap",
+        next_due_at=next_due,
+        details=None,
+    )
+
+
 def _add_hours(iso: str, hours: int) -> str:
     t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     return (t + timedelta(hours=hours)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -88,6 +107,10 @@ def init_state(
 
             for provider, cred in provider_credentials.items():
                 set_provider_credential(conn, provider=provider, credential=cred, at=now)
+                # V-3: seed the rotation reminder obligation at install
+                # time so the operator gets a calendar-aware due-date
+                # even if they never run rotate-provider-credential.
+                _stamp_credential_rotation(conn, provider=provider, at=now)
 
             for obligation_id, hours in obligation_timer_hours.items():
                 next_due = _add_hours(now, hours) if hours > 0 else now
