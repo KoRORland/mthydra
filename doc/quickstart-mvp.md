@@ -75,19 +75,37 @@ This makes backups un-deletable for 30 days even by you under coercion. Importan
      "Version": "2012-10-17",
      "Statement": [
        {
+         "Sid": "MthydraBucketLevel",
          "Effect": "Allow",
          "Action": [
-           "s3:GetObject", "s3:PutObject", "s3:ListBucket",
-           "s3:GetBucketLocation", "s3:GetObjectRetention"
+           "s3:ListBucket",
+           "s3:GetBucketObjectLockConfiguration"
          ],
-         "Resource": [
-           "arn:aws:s3:::mthydra-yourname-state",
-           "arn:aws:s3:::mthydra-yourname-state/*"
-         ]
+         "Resource": "arn:aws:s3:::mthydra-yourname-state"
+       },
+       {
+         "Sid": "MthydraObjectLevel",
+         "Effect": "Allow",
+         "Action": [
+           "s3:PutObject",
+           "s3:PutObjectRetention",
+           "s3:PutObjectLegalHold",
+           "s3:GetObject"
+         ],
+         "Resource": "arn:aws:s3:::mthydra-yourname-state/*"
        }
      ]
    }
    ```
+   > **Why these specific actions?** The bucket uses Object Lock COMPLIANCE,
+   > so every PutObject sets a retention timestamp — that requires
+   > `s3:PutObjectRetention` (and `s3:PutObjectLegalHold`) in addition to
+   > the obvious `s3:PutObject`. `s3:GetBucketObjectLockConfiguration`
+   > lets boto3 confirm the bucket is lock-enabled before the first write.
+   > There is no `s3:DeleteObject` because Object Lock COMPLIANCE forbids
+   > deletion until retention expires anyway — granting it would be a lie.
+   > If you copy a stale policy that lists `s3:GetObjectRetention` (read-only)
+   > instead, the first `backup-now` will fail with `AccessDenied`.
 6. **Next** → name it `mthydra-s3-rw` → **Create policy**.
 7. Back on the user-creation tab, refresh, attach `mthydra-s3-rw`, **Next** → **Create user**.
 8. Click the user → **Security credentials** → **Create access key** → **Other** → **Next** → **Create access key**.
@@ -307,6 +325,20 @@ done. Remaining OUT-OF-BAND steps:
   3. Stand up a warm standby ... [skip for MVP]
   4. RU image build and RU-node provisioning are SEPARATE automation ...
 ```
+
+### 3.4 Confirm the first backup actually landed (1 min)
+
+The installer ends with a forced `backup-now`. In your S3 bucket (AWS console → S3 → your-bucket-name) you should now see:
+- `gen-0000000001.age` — the first encrypted state snapshot
+- `index.json` — the manifest
+
+If those are missing OR the installer reported `backup FAILED`, the cause is almost always one of:
+
+- **`SignatureDoesNotMatch`** → the AWS secret access key is wrong (typo at install time). Rotate it: `mthydra-controller rotate-provider-credential b2 --credential-file /tmp/.b2-cred --db-path /var/lib/mthydra/state.sqlite` (file must be readable by the `mthydra` user — put it in `/tmp`, not `/root`).
+- **`AccessDenied`** → the IAM policy is missing `s3:PutObjectRetention`. Recheck step 1.2; the JSON block must include `s3:PutObjectRetention`, `s3:PutObjectLegalHold`, and `s3:GetBucketObjectLockConfiguration`. The old quickstart's `s3:GetObjectRetention` (read-only) is the wrong action.
+- **`NoSuchBucket`** → bucket name typo, or you created the bucket in a different region than the one in `install.ini`'s `b2_endpoint`.
+
+Re-run the install (idempotent) after fixing.
 
 ---
 
