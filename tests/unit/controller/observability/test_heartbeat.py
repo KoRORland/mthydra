@@ -43,7 +43,7 @@ _FIXED_IDENTITY = {
 }
 
 
-def _pub(db, *, sink, clock=NOW, threshold=3, identity=None):
+def _pub(db, *, sink, clock=NOW, threshold=3, identity=None, smtp_smoke_fn=None):
     return ObsHeartbeatPublisher(
         db_path=db,
         email_sink=sink,
@@ -52,6 +52,7 @@ def _pub(db, *, sink, clock=NOW, threshold=3, identity=None):
         mode="production",
         clock=lambda: clock,
         identity=identity if identity is not None else _FIXED_IDENTITY,
+        smtp_smoke_fn=smtp_smoke_fn,
     )
 
 
@@ -204,3 +205,92 @@ def test_arm_and_disarm_production(db):
     assert pub._scheduler is not None
     pub.disarm()
     assert pub._scheduler is None
+
+
+# ---------------------------------------------------------------------------
+# U-D4 — heartbeat-breach self-diagnosis
+# ---------------------------------------------------------------------------
+
+
+def test_breach_details_carries_recent_errors_and_smtp_smoke(db):
+    """U-D4: when the breach threshold is hit, details_json must include
+    deduplicated recent error strings + the SMTP smoke verdict, so the
+    operator triages from the alert body."""
+    sink = _FailingSink(err="SMTP connect timeout: mail.example.com:587")
+    smoke_calls = {"n": 0}
+    def fake_smoke():
+        smoke_calls["n"] += 1
+        return {"ok": False, "error": "timeout connecting to mail.example.com:587"}
+    pub = _pub(db, sink=sink, threshold=3, smtp_smoke_fn=fake_smoke)
+    # Three failures → breach raised.
+    pub.run_once(); pub.run_once(); pub.run_once()
+
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT details FROM obligation_clocks "
+        "WHERE obligation_id='obs_dead_mans_switch_breach'"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    import json as _json
+    details = _json.loads(row[0])
+    assert details["consecutive_failures"] >= 3
+    assert "SMTP connect timeout" in details["last_error"]
+    # The recent_distinct_errors list must contain the repeated SMTP error
+    # (deduplicated; one entry even though there were 3 ticks).
+    assert details["recent_distinct_errors"] == [
+        "SMTP connect timeout: mail.example.com:587",
+    ]
+    # The smoke verdict must be included.
+    assert details["smtp_smoke"]["ok"] is False
+    assert "mail.example.com:587" in details["smtp_smoke"]["error"]
+    assert smoke_calls["n"] == 1  # smoke runs only on breach, not per tick
+
+
+def test_breach_details_smtp_smoke_failure_is_captured(db):
+    """U-D4: if the smtp_smoke_fn ITSELF raises, the breach diagnosis
+    must still land — the smoke result just records the exception."""
+    sink = _FailingSink(err="anything")
+    def boom_smoke():
+        raise RuntimeError("smoke broke")
+    pub = _pub(db, sink=sink, threshold=1, smtp_smoke_fn=boom_smoke)
+    pub.run_once()
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT details FROM obligation_clocks "
+        "WHERE obligation_id='obs_dead_mans_switch_breach'"
+    ).fetchone()
+    conn.close()
+    import json as _json
+    details = _json.loads(row[0])
+    assert details["smtp_smoke"]["ok"] is False
+    assert "RuntimeError" in details["smtp_smoke"]["error"]
+
+
+def test_breach_no_smoke_fn_still_includes_recent_errors(db):
+    """U-D4: smtp_smoke_fn is optional. Without it, breach details still
+    include the recent_distinct_errors list — partial diagnosis is better
+    than none."""
+    sink = _FailingSink(err="random sink err")
+    pub = _pub(db, sink=sink, threshold=1)  # no smtp_smoke_fn
+    pub.run_once()
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT details FROM obligation_clocks "
+        "WHERE obligation_id='obs_dead_mans_switch_breach'"
+    ).fetchone()
+    conn.close()
+    import json as _json
+    details = _json.loads(row[0])
+    assert "smtp_smoke" not in details
+    assert details["recent_distinct_errors"] == ["random sink err"]
+
+
+def test_smtp_smoke_helper_handles_unreachable_host():
+    """U-D4: the smtp_smoke helper must return a small dict, never raise,
+    even when the host is unresolvable / unreachable."""
+    from mthydra.controller.observability.heartbeat import smtp_smoke
+    result = smtp_smoke("this-host-cannot-exist-12345.invalid", 587, timeout_s=1.0)
+    assert result["ok"] is False
+    assert "error" in result
+    assert "\n" not in result["error"]

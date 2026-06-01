@@ -27,6 +27,36 @@ from mthydra.controller.state.db import connect
 from mthydra.controller.state.obligations import set_obligation
 
 
+def smtp_smoke(host: str, port: int, *, timeout_s: float = 5.0) -> dict[str, object]:
+    """U-D4: minimal SMTP connect + EHLO smoke test. Returns a small dict
+    suitable for embedding in obs_dead_mans_switch_breach details_json.
+
+    Does NOT authenticate or send mail — just confirms the SMTP server is
+    listening and speaks SMTP. Most "heartbeat email failed" alerts come
+    down to SMTP-side issues (host unreachable, port blocked at the
+    network edge, server down for maintenance) that this smoke catches
+    without needing the real credentials.
+    """
+    import smtplib
+    import socket as _socket
+    try:
+        with smtplib.SMTP(host, port, timeout=timeout_s) as s:
+            code, msg = s.ehlo()
+            return {
+                "ok": True,
+                "ehlo_code": int(code),
+                "ehlo_response": msg.decode("ascii", errors="replace").splitlines()[0][:200],
+            }
+    except _socket.timeout:
+        return {"ok": False, "error": f"timeout connecting to {host}:{port}"}
+    except OSError as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    except smtplib.SMTPException as e:
+        return {"ok": False, "error": f"SMTP: {type(e).__name__}: {e}"}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 def collect_identity(db_path: Path | str) -> dict[str, str]:
     """R-D8: identification fields embedded in every heartbeat. Lets an
     operator reading a heartbeat email tell what version is running on
@@ -93,6 +123,7 @@ class ObsHeartbeatPublisher:
         mode: str = "production",
         clock: Callable[[], str] | None = None,
         identity: dict[str, str] | None = None,
+        smtp_smoke_fn: Callable[[], dict[str, object]] | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.email_sink = email_sink
@@ -105,6 +136,10 @@ class ObsHeartbeatPublisher:
         # R-D8: identity is fetched once at construction so per-tick heartbeats
         # don't shell out to git on every fire. Tests can inject a fixed dict.
         self._identity = identity if identity is not None else collect_identity(db_path)
+        # U-D4: on breach, run a fast smoke test to attach a triage verdict
+        # to the breach details_json. Operator sees the diagnosis in the
+        # alert body instead of opening logs. Tests inject a fixed dict.
+        self._smtp_smoke_fn = smtp_smoke_fn
 
     def arm(self) -> None:
         if self.mode == "offline":
@@ -188,15 +223,17 @@ class ObsHeartbeatPublisher:
                     }),
                 )
                 if self._consecutive_failures >= self.breach_threshold:
+                    # U-D4: self-diagnose before raising. Collect the last N
+                    # exception strings from alert_log + run the SMTP smoke
+                    # (if injected). Operator triages from the alert body
+                    # instead of hunting through logs.
+                    diagnosis = self._self_diagnose(conn, latest_error=err)
                     set_obligation(
                         conn,
                         obligation_id=_BREACH_OBLIGATION_ID,
                         last_proven_at=now, proven_by="heartbeat",
                         next_due_at=now,
-                        details=json.dumps({
-                            "consecutive_failures": self._consecutive_failures,
-                            "last_error": err,
-                        }),
+                        details=json.dumps(diagnosis),
                     )
             return {
                 "success": success,
@@ -212,3 +249,47 @@ class ObsHeartbeatPublisher:
             (_BREACH_OBLIGATION_ID,),
         )
         conn.commit()
+
+    def _self_diagnose(self, conn, *, latest_error: str | None) -> dict[str, object]:
+        """U-D4: collect a triage verdict to embed in the breach
+        details_json. Three components:
+          - the last N failed-heartbeat error strings (deduplicated, so a
+            repeating SMTP timeout doesn't fill the field with copies)
+          - the SMTP smoke-test verdict (if smtp_smoke_fn was injected)
+          - the most recent error (for backwards-compat with operators who
+            read details_json by key 'last_error')
+
+        Keep it small — the field gets shown verbatim in alerts."""
+        diagnosis: dict[str, object] = {
+            "consecutive_failures": self._consecutive_failures,
+            "last_error": latest_error,
+        }
+        # Last N (deduplicated) heartbeat error strings.
+        rows = conn.execute(
+            "SELECT error FROM alert_log "
+            "WHERE kind='heartbeat' AND delivered_at IS NULL "
+            "AND error IS NOT NULL "
+            "ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+        seen: set[str] = set()
+        recent: list[str] = []
+        for (e,) in rows:
+            if e and e not in seen:
+                seen.add(e)
+                recent.append(e[:200])  # truncate per-entry
+            if len(recent) >= 3:
+                break
+        if recent:
+            diagnosis["recent_distinct_errors"] = recent
+        # SMTP smoke (if configured).
+        if self._smtp_smoke_fn is not None:
+            try:
+                smoke = self._smtp_smoke_fn()
+                if smoke:
+                    diagnosis["smtp_smoke"] = smoke
+            except Exception as e:
+                diagnosis["smtp_smoke"] = {
+                    "ok": False,
+                    "error": f"{type(e).__name__}: {e}",
+                }
+        return diagnosis

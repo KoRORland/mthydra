@@ -1786,12 +1786,20 @@ def _cmd_serve(args) -> int:
         staleness_alert_seconds=cfg.standby.staleness_alert_seconds,
         mode=mode,
     )
+    # U-D4: smtp_smoke_fn for breach self-diagnosis.
+    from mthydra.controller.observability.heartbeat import smtp_smoke
+    _em_cfg = cfg.observability.email
+    _smoke_fn = (
+        (lambda: smtp_smoke(_em_cfg.smtp_host, _em_cfg.smtp_port))
+        if _em_cfg is not None else None
+    )
     obs_heartbeat = ObsHeartbeatPublisher(
         db_path=args.db_path,
         email_sink=em_sink,
         interval_seconds=cfg.observability.heartbeat_interval_seconds,
         breach_threshold=cfg.observability.heartbeat_breach_threshold,
         mode=mode,
+        smtp_smoke_fn=_smoke_fn,
     )
     dist_tg_sink, dist_em_sink = _build_dist_sinks(cfg, mode)
     dist_publisher = DistributionPublisher(
@@ -3895,13 +3903,21 @@ def _cmd_obs_alert_test(args, mode: str) -> int:
 
 def _cmd_obs_heartbeat_now(args, mode: str) -> int:
     from mthydra.controller.config import ConfigError, load_config
-    from mthydra.controller.observability.heartbeat import ObsHeartbeatPublisher
+    from mthydra.controller.observability.heartbeat import (
+        ObsHeartbeatPublisher, smtp_smoke,
+    )
     try:
         cfg = load_config(args.config)
     except ConfigError as e:
         print(f"obs-heartbeat-now: config error: {e}", file=sys.stderr)
         return 2
     _, em_sink = _build_alert_sinks(cfg, mode)
+    # U-D4: inject smtp_smoke_fn so a breach diagnoses the SMTP path
+    # before raising. Only meaningful when [observability.email] is set.
+    smoke_fn = None
+    em_cfg = cfg.observability.email
+    if em_cfg is not None:
+        smoke_fn = lambda: smtp_smoke(em_cfg.smtp_host, em_cfg.smtp_port)  # noqa: E731
     pub = ObsHeartbeatPublisher(
         db_path=args.db_path,
         email_sink=em_sink,
@@ -3909,6 +3925,7 @@ def _cmd_obs_heartbeat_now(args, mode: str) -> int:
         breach_threshold=cfg.observability.heartbeat_breach_threshold,
         mode=mode,
         clock=_now,
+        smtp_smoke_fn=smoke_fn,
     )
     res = pub.run_once()
     print(f"obs-heartbeat-now: "
