@@ -1745,9 +1745,11 @@ def _cmd_serve(args) -> int:
     from mthydra.controller.state.audit import set_audit_mirror
     from mthydra.descriptor.scheduler import DescriptorRotator
     from mthydra.controller.state.cover_pool_scheduler import (
+        CoverPoolAutoReverifySweep,
         CoverPoolReverifySweep,
         CoverPoolRotationSweep,
     )
+    from mthydra.controller.backup.integrity import BackupIntegritySweep
     from mthydra.controller.standby.heartbeat import StandbyHeartbeatPoller
     from mthydra.controller.shard_manager.wheel import ShardReshuffleWheel
     from mthydra.controller.probe.audit_wheel import ProbeAuditWheel
@@ -1779,6 +1781,22 @@ def _cmd_serve(args) -> int:
         rotation_ttl_days=cfg.cover_pool.rotation_ttl_days,
         freeze_threshold=cfg.cover_pool.freeze_threshold,
         sweep_interval_seconds=cfg.cover_pool.rotation_sweep_interval_seconds,
+        mode=mode,
+    )
+    # U-D1 + V-1: controller-side cover-domain reverify (TLS handshake
+    # smell test, hourly) + auto-burn drifted candidate_verified when
+    # the pool has slack above freeze_threshold.
+    auto_reverify_sweep = CoverPoolAutoReverifySweep(
+        db_path=args.db_path,
+        sweep_interval_seconds=cfg.cover_pool.reverify_sweep_interval_seconds,
+        freeze_threshold=cfg.cover_pool.freeze_threshold,
+        mode=mode,
+    )
+    # V-2: weekly backup integrity smoke (re-hash a random recent gen).
+    backup_integrity_sweep = BackupIntegritySweep(
+        db_path=args.db_path,
+        destination=dest,
+        sweep_interval_seconds=7 * 86400,
         mode=mode,
     )
     poller = StandbyHeartbeatPoller(
@@ -1870,6 +1888,8 @@ def _cmd_serve(args) -> int:
         rotator.arm()
         reverify_sweep.arm()
         rotation_sweep.arm()
+        auto_reverify_sweep.arm()
+        backup_integrity_sweep.arm()
         poller.arm()
         tracker.arm()
         shard_wheel.arm()
@@ -1880,7 +1900,7 @@ def _cmd_serve(args) -> int:
         dist_user_heartbeat.arm()
         if cfg.probe.runner_enabled:
             probe_runner.start()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat armed", flush=True)
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -1893,6 +1913,8 @@ def _cmd_serve(args) -> int:
         rotator.disarm()
         reverify_sweep.disarm()
         rotation_sweep.disarm()
+        auto_reverify_sweep.disarm()
+        backup_integrity_sweep.disarm()
         poller.disarm()
         tracker.disarm()
         shard_wheel.disarm()

@@ -645,30 +645,63 @@ For each person in your trusted circle:
 
 # Part 9 — Day-2 routine
 
-The controller runs three automatic checks for you, set up by the installer:
+### 9.1 What the controller does automatically (you don't have to)
 
-| When | What runs | What it does |
+`serve` arms a set of background sweeps. Knowing they exist saves operator time — when you see a related alert, you know what was watching for the problem.
+
+| Sweep | Cadence | What it does |
 |---|---|---|
-| Daily at 06:17 UTC | `mthydra-ops daily-check` | Exits nonzero if any safety obligation is overdue. Failure shows in `journalctl`. |
-| Weekly (Mon 07:00) | `mthydra-ops alert-summary` | Surfaces silent alert-delivery failures. |
-| Monthly (1st 03:00) | `mthydra-ops monthly-compact` | Purges audit-log rows older than 30 days. |
+| **descriptor rotator** | hourly | re-signs the endpoint descriptor; calls `descriptor-publish-now` on next sweep tick |
+| **cover-pool TTL reverify** | hourly | downgrades `candidate_verified` rows past TTL → `candidate_unverified` |
+| **cover-pool auto-reverify** | hourly | TLS-handshake smell test on every `candidate_verified` + `in_use` domain; on drift, **auto-burns** the domain (if pool has slack above `freeze_threshold`) or raises `cover_pool_reverify_drift_pending::<domain>` (if not) |
+| **cover-pool rotation** | hourly | flags domains past `rotation_ttl_days` for operator-driven rotation |
+| **shard reshuffle wheel** | hourly | reshuffles shards past their TTL; failed per-shard attempts land as `shard_overdue_pending::<sid>` with the exception in details_json |
+| **probe runner** | 30 min | SSHes into each vantage, runs `tls_fall_through` / `cover_domain_consistency` / `surface_scan` for every live box. Per-vantage pre-flight: a dead vantage = one `probe_vantage_unreachable::<vantage>` alert, not N box-level soft_fails |
+| **probe audit wheel** | 5 min | detects probe coverage gaps + raises `probe_kill_pending` on N-of-M soft fails |
+| **obs alerter** | 2 min | turns overdue obligations / anti-obligations into Telegram + email alerts |
+| **obs heartbeat** | hourly | dead-man's-switch email; subject = `mthydra heartbeat @ ... — <host> v<version>`; on N consecutive failures, raises `obs_dead_mans_switch_breach` with SMTP-smoke verdict + recent error strings in details |
+| **backup orchestrator** | continuous | takes encrypted state snapshot every 24 h floor / on-change debounce |
+| **backup integrity smoke** | weekly | downloads a random recent gen from S3, re-hashes, compares to recorded sha256; catches silent corruption nothing else surfaces |
+| **standby heartbeat poller** | 5 min | pulls the active's heartbeat from S3 (only when this node is `--role standby`) |
+| **upstream release tracker** | 7 days | polls GitHub for new mtg releases; flags `t4_upstream_release_available::<tag>` |
+| **dist publisher** | 5 min | per-user delta publish (spec K) |
+| **dist user heartbeat** | 24 h | per-user dead-man's-switch (spec K) |
 
-You don't need to do anything to enable them. To see if they ran:
+Plus the three systemd-timer-driven jobs the installer wires:
+
+| When | What runs |
+|---|---|
+| Daily at 06:17 UTC | `mthydra-ops daily-check` — exits nonzero if any safety obligation is overdue; failure shows in `journalctl` |
+| Weekly (Mon 07:00) | `mthydra-ops alert-summary` — surfaces silent alert-delivery failures |
+| Monthly (1st 03:00) | `mthydra-ops monthly-compact` — purges audit-log rows older than 30 days |
+
+To confirm the timers and the sweeps are alive:
 ```bash
 sudo systemctl list-timers 'mthydra-*'
+journalctl -u mthydra-controller -n 5 --no-pager | grep "armed"
 ```
 
-### What you must do manually, ongoing
+### 9.2 What you must do manually, ongoing
 
 **Every day (~30 seconds):**
-- Glance at your inbox. Did the hourly heartbeat arrive overnight? If yes, you're good. If you didn't see one in the last 2 hours — check `systemctl status mthydra-controller`.
+- Glance at your inbox. Did the hourly heartbeat arrive overnight? If yes, you're good. The subject identifies the running version + host: `mthydra heartbeat @ 2026-06-01T07:00:00Z — eu-1 v0.0.5`. If you didn't see one in the last 2 hours — `systemctl status mthydra-controller`.
 
 **Weekly (~2 minutes):**
-- `mthydra-controller probe-due --json` — confirm recent probe results exist for each live box. The spec-P probe runner SSHes into each registered vantage every 30 minutes and ingests automatically, so this should always be green; if it's not, your vantage's SSH config (step 7.7) is broken.
+- Open the latest `mthydra-ops daily-check` log: `journalctl -u mthydra-daily-check.service -n 100 --no-pager`. Look for any `overdue` or `anti_obligation` lines. The automations in §9.1 should keep them empty in normal operation — recurring entries mean something is wedged.
+
+**Ad-hoc, when you want to verify by hand:**
+- `mthydra-controller cover-reverify-now --db-path /var/lib/mthydra/state.sqlite --config /etc/mthydra/controller.toml` — run the cover-domain smell test immediately instead of waiting for the next hourly tick. Prints `PASS`/`FAIL`/`BURN` per domain.
+- `mthydra-controller backup-integrity-now --db-path /var/lib/mthydra/state.sqlite --config /etc/mthydra/controller.toml` — re-hash a random recent backup gen now instead of waiting for the weekly tick. Add `--generation N` to test a specific gen (e.g. after fixing an earlier `backup_integrity_failed` alert).
+- `sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops daily-check --db-path /var/lib/mthydra/state.sqlite` — same JSON snapshot the daily timer runs, on demand.
 
 **When the operator-alert Telegram bot pings you:**
-- Read the message. The `dedupe_key` says which kind of problem. Most common at MVP scale:
-  - `probe_coverage_pending::<box>` — the probe runner can't reach a vantage. SSH manually to confirm the vantage is up; check `journalctl -u mthydra-controller -n 100 | grep probe_runner`; re-pin the host key with `ssh-keyscan` if the vantage was rebuilt.
+- Read the message. The `dedupe_key` says which kind of problem. Common alerts and what they mean:
+  - `obs_dead_mans_switch_breach` — heartbeat email hasn't gone out in N attempts. The alert body now carries the SMTP smoke verdict (host:port reachable? EHLO response?) and the last 3 distinct error strings. Operator usually fixes by rotating the email app password (see §2.4) and the next tick clears it.
+  - `cover_pool_reverify_drift_pending::<domain>` — auto-reverify detected drift AND the pool is too tight to auto-burn, OR the drift is on an `in_use` domain. For pool-tight: add another cover domain (Part 6 with a fresh candidate). For in_use drift: investigate; if the domain is unfit, the box using it needs replacement via `ru-bringup` + `ru-box-terminate`.
+  - `backup_integrity_failed::<generation>` — V-2 sweep found a sha256 mismatch on a stored gen. **Take seriously**: download the gen via `aws s3 cp s3://<bucket>/gen-NNNNNNNNNN.age -`, re-hash, confirm against the controller's recorded sha256 (`sqlite3 /var/lib/mthydra/state.sqlite "SELECT sha256 FROM backup_log WHERE generation=N"`). If the mismatch is real, do NOT trust later restore from that gen; force `backup-now` to produce a fresh one.
+  - `credential_rotation_proven::<provider>` overdue — V-3 reminder. Mint a new credential at the provider (Gmail app password, AWS access key, B2 app key), then `mthydra-controller rotate-provider-credential <provider> --credential-file /tmp/.cred --db-path /var/lib/mthydra/state.sqlite`. The reminder resets after rotation.
+  - `probe_vantage_unreachable::<vantage>` — controller couldn't SSH to the vantage at the last pre-flight. Check that the vantage VPS is up and the SSH key still works; the next pre-flight that succeeds clears the alert.
+  - `probe_coverage_pending::<box>` — probes failing from ALL active vantages for this box (rare; the per-vantage failover absorbs single-vantage issues). The box may genuinely be down or behaving badly.
   - `cover_pool_rotation_frozen` — your cover pool has too few verified domains. Add and attest another one (Part 6 with a new domain).
   - Anything containing `probe_kill_pending` — the box's probe results look bad. Take it seriously: read the alert, decide whether the box is compromised, run `mthydra-controller ru-box-terminate <box> --reason compromise` if so.
 
@@ -686,8 +719,30 @@ Most common causes, in order:
 
 ### Heartbeat emails stop arriving
 
-1. SSH into EC2: `systemctl status mthydra-controller` — should be `active (running)`. If not: `systemctl start mthydra-controller`.
-2. Force one heartbeat manually: `sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller obs-heartbeat-now --db-path /var/lib/mthydra/state.sqlite --config /etc/mthydra/controller.toml`. If this errors, the SMTP creds are stale — go to 2.4.
+1. **Check the obs_dead_mans_switch_breach details first**: after 3 consecutive failures the controller raises this anti-obligation with a self-diagnosis embedded — SMTP smoke verdict (host:port reachable? EHLO succeeded?) plus the last 3 distinct error strings from the alert log. Triage from the alert body before SSHing:
+   ```bash
+   sqlite3 /var/lib/mthydra/state.sqlite \
+       "SELECT details FROM obligation_clocks WHERE obligation_id='obs_dead_mans_switch_breach';" | jq .
+   ```
+2. SSH into EC2: `systemctl status mthydra-controller` — should be `active (running)`. If not: `systemctl start mthydra-controller`.
+3. Force one heartbeat manually: `sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller obs-heartbeat-now --db-path /var/lib/mthydra/state.sqlite --config /etc/mthydra/controller.toml`. If this errors, the SMTP creds are stale — go to 2.4.
+
+### Backup integrity alert (`backup_integrity_failed::<gen>`)
+
+The V-2 weekly sweep re-hashes a random recent backup blob from S3 and compares to the sha256 we recorded at write time. A mismatch alert means one of:
+- Silent S3 corruption / bit-rot — rare but real, especially after multi-month storage.
+- The bucket got pointed at the wrong place (config drift across hosts).
+- Someone (or something) mutated the blob after upload.
+
+Verify by hand:
+```bash
+# What the controller recorded at write time:
+sqlite3 /var/lib/mthydra/state.sqlite \
+    "SELECT sha256, size_bytes FROM backup_log WHERE generation=<N>;"
+# What's actually in the bucket right now:
+aws s3 cp s3://<your-bucket>/gen-<NNNNNNNNNN>.age - | sha256sum
+```
+If the on-disk hash matches what `backup_log` said, the alert was transient (re-run `backup-integrity-now --generation <N>` to clear). If they differ, force a fresh `backup-now` and consider what could have mutated the prior gen.
 
 ### Telegram users can't connect through the proxy
 

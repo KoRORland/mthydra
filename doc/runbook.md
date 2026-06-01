@@ -303,8 +303,10 @@ mthydra-controller obs-status --json | jq '.obligations_overdue[] | .obligation_
 | `t4_upstream_check` | §3.1 (upstream tracker) |
 | `t4_image_promoted` | §3 (build → soak → promote) |
 | `t5_pool_revalidation` | §4.2 (cover-attest-verified) |
-| `cover_pool_reverify_pass_proven` | §4.2 |
+| `cover_pool_reverify_pass_proven` | **auto** (U-D1 sweep, hourly). Overdue → controller wedged or pool empty. |
 | `cover_pool_replenishment_proven` | §4.1 (cover-add) |
+| `backup_integrity_proven` | **auto** (V-2 sweep, weekly). Overdue → controller wedged or no backups pushed yet. |
+| `credential_rotation_proven::<provider>` | V-3 reminder. Mint a new credential at the provider; run `rotate-provider-credential <provider> --credential-file ...`. |
 | `eu_standby_drill_proven` | §10.2 (standby promotion drill) |
 | `g_provision_drill_proven` | §5 (provision a test box, terminate, count) |
 | `shard_reshuffle_proven` | §6.1 (the scheduler does it; just confirm it ran) |
@@ -331,7 +333,38 @@ mthydra-controller shard-stats --json
 
 If anything fires `crit`, you should have an email AND a Telegram message. If you have one but not the other, run §8.5 to debug the silent channel.
 
-### §2.3 — Inspect the alert log
+**Anti-obligations introduced in 0.0.5 (spec U + V auto-resolution wave):**
+
+| Anti-obligation | What it means | What to do |
+|---|---|---|
+| `cover_pool_reverify_drift_pending::<domain>` | U-D1 auto-reverify failed TLS smell test on this domain. If state=`candidate_verified` and pool tight, V-1 left it for you; add a fresh candidate (Part 6) to give the auto-rotator slack. If state=`in_use`, decide whether the domain still looks credible — if not, the box using it needs replacement. |
+| `probe_vantage_unreachable::<vantage>` | U-D2 pre-flight SSH to the vantage failed (NOT a probe failure — the vantage itself isn't reachable). Check the vantage VPS is up + the SSH key is still valid. Self-clears next tick the SSH succeeds. |
+| `backup_integrity_failed::<generation>` | V-2 sweep found a sha256 mismatch on a stored backup gen. See quickstart §"Backup integrity alert" for the verify-by-hand procedure. |
+| `shard_unassigned_pending` | U-D3 unassigned-user fold-in step failed (rare; usually a DB constraint). Details_json carries the exception. |
+
+### §2.3 — What the controller does for you automatically (0.0.5+)
+
+Spec U + the V-tasks moved several recurring operator tasks into controller sweeps. Knowing they exist means you can stop waiting for an email to know they happened — and you know what was watching for the problem when one DOES fire.
+
+| Sweep | Cadence | What it absorbed |
+|---|---|---|
+| `CoverPoolAutoReverifySweep` (U-D1 + V-1) | hourly | The 60-day operator `cover-attest-verified` cadence is replaced by an automated TLS smell test. Auto-burns drifted `candidate_verified` when pool has slack above `freeze_threshold`. |
+| `ProbeRunnerWheel` pre-flight (U-D2) | every probe tick | A dead vantage used to spam N alerts (one per box). Now → one `probe_vantage_unreachable::<vantage>` alert. |
+| `ShardReshuffleWheel` isolation (U-D3) | hourly | A picker exception used to crash the entire sweep. Now → one shard's failure surfaces as `shard_overdue_pending::<sid>` with the exception in details_json; other shards keep going. |
+| `ObsHeartbeatPublisher` self-diagnosis (U-D4) | on breach | `obs_dead_mans_switch_breach` now ships with SMTP smoke verdict + last 3 distinct error strings in details. Triage from the alert body, not from logs. |
+| `BackupIntegritySweep` (V-2) | weekly | Random recent gen re-hashed against recorded sha256. Catches silent S3 corruption nothing else surfaces. |
+| `credential_rotation_proven::<provider>` (V-3) | per-provider cadence | Stamped at init + on every `rotate-provider-credential`. Default 90d (aws/gmail) or 180d (b2). The obligation goes overdue before the credential silently fails in production. |
+
+Ad-hoc verification (operator-triggered, mirrors what the sweeps do automatically):
+
+```bash
+mthydra-controller cover-reverify-now --db-path /var/lib/mthydra/state.sqlite \
+    --config /etc/mthydra/controller.toml
+mthydra-controller backup-integrity-now --db-path /var/lib/mthydra/state.sqlite \
+    --config /etc/mthydra/controller.toml
+```
+
+### §2.4 — Inspect the alert log
 
 ```bash
 mthydra-controller obs-alerts-recent --limit 50 --json | jq '.'
