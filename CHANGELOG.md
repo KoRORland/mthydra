@@ -7,7 +7,7 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
-## v0.0.10 — 2026-06-02
+## vNext
 
 **MVP bootstrap fix.** `mthydra-ops image-prepare --yes` (quickstart §7.1)
 failed on a fresh install for two compounding reasons:
@@ -30,12 +30,6 @@ failed on a fresh install for two compounding reasons:
 
 ```bash
 sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
-```
-
-Or, to pick up these fixes before a tag exists:
-
-```bash
-sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade --ref 8f71c99
 ```
 
 ---
