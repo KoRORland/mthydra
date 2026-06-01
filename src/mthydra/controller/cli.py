@@ -859,6 +859,27 @@ def run(argv: list[str]) -> int:
                     f"STARTUP WARNING: running in {mode.upper()} mode — backups are NOT production",
                     file=sys.stderr,
                 )
+            # W-3 follow-up: startup-check runs the invariants (#33-#36)
+            # that the shard_disjointness_check_proven obligation tracks.
+            # On success, stamp it so the obligation doesn't go overdue
+            # until the operator runs startup-check again. Cadence 24h
+            # matches the bootstrap default.
+            from mthydra.controller.state.obligations import set_obligation
+            conn = connect(args.db_path)
+            try:
+                now = _now()
+                next_due = _add_hours_iso(now, 24)
+                set_obligation(
+                    conn,
+                    obligation_id="shard_disjointness_check_proven",
+                    last_proven_at=now,
+                    proven_by="startup-check",
+                    next_due_at=next_due,
+                    details=None,
+                )
+                conn.commit()
+            finally:
+                conn.close()
             print("startup-check: OK")
             return 0
         print(
@@ -1725,6 +1746,24 @@ def _cmd_serve(args) -> int:
                 file=sys.stderr,
             )
             return 10
+        # Stamp shard_disjointness_check_proven so the obligation doesn't
+        # go overdue between operator-driven `startup-check` runs. The
+        # daemon's startup check covers the same invariants.
+        from mthydra.controller.state.obligations import set_obligation
+        _sc_conn = connect(args.db_path)
+        try:
+            _sc_now = _now()
+            set_obligation(
+                _sc_conn,
+                obligation_id="shard_disjointness_check_proven",
+                last_proven_at=_sc_now,
+                proven_by="serve-startup",
+                next_due_at=_add_hours_iso(_sc_now, 24),
+                details=None,
+            )
+            _sc_conn.commit()
+        finally:
+            _sc_conn.close()
 
     pipeline = BackupPipeline(
         db_path=args.db_path,

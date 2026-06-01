@@ -62,8 +62,9 @@ _REMEDIATIONS: dict[str, str] = {
         "for the shard_reshuffle_sweep_ran heartbeat"
     ),
     "shard_disjointness_check_proven": (
-        "automatic invariant check; overdue means startup-check is failing — "
-        "run: mthydra-controller startup-check"
+        "stamped on every successful startup-check (incl. serve restart). "
+        "Overdue = no startup-check ran in 24h. "
+        "Run: mthydra-controller startup-check"
     ),
     # Distribution obligations.
     "dist_publish_sweep_ran": (
