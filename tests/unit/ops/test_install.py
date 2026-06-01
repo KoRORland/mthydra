@@ -304,6 +304,37 @@ def test_build_active_phases_order(tmp_path):
     ]
 
 
+def test_install_polkit_rule_writes_rules_d_file(tmp_path, monkeypatch):
+    """S-Task 4: install must drop a polkit rule so mthydra can systemctl
+    its own service without auth prompts. Without this, mthydra-ops upgrade
+    (which runs as mthydra) gets interactive auth prompts on every systemctl
+    call — discovered 2026-06-01 on the user's real EU host."""
+    fake_rules_dir = tmp_path / "polkit-rules"
+    monkeypatch.setattr(install, "_POLKIT_RULES_DIR", fake_rules_dir)
+    monkeypatch.setattr(
+        install.subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, "", ""),
+    )
+    ctx = _ctx(tmp_path)
+    install.install_polkit_rule(ctx)
+    target = fake_rules_dir / install._POLKIT_RULE_NAME
+    assert target.exists()
+    content = target.read_text()
+    assert "mthydra-controller.service" in content
+    assert "subject.user == \"mthydra\"" in content
+    assert "polkit.Result.YES" in content
+    # The rule must be world-readable so polkit can load it.
+    assert (target.stat().st_mode & 0o777) == 0o644
+
+
+def test_install_polkit_rule_skipped_in_dry_run(tmp_path, monkeypatch):
+    fake_rules_dir = tmp_path / "polkit-rules"
+    monkeypatch.setattr(install, "_POLKIT_RULES_DIR", fake_rules_dir)
+    ctx = _ctx(tmp_path, dry_run=True)
+    install.install_polkit_rule(ctx)
+    assert not fake_rules_dir.exists()
+
+
 def test_backup_smoke_runs_backup_now_and_raises_on_failure(tmp_path, monkeypatch):
     """R-D5: install ends with a forced backup-now. Failure must raise
     (so install exits non-zero) with the operator-facing diagnostic that

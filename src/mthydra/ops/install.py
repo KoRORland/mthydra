@@ -489,6 +489,44 @@ def install_maintenance_timers(ctx: Ctx) -> None:
             _TIMER_TMPL.format(desc=desc, oncalendar=oncal), enable=True)
 
 
+_POLKIT_RULE = """\
+// Allow the mthydra service user to manage its own systemd unit
+// (start / stop / restart / reload / is-active) without authentication.
+// Needed by mthydra-ops upgrade, which runs as mthydra. Without this,
+// every systemctl call prompts for an interactive auth (S-Task 4).
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        subject.user == "mthydra") {
+        var unit = action.lookup("unit");
+        if (unit == "mthydra-controller.service") {
+            return polkit.Result.YES;
+        }
+    }
+});
+"""
+
+_POLKIT_RULES_DIR = Path("/etc/polkit-1/rules.d")
+_POLKIT_RULE_NAME = "50-mthydra-systemd.rules"
+
+
+def install_polkit_rule(ctx: Ctx) -> None:
+    """S-Task 4: grant mthydra user passwordless control over its own service.
+
+    Without this, mthydra-ops upgrade (which runs as mthydra) hits an
+    interactive polkit prompt on every systemctl stop/start call —
+    breaks unattended upgrades and is brittle even interactively.
+    """
+    target = _POLKIT_RULES_DIR / _POLKIT_RULE_NAME
+    ctx.say(f"writing {target}")
+    if ctx.dry_run:
+        return
+    _POLKIT_RULES_DIR.mkdir(parents=True, exist_ok=True)
+    target.write_text(_POLKIT_RULE)
+    target.chmod(0o644)
+    # polkit re-reads rules on SIGHUP; reloading the unit is idempotent.
+    subprocess.run(["systemctl", "reload-or-restart", "polkit"], check=False)
+
+
 def install_controller_service(ctx: Ctx) -> None:
     venv = _systemd_safe_path(ctx.config.venv_dir, field="install.venv_dir")
     db = _systemd_safe_path(ctx.config.db_path, field="db_path")
@@ -509,6 +547,7 @@ def install_controller_service(ctx: Ctx) -> None:
     (_UNIT_DIR / "mthydra-controller.service").write_text(body)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", "mthydra-controller"], check=True)
+    install_polkit_rule(ctx)
 
 
 # ---------------------------------------------------------------------------
