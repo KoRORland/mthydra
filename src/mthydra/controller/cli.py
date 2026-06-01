@@ -1749,6 +1749,10 @@ def _cmd_serve(args) -> int:
         # Stamp shard_disjointness_check_proven so the obligation doesn't
         # go overdue between operator-driven `startup-check` runs. The
         # daemon's startup check covers the same invariants.
+        # Also backfill new-in-0.0.6 obligations that incrementally-upgraded
+        # hosts wouldn't have from their original install (V-3 credential
+        # rotation reminders). Idempotent: each obligation is set_obligation
+        # which is upsert, so a fresh install also passes through cleanly.
         from mthydra.controller.state.obligations import set_obligation
         _sc_conn = connect(args.db_path)
         try:
@@ -1761,6 +1765,7 @@ def _cmd_serve(args) -> int:
                 next_due_at=_add_hours_iso(_sc_now, 24),
                 details=None,
             )
+            _backfill_credential_rotation_obligations(_sc_conn, _sc_now)
             _sc_conn.commit()
         finally:
             _sc_conn.close()
@@ -2040,6 +2045,43 @@ def _add_hours_iso(iso: str, hours: int) -> str:
     from datetime import datetime, timedelta
     t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     return (t + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _backfill_credential_rotation_obligations(conn, now: str) -> int:
+    """V-3 backfill: for hosts that originally installed pre-0.0.5, the
+    `credential_rotation_proven::<provider>` obligation rows don't exist
+    (bootstrap was 0.0.1, V-3 only fires at fresh init or on rotate).
+    Stamp one per existing provider credential with last_proven_at=now
+    and the per-provider default cadence so the operator gets a calendar
+    reminder going forward. Operator can override with --rotation-days
+    on the next rotate-provider-credential call.
+
+    Idempotent: skips providers that already have a stamp. Returns the
+    number of NEW rows created (for serve-startup log line)."""
+    from mthydra.controller.state.obligations import set_obligation
+    # Map duplicated from bootstrap._CRED_ROTATION_DEFAULT_DAYS to avoid
+    # cli ↔ bootstrap circular import. Kept in sync by convention.
+    cadence_days = {"aws": 90, "b2": 180, "gmail": 90}
+    rows = conn.execute(
+        "SELECT provider FROM provider_api_credentials"
+    ).fetchall()
+    created = 0
+    for (provider,) in rows:
+        ob_id = f"credential_rotation_proven::{provider}"
+        existing = conn.execute(
+            "SELECT 1 FROM obligation_clocks WHERE obligation_id=?", (ob_id,)
+        ).fetchone()
+        if existing:
+            continue
+        days = cadence_days.get(provider, 90)
+        set_obligation(
+            conn, obligation_id=ob_id,
+            last_proven_at=now, proven_by="serve-backfill-v3",
+            next_due_at=_add_hours_iso(now, days * 24),
+            details=None,
+        )
+        created += 1
+    return created
 
 
 def _cmd_cover_add(args) -> int:

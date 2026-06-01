@@ -495,6 +495,55 @@ def test_init_seeds_rotation_reminder_per_provider(tmp_path):
     assert "credential_rotation_proven::aws" in obs
 
 
+def test_credential_rotation_backfill_stamps_existing_providers(tmp_path):
+    """V-3 backfill: hosts that originally installed pre-0.0.5 have
+    provider credentials but no credential_rotation_proven::<provider>
+    rows. The serve-startup backfill stamps one per provider with the
+    per-provider default cadence."""
+    from mthydra.controller.cli import _backfill_credential_rotation_obligations
+    from mthydra.controller.state.obligations import list_obligations
+    from mthydra.controller.state.tokens import set_provider_credential
+
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    # Init seeds a 'b2' credential but doesn't stamp the V-3 obligation
+    # (this is the pre-V-3 install simulation: we'll delete the obligation
+    # row after init to mimic an old DB).
+    run(["init", "--db-path", str(db),
+         "--age-recipient-file", str(recipient_file),
+         "--provider-credential", "b2=secret",
+         "--provider-credential", "aws=other"])
+    conn = connect(db)
+    conn.execute(
+        "DELETE FROM obligation_clocks "
+        "WHERE obligation_id LIKE 'credential_rotation_proven::%'"
+    )
+    # Add a third cred via direct DB so it looks like a host that picked
+    # up a new provider mid-life.
+    set_provider_credential(conn, provider="gmail", credential="x",
+                            at="2026-01-01T00:00:00Z")
+    conn.commit()
+    obs_before = {o.obligation_id for o in list_obligations(conn)}
+    assert not any(o.startswith("credential_rotation_proven::") for o in obs_before)
+
+    created = _backfill_credential_rotation_obligations(
+        conn, now="2026-06-01T00:00:00Z")
+    conn.commit()
+    assert created == 3
+
+    obs_after = {o.obligation_id for o in list_obligations(conn)}
+    assert "credential_rotation_proven::b2" in obs_after
+    assert "credential_rotation_proven::aws" in obs_after
+    assert "credential_rotation_proven::gmail" in obs_after
+
+    # Second backfill must be idempotent — no new rows.
+    again = _backfill_credential_rotation_obligations(
+        conn, now="2026-06-02T00:00:00Z")
+    assert again == 0
+    conn.close()
+
+
 def test_rotate_provider_credential_writes_audit_row(tmp_path):
     from mthydra.controller.state.audit import recent_events
     db = tmp_path / "state.sqlite"

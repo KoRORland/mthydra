@@ -7,6 +7,54 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
+## v0.0.7 — 2026-06-01
+
+**Incremental-upgrade backfills.** User on a host that went 0.0.1 →
+... → 0.0.6 incrementally reported the heartbeat body listed
+`shard_disjointness_check_proven` as overdue with a misleading hint
+pointing at `startup-check` — but `startup-check` returned OK and
+didn't clear the obligation. Root cause: the obligation was registered
+at install with 24h cadence but nothing ever stamped it. Audit found
+one more silent gap: V-3's `credential_rotation_proven::<provider>`
+rows don't exist on hosts that didn't run a fresh 0.0.5+ init.
+
+Two fixes:
+
+- `startup-check` and the `serve` daemon's startup pass now stamp
+  `shard_disjointness_check_proven` on success. The remediation hint
+  was also wrong ("startup-check is failing") — corrected to explain
+  the stamp model.
+
+- New `_backfill_credential_rotation_obligations(conn, now)` runs at
+  serve startup. For each provider credential in
+  `provider_api_credentials` that lacks a corresponding
+  `credential_rotation_proven::<provider>` obligation, it stamps one
+  with `last_proven_at = now` and the per-provider default cadence
+  (aws/gmail = 90d, b2 = 180d). Idempotent — providers that already
+  have a stamp are left alone. New fresh installs are unaffected
+  (init already stamps; backfill is a no-op).
+
+**Upgrade audit summary** for hosts going 0.0.1→0.0.7 incrementally:
+
+| Version jump | New state needing backfill |
+|---|---|
+| 0.0.2 (spec Q) | none — new CLI tool only |
+| 0.0.3 (spec R) | schema v14→v15 (handled by `mthydra-ops upgrade --allow-schema-migration` already) |
+| 0.0.4 (spec S) | none — install/code-only changes |
+| 0.0.5 (T+U+V) | V-3 `credential_rotation_proven::<provider>` (handled by 0.0.7 auto-backfill); V-2 `backup_integrity_proven` (self-stamps on first sweep tick, no backfill needed) |
+| 0.0.6 (W) | none — tuning/output changes only |
+| 0.0.7 | `shard_disjointness_check_proven` stamping fix (this release) |
+
+**Operator action when upgrading from 0.0.6:** none required. Backfill
+runs automatically at serve startup on the first restart after the
+upgrade.
+
+```bash
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+```
+
+---
+
 ## v0.0.6 — 2026-06-01
 
 **Tuning + content pass** — three follow-ups to 0.0.5 driven by operator
