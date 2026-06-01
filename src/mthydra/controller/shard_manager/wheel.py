@@ -7,6 +7,13 @@ Periodically:
   * emits per-shard `shard_overdue_pending` anti-obligation rows
     that disappear once the shard is reshuffled
 
+U-D3 hardening: per-shard reshuffle attempts are isolated in a
+try/except so one failing shard doesn't crash the entire sweep. A
+shard whose attempt raises gets `shard_overdue_pending::<sid>` with
+the exception details in details_json — operator triages from there.
+Same isolation for the unassigned fold-in (singleton anti-obligation
+`shard_unassigned_pending` if that step fails, e.g. DB constraint).
+
 Same all-synchronous + BackgroundScheduler model as
 `mthydra.controller.state.cover_pool_scheduler`. Offline mode disables
 the timer entirely; tests use run_once() with a frozen clock.
@@ -96,51 +103,38 @@ class ShardReshuffleWheel:
             )
 
             reshuffled: list[str] = []
+            failed_shards: list[tuple[str, str]] = []  # (sid, reason)
             for old_sid in h.overdue_for_reshuffle:
-                old_shard = _shards.get_shard(conn, old_sid)
-                rosters = pick_new_rosters(
-                    current_members=json.loads(old_shard.members_json),
-                    unassigned=[],
-                    target_size=self.target_size,
-                )
-                if not rosters:
-                    # Nothing to reshuffle (empty shard — invariant #36 would
-                    # have caught it; just retire and move on).
-                    _shards.retire_shard(conn, old_sid, at=now)
-                    continue
-                primary = rosters[0]
-                new_sid = self._shard_id_factory()
-                _shards.reshuffle(
-                    conn, old_sid,
+                # U-D3: per-shard isolation. A pick/reshuffle that raises
+                # mid-loop used to crash the whole tick (no other shards
+                # got a chance). Now: catch and raise the per-shard anti
+                # obligation, keep sweeping the rest.
+                try:
+                    new_sids = self._reshuffle_one_shard(conn, old_sid, now)
+                    reshuffled.extend(new_sids)
+                except Exception as e:
+                    failed_shards.append(
+                        (old_sid, f"{type(e).__name__}: {e}"))
+                    # Rollback the partial transaction for this shard;
+                    # the next shard starts fresh.
+                    conn.rollback()
+
+            # U-D3: same isolation for the unassigned fold-in. If it fails
+            # (DB error, picker constraint), raise the singleton
+            # shard_unassigned_pending and proceed to the heartbeat so
+            # we still record this tick happened.
+            folded_in: list[str] = []
+            fold_in_error: str | None = None
+            try:
+                folded_in = reshuffle_unassigned(
+                    conn,
                     now=now,
                     target_size=self.target_size,
-                    new_shard_id=new_sid,
-                    new_members=primary,
-                    reason="ttl",
+                    shard_id_factory=self._shard_id_factory,
                 )
-                reshuffled.append(new_sid)
-                # Leftover chunks (rare with small members): each becomes its own shard.
-                for leftover in rosters[1:]:
-                    extra_sid = self._shard_id_factory()
-                    _shards.create_shard(
-                        conn, shard_id=extra_sid, members=leftover,
-                        target_size=self.target_size, at=now,
-                    )
-                    for u in leftover:
-                        conn.execute(
-                            "UPDATE users SET current_shard_id=? WHERE user_id=?",
-                            (extra_sid, u),
-                        )
-                    reshuffled.append(extra_sid)
-                conn.commit()
-                _clear_overdue_obligation(conn, old_sid)
-
-            folded_in = reshuffle_unassigned(
-                conn,
-                now=now,
-                target_size=self.target_size,
-                shard_id_factory=self._shard_id_factory,
-            )
+            except Exception as e:
+                fold_in_error = f"{type(e).__name__}: {e}"
+                conn.rollback()
 
             # Re-check after reshuffle. Anything still overdue (e.g. because it was
             # newly created and somehow already past TTL — shouldn't happen but we
@@ -149,7 +143,8 @@ class ShardReshuffleWheel:
                 conn, now=now,
                 reshuffle_interval_seconds=self.reshuffle_interval_days * 86400,
             )
-            for sid in h2.overdue_for_reshuffle:
+            still_overdue = set(h2.overdue_for_reshuffle)
+            for sid in still_overdue:
                 set_obligation(
                     conn,
                     obligation_id=f"shard_overdue_pending::{sid}",
@@ -158,14 +153,97 @@ class ShardReshuffleWheel:
                     next_due_at=now,
                     details=json.dumps({"shard_id": sid}),
                 )
+            # U-D3: shards whose attempt threw also get the anti-obligation,
+            # with the exception class + message in details_json so the
+            # operator triages from the alert body, not from logs.
+            for sid, reason in failed_shards:
+                if sid in still_overdue:
+                    # Already raised above; just enrich the details.
+                    set_obligation(
+                        conn,
+                        obligation_id=f"shard_overdue_pending::{sid}",
+                        last_proven_at=now,
+                        proven_by="shard_reshuffle_sweep",
+                        next_due_at=now,
+                        details=json.dumps({"shard_id": sid, "error": reason}),
+                    )
+                else:
+                    set_obligation(
+                        conn,
+                        obligation_id=f"shard_overdue_pending::{sid}",
+                        last_proven_at=now,
+                        proven_by="shard_reshuffle_sweep",
+                        next_due_at=now,
+                        details=json.dumps({"shard_id": sid, "error": reason}),
+                    )
+            # U-D3: singleton anti-obligation when the unassigned fold-in
+            # failed; cleared on next tick where fold-in succeeds.
+            if fold_in_error is not None:
+                set_obligation(
+                    conn,
+                    obligation_id="shard_unassigned_pending",
+                    last_proven_at=now,
+                    proven_by="shard_reshuffle_sweep",
+                    next_due_at=now,
+                    details=json.dumps({"error": fold_in_error}),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM obligation_clocks WHERE obligation_id=?",
+                    ("shard_unassigned_pending",),
+                )
             self._heartbeat(
                 conn, now,
                 reshuffled=len(reshuffled),
                 folded_in=len(folded_in),
             )
+            conn.commit()
             return {"reshuffled": reshuffled, "folded_in": folded_in}
         finally:
             conn.close()
+
+    def _reshuffle_one_shard(self, conn, old_sid: str, now: str) -> list[str]:
+        """Reshuffle one overdue shard. Returns the list of new shard_ids
+        created (primary + leftovers). Caller wraps in try/except for
+        per-shard isolation (U-D3)."""
+        new_sids: list[str] = []
+        old_shard = _shards.get_shard(conn, old_sid)
+        rosters = pick_new_rosters(
+            current_members=json.loads(old_shard.members_json),
+            unassigned=[],
+            target_size=self.target_size,
+        )
+        if not rosters:
+            # Nothing to reshuffle (empty shard — invariant #36 would
+            # have caught it; just retire and move on).
+            _shards.retire_shard(conn, old_sid, at=now)
+            return []
+        primary = rosters[0]
+        new_sid = self._shard_id_factory()
+        _shards.reshuffle(
+            conn, old_sid,
+            now=now,
+            target_size=self.target_size,
+            new_shard_id=new_sid,
+            new_members=primary,
+            reason="ttl",
+        )
+        new_sids.append(new_sid)
+        for leftover in rosters[1:]:
+            extra_sid = self._shard_id_factory()
+            _shards.create_shard(
+                conn, shard_id=extra_sid, members=leftover,
+                target_size=self.target_size, at=now,
+            )
+            for u in leftover:
+                conn.execute(
+                    "UPDATE users SET current_shard_id=? WHERE user_id=?",
+                    (extra_sid, u),
+                )
+            new_sids.append(extra_sid)
+        conn.commit()
+        _clear_overdue_obligation(conn, old_sid)
+        return new_sids
 
     def _heartbeat(
         self, conn, now: str, *, reshuffled: int, folded_in: int,

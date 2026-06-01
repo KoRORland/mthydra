@@ -264,3 +264,111 @@ def test_run_once_handles_leftover_chunks(tmp_path):
     ).fetchone()[0]
     assert n_active == 2
     conn2.close()
+
+
+# ---------------------------------------------------------------------------
+# U-D3 — per-shard isolation + attempt-then-raise hardening
+# ---------------------------------------------------------------------------
+
+
+def test_one_failing_shard_does_not_crash_whole_sweep(tmp_path, monkeypatch):
+    """U-D3: previously, an exception in pick_new_rosters or _shards.reshuffle
+    for ONE shard would crash the whole tick — other overdue shards never
+    got a chance, the heartbeat never stamped. Now: per-shard try/except
+    isolates failures; the failing shard gets shard_overdue_pending::<sid>
+    with the exception in details_json; the rest of the sweep continues."""
+    db, conn = _seed(tmp_path)
+    # Two overdue shards: s_bad will throw, s_ok will reshuffle cleanly.
+    for sid, members in [("s_bad", ["u1", "u2"]), ("s_ok", ["u3", "u4"])]:
+        conn.execute(
+            "INSERT INTO shards (shard_id, members_json, target_size, "
+            "last_reshuffled_at, created_at) "
+            "VALUES (?, ?, 2, '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z')",
+            (sid, json.dumps(members)),
+        )
+        for u in members:
+            conn.execute(
+                "INSERT INTO users (user_id, current_shard_id, "
+                "out_of_band_channel, added_at) "
+                "VALUES (?, ?, ?, ?)",
+                (u, sid, "noop", "2026-05-01T00:00:00Z"),
+            )
+    conn.commit()
+    conn.close()
+
+    from mthydra.controller.shard_manager import wheel as wheel_mod
+    real_pick = wheel_mod.pick_new_rosters
+    def fake_pick(*, current_members, unassigned, target_size):
+        if "u1" in current_members:
+            raise RuntimeError("simulated picker boom")
+        return real_pick(current_members=current_members,
+                         unassigned=unassigned, target_size=target_size)
+    monkeypatch.setattr(wheel_mod, "pick_new_rosters", fake_pick)
+
+    wheel = ShardReshuffleWheel(
+        db, target_size=2, max_size=3, reshuffle_interval_days=14,
+        sweep_interval_seconds=3600, mode="offline",
+        clock=lambda: "2026-05-24T00:00:00Z",
+        shard_id_factory=_ids_iter(),
+    )
+    result = wheel.run_once()
+    # s_ok must have been reshuffled into a new shard despite s_bad's failure.
+    assert len(result["reshuffled"]) >= 1
+
+    conn = connect(db)
+    # Heartbeat still stamped (sweep didn't crash).
+    assert conn.execute(
+        "SELECT 1 FROM obligation_clocks "
+        "WHERE obligation_id='shard_reshuffle_sweep_ran'"
+    ).fetchone() is not None
+    # s_bad got an anti-obligation with the exception in details.
+    row = conn.execute(
+        "SELECT details FROM obligation_clocks "
+        "WHERE obligation_id='shard_overdue_pending::s_bad'"
+    ).fetchone()
+    assert row is not None
+    assert "simulated picker boom" in row[0]
+    assert "RuntimeError" in row[0]
+    conn.close()
+
+
+def test_unassigned_fold_in_failure_raises_singleton(tmp_path, monkeypatch):
+    """U-D3: when the unassigned fold-in step raises (e.g. a DB constraint
+    violation), the singleton shard_unassigned_pending anti-obligation
+    must be raised. Self-clears on the next tick where fold-in succeeds."""
+    db, conn = _seed(tmp_path)
+    conn.close()
+
+    from mthydra.controller.shard_manager import wheel as wheel_mod
+    monkeypatch.setattr(
+        wheel_mod, "reshuffle_unassigned",
+        lambda conn, **kw: (_ for _ in ()).throw(
+            sqlite3.IntegrityError("fake constraint")),
+    )
+    wheel = ShardReshuffleWheel(
+        db, target_size=2, max_size=3, reshuffle_interval_days=14,
+        sweep_interval_seconds=3600, mode="offline",
+        clock=lambda: "2026-05-24T00:00:00Z",
+        shard_id_factory=_ids_iter(),
+    )
+    wheel.run_once()
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT details FROM obligation_clocks "
+        "WHERE obligation_id='shard_unassigned_pending'"
+    ).fetchone()
+    assert row is not None
+    assert "fake constraint" in row[0]
+    assert "IntegrityError" in row[0]
+    conn.close()
+
+    # Next tick where fold-in succeeds → clear.
+    monkeypatch.setattr(wheel_mod, "reshuffle_unassigned",
+                        lambda conn, **kw: [])
+    wheel.run_once()
+    conn = connect(db)
+    assert conn.execute(
+        "SELECT 1 FROM obligation_clocks "
+        "WHERE obligation_id='shard_unassigned_pending'"
+    ).fetchone() is None
+    conn.close()
