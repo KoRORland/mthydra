@@ -165,12 +165,26 @@ def test_fetch_and_checkout_raises_on_failure(monkeypatch):
 def test_pip_install_invokes_venv_pip(monkeypatch):
     seen = []
     def fake_run(argv, **kw):
-        seen.append(argv)
+        seen.append((argv, kw))
         return subprocess.CompletedProcess(argv, 0, "", "")
     monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
     upgrade._pip_install(Path("/opt/mthydra/venv"), Path("/opt/mthydra/src"))
-    assert seen[0] == ["/opt/mthydra/venv/bin/pip", "install", "-e",
-                       "/opt/mthydra/src"]
+    assert seen[0][0] == ["/opt/mthydra/venv/bin/pip", "install", "-e",
+                          "/opt/mthydra/src"]
+    # R-D6: must set umask 022 via preexec_fn so the editable .pth + dist-info
+    # are world-readable regardless of the caller's umask. Without this, a
+    # root shell with umask 077 (set earlier to write a credential file) makes
+    # the install unreadable by the mthydra service user → ModuleNotFoundError.
+    preexec = seen[0][1].get("preexec_fn")
+    assert preexec is not None, "preexec_fn must be set to enforce umask 022"
+    # Calling the preexec sets the process umask; verify it lands at 0o022.
+    import os as _os
+    prev = _os.umask(0o077)
+    try:
+        preexec()
+        assert _os.umask(0o000) == 0o022
+    finally:
+        _os.umask(prev)
 
 
 def test_rollback_to_resets_and_reinstalls(monkeypatch):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 import sqlite3
 import subprocess
@@ -159,11 +160,19 @@ def _fetch_and_checkout(src_dir: Path, ref: str) -> None:
 
 def _pip_install(venv_dir: Path, src_dir: Path) -> None:
     """`<venv>/bin/pip install -e <src>` — re-installs editable mode against
-    the freshly-checked-out source."""
+    the freshly-checked-out source.
+
+    Forces umask 022 in the subprocess (R-D6): if the calling shell has
+    umask 077 (common after writing a credential file), pip creates the
+    editable .pth + .dist-info as mode 600 root:root, which makes the
+    install unreadable by the mthydra service user → ModuleNotFoundError
+    at next service restart.
+    """
     pip = str(Path(venv_dir) / "bin" / "pip")
     res = subprocess.run(
         [pip, "install", "-e", str(src_dir)],
         capture_output=True, text=True,
+        preexec_fn=lambda: os.umask(0o022),
     )
     if res.returncode != 0:
         raise UpgradeError(
