@@ -61,12 +61,15 @@ Listed by the spec that introduced the automation; cumulative.
 
 ## §2 — In flight (spec U: obligation auto-resolution)
 
+All four landed in main (not tagged yet — bundled into 0.0.5 with §3
+items as they ship).
+
 | ID | What | Status |
 |---|---|---|
-| U-D1 | Cover-domain auto-reverify (replaces 60-day operator attestation) | next up |
-| U-D2 | Probe runner per-vantage failover (one dead vantage ≠ N box-level alerts) | queued |
-| U-D3 | Shard wheel attempts resolution before raising overdue/unassigned | queued |
-| U-D4 | Heartbeat-breach self-diagnosis (SMTP smoke + last N exception strings → details_json) | queued |
+| U-D1 | Cover-domain auto-reverify (replaces 60-day operator attestation) | ✓ done |
+| U-D2 | Probe runner per-vantage failover (one dead vantage ≠ N box-level alerts) | ✓ done |
+| U-D3 | Shard wheel attempt-then-raise + per-shard isolation | ✓ done |
+| U-D4 | Heartbeat-breach self-diagnosis (SMTP smoke + last N exceptions → details_json) | ✓ done |
 
 ---
 

@@ -24,8 +24,38 @@ one-command:
   steps (ssh-keygen on EU, scp pubkey, adduser+install on vantage,
   ssh-keyscan, vantage-set-ssh) into one wizard. End-to-end idempotent.
 
-**No required operator actions** — both are additive new commands. If
-you've already wired things up manually, they keep working.
+**Spec U — operator-obligation auto-resolution.** Four reductions in
+operator alert load:
+
+- **U-D1** — `mthydra-controller cover-reverify-now` + scheduled
+  `CoverPoolAutoReverifySweep`. Replaces the 60-day operator
+  `cover-attest-verified` cadence with a controller-side hourly
+  TLS-handshake smell-test. Operator only sees a domain via the new
+  `cover_pool_reverify_drift_pending::<domain>` anti-obligation when
+  the automated check actually fails. Self-clears on recovery.
+
+- **U-D2** — Probe runner pre-flights SSH per vantage before iterating
+  probes. A dead vantage now raises ONE
+  `probe_vantage_unreachable::<id>` anti-obligation instead of
+  spamming a `soft_fail` probe row per (box × prober). Self-clears
+  next tick where SSH succeeds.
+
+- **U-D3** — Shard reshuffle wheel hardened: per-shard try/except
+  isolation so a single failing shard doesn't crash the whole sweep.
+  Failed shards get the existing `shard_overdue_pending::<sid>` with
+  the exception class + message in details_json; the rest of the tick
+  continues. New `shard_unassigned_pending` singleton raises when the
+  unassigned fold-in step itself fails.
+
+- **U-D4** — Heartbeat-breach details_json now carries a self-diagnosis
+  verdict: deduplicated recent error strings + an SMTP connect/EHLO
+  smoke against `[observability.email]`. Operator triages from the
+  alert body instead of opening logs. New `smtp_smoke()` helper in
+  the heartbeat module.
+
+**No required operator actions** for any of the above — additive
+behaviour. Existing manual cover-attest-verified flows still work; the
+auto-sweep just makes them redundant for the common case.
 
 Not tagged as a release yet — more 0.0.5 content expected before the
 bump.
