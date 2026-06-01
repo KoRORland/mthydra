@@ -34,12 +34,63 @@ def test_resolve_latest_tag_uses_releases_latest(monkeypatch):
 def test_resolve_latest_tag_raises_on_non_200(monkeypatch):
     monkeypatch.setattr(
         image_ops.urllib.request, "urlopen",
-        lambda req, timeout=None: _FakeResp(404, b'{"message":"Not Found"}'),
+        lambda req, timeout=None: _FakeResp(500, b'{"message":"server error"}'),
     )
     import pytest
-    with pytest.raises(image_ops.ImageOpsError, match="404"):
+    with pytest.raises(image_ops.ImageOpsError, match="500"):
         image_ops.resolve_latest_tag(upstream_repo="x/y",
                                      github_api_url="https://api.github.com")
+
+
+def test_resolve_latest_tag_falls_back_to_git_ls_remote_on_404(monkeypatch):
+    """S-Task 2: GitHub 404 means the repo has no Releases (capital R).
+    Many private projects ship via `git tag` + `git push origin <tag>`
+    without ever creating a Release. Fall back to git ls-remote --tags
+    and return the highest version-shaped tag.
+
+    Discovered 2026-06-01: user's first prod `mthydra-ops upgrade`
+    (with default --ref) hit 404 because v0.0.3 was a git tag, not a
+    GitHub Release."""
+    import urllib.error
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(
+            req.full_url, 404, "Not Found", {}, None)
+    monkeypatch.setattr(image_ops.urllib.request, "urlopen", fake_urlopen)
+
+    fake_ls_remote_output = (
+        "abc123\trefs/tags/v0.0.1\n"
+        "def456\trefs/tags/v0.0.2\n"
+        "789abc\trefs/tags/v0.0.3\n"
+        "deadbe\trefs/tags/v0.1.0\n"   # higher minor wins
+        "feedf0\trefs/tags/not-a-version\n"
+    )
+    def fake_run(argv, **kw):
+        assert argv[0:3] == ["git", "ls-remote", "--tags"]
+        return subprocess.CompletedProcess(argv, 0, fake_ls_remote_output, "")
+    monkeypatch.setattr(image_ops.subprocess, "run", fake_run)
+
+    tag = image_ops.resolve_latest_tag(
+        upstream_repo="KoRORland/mthydra",
+        github_api_url="https://api.github.com",
+    )
+    assert tag == "v0.1.0"
+
+
+def test_resolve_latest_tag_fallback_raises_when_no_version_tags(monkeypatch):
+    import urllib.error
+    monkeypatch.setattr(
+        image_ops.urllib.request, "urlopen",
+        lambda req, timeout=None: (_ for _ in ()).throw(
+            urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)),
+    )
+    monkeypatch.setattr(
+        image_ops.subprocess, "run",
+        lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "abc\trefs/tags/nightly\n", ""),
+    )
+    import pytest
+    with pytest.raises(image_ops.ImageOpsError, match="no version-shaped tags"):
+        image_ops.resolve_latest_tag(
+            upstream_repo="x/y", github_api_url="https://api.github.com")
 
 
 def test_default_profile_json_has_required_schema_fields():

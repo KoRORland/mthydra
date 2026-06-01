@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
+import urllib.error
 import urllib.request
 
 from . import main as _main
@@ -21,14 +23,31 @@ class ImageOpsError(RuntimeError):
     pass
 
 
+_SEMVER_TAG_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+
+
 def resolve_latest_tag(*, upstream_repo: str, github_api_url: str) -> str:
     """Query GitHub's `releases/latest` endpoint, return the `tag_name`.
 
-    Excludes drafts + prereleases by GitHub's own semantics."""
+    Excludes drafts + prereleases by GitHub's own semantics.
+
+    S-Task 2: on 404 (repo has tags but no GitHub Releases — common for
+    private projects that ship via `git tag` + `git push origin <tag>`),
+    fall back to `git ls-remote --tags` and return the highest
+    version-shaped tag. Lets `mthydra-ops upgrade` resolve a default
+    target without requiring the operator to cut a Release per version.
+    """
     url = f"{github_api_url}/repos/{upstream_repo}/releases/latest"
     req = urllib.request.Request(
         url, headers={"Accept": "application/vnd.github+json"})
-    resp = urllib.request.urlopen(req, timeout=30)
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return _resolve_latest_tag_via_git_ls_remote(upstream_repo)
+        raise ImageOpsError(
+            f"GitHub releases/latest returned HTTP {e.code} for "
+            f"{upstream_repo!r}: {e.reason}") from e
     status = resp.getcode()
     if status != 200:
         raise ImageOpsError(
@@ -39,6 +58,37 @@ def resolve_latest_tag(*, upstream_repo: str, github_api_url: str) -> str:
         raise ImageOpsError(
             f"GitHub releases/latest for {upstream_repo!r} has no tag_name")
     return str(tag)
+
+
+def _resolve_latest_tag_via_git_ls_remote(upstream_repo: str) -> str:
+    """Fallback for repos that have no GitHub Releases but do have tags.
+    Lists remote tags via git ls-remote, parses version-shaped names
+    (v1.2.3 / 1.2.3), and returns the highest by semver tuple."""
+    git_url = f"https://github.com/{upstream_repo}.git"
+    res = subprocess.run(
+        ["git", "ls-remote", "--tags", "--refs", git_url, "v*"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if res.returncode != 0:
+        raise ImageOpsError(
+            f"git ls-remote fallback failed for {upstream_repo!r}: "
+            f"{res.stderr.strip() or res.stdout.strip()}")
+    candidates: list[tuple[tuple[int, int, int], str]] = []
+    for line in res.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 2:
+            continue
+        ref = parts[1].removeprefix("refs/tags/")
+        m = _SEMVER_TAG_RE.match(ref)
+        if m:
+            candidates.append(
+                ((int(m.group(1)), int(m.group(2)), int(m.group(3))), ref))
+    if not candidates:
+        raise ImageOpsError(
+            f"no version-shaped tags (vN.N.N) found in {upstream_repo!r}; "
+            "create one with `git tag v0.0.1 && git push origin v0.0.1`")
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
 
 
 def default_profile_json(tag: str, arch: str) -> dict:
