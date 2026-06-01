@@ -39,6 +39,8 @@ _ANTI_PREFIXES = frozenset({
     "image_rollback_pending",
     # Spec U U-D1 — cover-domain auto-reverify drift.
     "cover_pool_reverify_drift_pending",
+    # Spec U U-D2 — probe vantage SSH unreachable.
+    "probe_vantage_unreachable",
 })
 
 
