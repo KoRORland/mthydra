@@ -78,15 +78,37 @@ def read_manifest(path=None) -> AgentManifest | None:
 
 
 def _get_s3_credentials(cfg, db_path: str) -> tuple[str, str]:
+    """Return (key_id, secret) for boto3.
+
+    Matches the R-D1 split-or-fallback logic in
+    controller.cli._build_destination: stored credential can be either
+    'keyid:secret' (the canonical install-time format) OR just 'secret'
+    (which legacy installs and the R-D1 workaround flow produce). When
+    the colon is absent, use cfg.backup.access_key_id as the key.
+
+    Previously this raised "provider credential malformed (expected
+    KEY:SECRET)" on the secret-only form — breaking agent-publish on
+    every host where the operator had used the R-D1 workaround to
+    rotate to just the secret.
+    """
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.tokens import get_provider_credential
 
     with connect(db_path) as conn:
         cred = get_provider_credential(conn, "b2")
-    key_id, _, secret = cred.partition(":")
-    if not secret:
-        raise RuntimeError("provider credential malformed (expected KEY:SECRET)")
-    return key_id, secret
+    if ":" in cred:
+        key_id, _, secret = cred.partition(":")
+        if not secret:
+            raise RuntimeError(
+                "provider credential malformed: 'KEY:' with empty secret")
+        return key_id, secret
+    # No colon → secret-only form; key comes from config.
+    if not cfg.backup.access_key_id:
+        raise RuntimeError(
+            "provider credential is secret-only and "
+            "[backup].access_key_id is unset; cannot derive the AWS access "
+            "key id")
+    return cfg.backup.access_key_id, cred
 
 
 def _make_s3_client(cfg, db_path: str):

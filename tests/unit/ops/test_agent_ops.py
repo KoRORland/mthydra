@@ -180,3 +180,98 @@ def test_publish_agent_no_frozen_instance_error(monkeypatch, tmp_path):
     assert manifest.sha256 == "aabbccdd" * 8
     assert fake_client.put_object.called
     assert fake_client.generate_presigned_url.called
+
+
+# ---------------------------------------------------------------------------
+# Credential parsing (R-D1 follow-up; agent_ops was the second consumer that
+# didn't get the split-or-fallback fix and broke when operator credentials
+# were stored secret-only)
+# ---------------------------------------------------------------------------
+
+
+def _cfg_with_key_id(key_id: str | None):
+    from types import SimpleNamespace
+    return SimpleNamespace(backup=SimpleNamespace(access_key_id=key_id))
+
+
+def test_get_s3_credentials_splits_keyid_secret_form(monkeypatch, tmp_path):
+    """Canonical install-time format: stored credential is 'KEY:SECRET'."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.tokens import set_provider_credential
+
+    db = tmp_path / "s.sqlite"
+    c = connect(db)
+    apply_schema(c)
+    set_provider_credential(
+        c, provider="b2", credential="AKIAEXAMPLE:realsecret",
+        at="2026-06-02T00:00:00Z")
+    c.close()
+
+    key_id, secret = agent_ops._get_s3_credentials(
+        _cfg_with_key_id("fallback-key-id"), str(db))
+    assert key_id == "AKIAEXAMPLE"
+    assert secret == "realsecret"
+
+
+def test_get_s3_credentials_uses_config_keyid_when_secret_only(monkeypatch, tmp_path):
+    """Regression: agent-publish broke with 'provider credential malformed'
+    on hosts where the operator had stored just the secret (R-D1 workaround
+    flow). agent_ops now mirrors the split-or-fallback logic in
+    controller.cli._build_destination.
+
+    Discovered 2026-06-02 on the user's prod host: their credential was
+    rotated to secret-only earlier in the session and agent-publish
+    refused with 'expected KEY:SECRET'."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.tokens import set_provider_credential
+
+    db = tmp_path / "s.sqlite"
+    c = connect(db)
+    apply_schema(c)
+    set_provider_credential(
+        c, provider="b2", credential="just-the-secret-no-colon",
+        at="2026-06-02T00:00:00Z")
+    c.close()
+
+    key_id, secret = agent_ops._get_s3_credentials(
+        _cfg_with_key_id("AKIAFROMCONFIG"), str(db))
+    assert key_id == "AKIAFROMCONFIG"
+    assert secret == "just-the-secret-no-colon"
+
+
+def test_get_s3_credentials_raises_on_empty_secret(monkeypatch, tmp_path):
+    """Defensive: 'KEY:' (key with empty secret) is malformed."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.tokens import set_provider_credential
+    import pytest
+
+    db = tmp_path / "s.sqlite"
+    c = connect(db)
+    apply_schema(c)
+    set_provider_credential(
+        c, provider="b2", credential="AKIA:", at="2026-06-02T00:00:00Z")
+    c.close()
+    with pytest.raises(RuntimeError, match="empty secret"):
+        agent_ops._get_s3_credentials(_cfg_with_key_id("x"), str(db))
+
+
+def test_get_s3_credentials_raises_when_secret_only_and_no_config_keyid(monkeypatch, tmp_path):
+    """Defensive: secret-only credential AND empty config.backup.access_key_id
+    leaves us with nothing to use as the AWS access key id — fail clearly."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.tokens import set_provider_credential
+    import pytest
+
+    db = tmp_path / "s.sqlite"
+    c = connect(db)
+    apply_schema(c)
+    set_provider_credential(
+        c, provider="b2", credential="secret-only",
+        at="2026-06-02T00:00:00Z")
+    c.close()
+    with pytest.raises(RuntimeError, match="access_key_id is unset"):
+        agent_ops._get_s3_credentials(_cfg_with_key_id(""), str(db))
