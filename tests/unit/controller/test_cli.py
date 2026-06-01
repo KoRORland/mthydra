@@ -442,6 +442,31 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
     dest_dry_no_override = _build_destination(cfg, "secret", mode="dryrun", bucket_override=None)
     assert dest_dry_no_override.bucket == "prod-bucket"
 
+    # R-D1: storage format is "keyid:secret" but boto3 must receive just the
+    # secret half — otherwise SigV4 signs with the wrong HMAC key and AWS
+    # rejects every PutObject as SignatureDoesNotMatch. Discovered 2026-05-31
+    # against a real eu-west-1 bucket; backups had been silently failing
+    # since install.
+    dest_split = _build_destination(
+        cfg, "AKIAEXAMPLE:realsecret",
+        mode="production", bucket_override=None,
+    )
+    # The boto3 client was built with these — extract via _request_signer
+    # for a black-box assertion (avoids touching private boto3 internals).
+    creds = dest_split._client._request_signer._credentials
+    assert creds.access_key == "AKIAEXAMPLE"
+    assert creds.secret_key == "realsecret"
+
+    # Backwards-compat: a no-colon legacy secret still works; access_key_id
+    # falls back to cfg.backup.access_key_id.
+    dest_legacy = _build_destination(
+        cfg, "legacysecretnocolon",
+        mode="production", bucket_override=None,
+    )
+    creds_legacy = dest_legacy._client._request_signer._credentials
+    assert creds_legacy.access_key == "id"  # from cfg.backup.access_key_id
+    assert creds_legacy.secret_key == "legacysecretnocolon"
+
 
 # ---------------------------------------------------------------------------
 # Spec B CLI subcommands

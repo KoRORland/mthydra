@@ -1433,10 +1433,18 @@ def _build_destination(cfg, secret: str, mode: str, bucket_override: str | None)
         if (mode == "dryrun" and bucket_override)
         else cfg.backup.bucket
     )
+    # R-D1: stored credential is "keyid:secret"; split before handing to boto3,
+    # else SigV4 signs with the whole string as the HMAC key → AWS rejects every
+    # PutObject as SignatureDoesNotMatch. Legacy DBs may hold just the secret
+    # with no colon — in that case fall back to cfg.backup.access_key_id.
+    if ":" in secret:
+        access_key_id, _, secret = secret.partition(":")
+    else:
+        access_key_id = cfg.backup.access_key_id
     return S3Destination(
         endpoint_url=cfg.backup.endpoint or None,
         bucket=bucket,
-        access_key_id=cfg.backup.access_key_id,
+        access_key_id=access_key_id,
         secret_access_key=secret,
         region=os.environ.get("MTHYDRA_BACKUP_REGION", "us-east-1"),
         object_lock_days=cfg.backup.retention.object_lock_days,
