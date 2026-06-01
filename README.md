@@ -2,6 +2,12 @@
 
 Resilient Telegram access controller. See `doc/design.md` for the architecture, `doc/build-plan.md` for the artifact decomposition, and `doc/specs/` and `doc/plans/` for individual artifact specs and implementation plans.
 
+## For operators
+
+- `CHANGELOG.md` — per-release operator-visible changes, including required actions when upgrading.
+- `doc/quickstart-mvp.md` — install + day-2 routine (Part 10 covers `mthydra-ops upgrade`).
+- `doc/runbook.md` — full operator reference; **§12** covers controller upgrades (auto + manual + pre-0.0.4 migration).
+
 ## Development
 
 ```

@@ -19,7 +19,7 @@
 ## Table of contents
 
 1. [§1 — Initial deployment](#1--initial-deployment)
-2. [§2 — Day-2 operations (the §12 obligation clock)](#2--day-2-operations-the-12-obligation-clock)
+2. [§2 — Day-2 operations (the §13 obligation clock)](#2--day-2-operations-the-13-obligation-clock)
 3. [§3 — Image lifecycle (T4 + spec D2)](#3--image-lifecycle-t4--spec-d2)
 4. [§4 — Cover-domain discipline (T5)](#4--cover-domain-discipline-t5)
 5. [§5 — User onboarding (per-circle)](#5--user-onboarding-per-circle)
@@ -29,7 +29,8 @@
 9. [§9 — Image rollback](#9--image-rollback)
 10. [§10 — Controller restore / promotion (T2)](#10--controller-restore--promotion-t2)
 11. [§11 — Periodic maintenance](#11--periodic-maintenance)
-12. [§12 — Honest residuals + obscurity discipline](#12--honest-residuals--obscurity-discipline)
+12. [§12 — Controller upgrades](#12--controller-upgrades)
+13. [§13 — Honest residuals + obscurity discipline](#13--honest-residuals--obscurity-discipline)
 
 ---
 
@@ -278,7 +279,7 @@ mthydra-controller eu-node-add eu-standby-1 \
 
 ---
 
-## §2 — Day-2 operations (the §12 obligation clock)
+## §2 — Day-2 operations (the §13 obligation clock)
 
 The **single load-bearing metric** of mthydra is "time since each obligation was last proven." If you stop running these procedures, the safety controls become aspirational and the fleet drifts toward failure silently.
 
@@ -965,7 +966,110 @@ mthydra-controller obligation-proven t2_dryrun_caseA \
 
 ---
 
-## §12 — Honest residuals + obscurity discipline
+## §12 — Controller upgrades
+
+### §12.1 — Normal upgrade (0.0.2+) — `mthydra-ops upgrade`
+
+```bash
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+```
+
+Optional flags:
+- `--ref vX.Y.Z` — pin a specific version (default = latest tag; on 0.0.2/0.0.3
+  this is required because the resolve_latest_tag fallback isn't there yet).
+- `--allow-schema-migration` — required to cross a SCHEMA_VERSION boundary.
+  Schema migrations are forward-only; the pre-upgrade backup is your only
+  rollback path.
+- `--no-auto-rollback` — disable auto-revert on health-check failure (forensics
+  mode; pin the broken state for investigation).
+
+The tool runs 8 phases (preflight → resolve-target → record-prior → fetch-and-
+checkout → pip-install → stop-service → start-and-verify → summary). It's
+idempotent on re-run — partial state from a failed prior run is detected from
+0.0.4 onwards and the install phases resume automatically.
+
+**Confirm the upgrade landed:**
+1. `systemctl is-active mthydra-controller` — `active`.
+2. Heartbeat email subject identifies the new version: `mthydra heartbeat @ ...
+   — <hostname> v<X.Y.Z>` (R-8, from 0.0.3 onwards).
+3. `mthydra-controller obs-status --json | jq '.summary_line'` — no overdue
+   obligations.
+
+**If verify fails and auto-rollback runs:** the tool prints the prior SHA + the
+backup generation that was forced in phase 3. The DB is reverted to its
+pre-upgrade state via source-rollback; if the migration also crossed a
+SCHEMA_VERSION boundary, restore from the printed backup generation via the
+§10 procedure.
+
+### §12.2 — Pre-0.0.4 host migration
+
+Hosts originally installed at 0.0.1 missed the `chown` (S-1) and polkit-rule
+(S-4) steps that 0.0.4's installer added. Apply them once, by hand:
+
+```bash
+# S-1: hand /opt/mthydra/{src,venv} to the service user so it can self-update
+chown -R mthydra:mthydra /opt/mthydra/src /opt/mthydra/venv
+
+# S-4: polkit rule so mthydra can systemctl its own service without prompts
+cat > /etc/polkit-1/rules.d/50-mthydra-systemd.rules <<'EOF'
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        subject.user == "mthydra") {
+        var unit = action.lookup("unit");
+        if (unit == "mthydra-controller.service") {
+            return polkit.Result.YES;
+        }
+    }
+});
+EOF
+chmod 644 /etc/polkit-1/rules.d/50-mthydra-systemd.rules
+systemctl reload-or-restart polkit
+```
+
+(Fresh installs of 0.0.4+ get both automatically from `install.py`.)
+
+### §12.3 — Manual upgrade — used to bootstrap 0.0.1 → 0.0.2
+
+`mthydra-ops upgrade` only exists in 0.0.2. The one-time hop from 0.0.1 → 0.0.2
+must be done by hand. Same steps work as a recovery path for any release if
+the upgrade tool itself is broken.
+
+```bash
+# 1. Pre-upgrade backup as recovery floor (note the generation number)
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller backup-now \
+    --db-path /var/lib/mthydra/state.sqlite \
+    --config /etc/mthydra/controller.toml \
+    --reason "pre-upgrade snapshot"
+
+# 2. Fetch + checkout
+git -C /opt/mthydra/src fetch origin <target-tag>
+git -C /opt/mthydra/src reset --hard FETCH_HEAD
+
+# 3. Reinstall the venv (force umask 022 so service can read the install)
+( umask 022 && /opt/mthydra/venv/bin/pip install -e /opt/mthydra/src )
+
+# 4. Run schema-migrate if SCHEMA_VERSION advanced (R-7 subcommand, 0.0.3+)
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller schema-migrate \
+    --db-path /var/lib/mthydra/state.sqlite
+
+# 5. Restart + verify
+systemctl restart mthydra-controller
+systemctl is-active mthydra-controller
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller startup-check \
+    --db-path /var/lib/mthydra/state.sqlite
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller obs-heartbeat-now \
+    --db-path /var/lib/mthydra/state.sqlite \
+    --config /etc/mthydra/controller.toml
+```
+
+**If verify fails:** roll back via
+`git -C /opt/mthydra/src reset --hard <prior-sha>` + repeat step 3 + restart.
+If the schema was migrated past the prior code's expectation, restore from the
+backup generation printed by step 1 via the §10 procedure.
+
+---
+
+## §13 — Honest residuals + obscurity discipline
 
 > Quoted from design.md §13. Treat any future change to this list as a regression, not an improvement.
 

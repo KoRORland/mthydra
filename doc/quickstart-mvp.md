@@ -713,6 +713,53 @@ You have backups in S3, encrypted with your age key:
 
 ---
 
+# Part 10 — Upgrading mthydra
+
+When a new version is tagged on GitHub:
+
+```bash
+# On the EU host as root:
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+```
+
+That single command runs the full 8-phase upgrade:
+1. Preflight (sanity-check the source tree + read current HEAD)
+2. Resolve target ref (latest tag; override with `--ref vX.Y.Z` for a specific version)
+3. Forced `backup-now` — pre-upgrade recovery floor
+4. `git fetch` + `git reset --hard` to the target ref
+5. `pip install -e .` (rebuilds the venv against the new source)
+6. Stop `mthydra-controller`
+7. Start + verify (`systemctl is-active` + `startup-check` + `obs-heartbeat-now`)
+8. Summary (prints old → new version + the backup generation as the recovery target)
+
+**If health-check fails after restart**, the tool automatically rolls back to
+the prior SHA and re-verifies. Disable that with `--no-auto-rollback` if you
+want to investigate the failed state in place.
+
+**If the upgrade crosses a SCHEMA_VERSION boundary** (the controller's
+on-disk DB needs migrating to a newer version), the tool refuses to proceed
+unless you pass `--allow-schema-migration`. The acknowledgement matters
+because schema migrations are forward-only — if a post-migration verify fails,
+auto-rollback can restore the old code, but the DB is permanently advanced.
+The pre-upgrade backup (phase 3) is your recovery floor for that case.
+
+**Confirm the upgrade landed:**
+- Watch for the heartbeat email arriving within an hour. The subject now
+  identifies the running version, e.g. `mthydra heartbeat @ ... — eu-host v0.0.4`.
+- `mthydra-controller obs-status --json | jq '.summary_line'` shows no
+  overdue obligations.
+
+**Tag-shipping repos without GitHub Releases** (default behaviour for this
+project): `mthydra-ops upgrade` with no `--ref` works from 0.0.4 onwards —
+it falls back to `git ls-remote --tags` automatically. On 0.0.2/0.0.3 you
+need `--ref vX.Y.Z` explicitly.
+
+See **runbook §12** for the manual upgrade procedure (used to bootstrap 0.0.1 →
+0.0.2, or when you need to recover from a broken upgrade by hand) and the
+pre-0.0.4 host migration steps (chown + polkit rule).
+
+---
+
 # What this MVP intentionally doesn't have
 
 - A warm standby (run `install-standby` on a second EC2 instance whenever you're ready — it polls the active's heartbeat).
