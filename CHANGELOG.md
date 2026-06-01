@@ -7,6 +7,31 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
+## Unreleased (heading toward 0.0.5) — main branch as of 2026-06-01
+
+**Quickstart §7 automation.** Two of the manual steps in Part 7 are now
+one-command:
+
+- **T-1** (partial) — `mthydra-controller descriptor-publish-now`. The
+  controller uploads the latest signed descriptor to S3 at
+  `descriptors/current` and prints a presigned URL with 30-day TTL.
+  Replaces the manual `aws s3 presign` step on the operator's laptop
+  (which previously pointed at a key the controller had never uploaded;
+  RU boxes would 404 on descriptor refresh). Storing the URL in the DB
+  + having `ru-bringup` auto-read it is deferred to a follow-up.
+
+- **T-2** — `mthydra-ops vantage-setup` collapses §7.7's seven manual
+  steps (ssh-keygen on EU, scp pubkey, adduser+install on vantage,
+  ssh-keyscan, vantage-set-ssh) into one wizard. End-to-end idempotent.
+
+**No required operator actions** — both are additive new commands. If
+you've already wired things up manually, they keep working.
+
+Not tagged as a release yet — more 0.0.5 content expected before the
+bump.
+
+---
+
 ## v0.0.4 — 2026-06-01
 
 **Upgrade-tool hardening.** Four refinements that came out of the first prod

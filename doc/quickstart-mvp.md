@@ -492,14 +492,26 @@ mthydra-ops agent-publish
 
 This tars `mthydra/ru_agent` from your installed source, uploads it to your S3 bucket under `agent/mthydra-ru-agent-<sha12>.tar.gz` (content-addressed — re-publishing the same code is a no-op), presigns the URL for 7 days, and writes `/var/lib/mthydra/agent.json`. The bring-up wizard reads that file automatically — you never copy the URL anywhere.
 
-### 7.3 Presign the descriptor-refresh URL (one time)
+### 7.3 Publish + presign the descriptor-refresh URL (one command)
 
-The RU box needs to poll the controller's signed descriptor (which is updated whenever the controller rotates it). Presign that S3 object once, for 30 days:
+The RU box polls the controller's signed descriptor (rotated every hour by the controller). The descriptor must be uploaded to S3 and a presigned URL must be generated. On the EU host as the `mthydra` user:
+
 ```bash
-# On your laptop with aws cli installed and AWS creds in your env:
-aws s3 presign s3://mthydra-yourname-state/descriptors/current --expires-in 2592000 --region eu-west-1
+mthydra-controller descriptor-publish-now \
+    --db-path /var/lib/mthydra/state.sqlite \
+    --config /etc/mthydra/controller.toml
 ```
-Save the URL. Call it `DESCRIPTOR_REFRESH_URL`. (You'll re-presign every ~25 days; setting up a self-presigning automation is a separate spec.)
+
+This:
+- Reads the latest signed descriptor from the DB (run `descriptor-sign-now` first if there isn't one — the install does this automatically as the `first-descriptor` phase).
+- Encodes it in the wire format the RU agent expects (length-prefixed payload + Ed25519 signature).
+- Uploads to `s3://<bucket>/descriptors/current` under Object Lock GOVERNANCE.
+- Presigns the GET URL with a 30-day TTL (override with `--ttl-seconds`).
+- Prints `URL` + expiry to stdout.
+
+Save the URL. Call it `DESCRIPTOR_REFRESH_URL`. You'll re-run `descriptor-publish-now` every ~25 days to refresh the presigned URL (no laptop aws-cli needed — the controller has the credentials).
+
+> **Older quickstart said `aws s3 presign s3://bucket/descriptors/current ...` on your laptop.** That step pointed at a key that didn't exist (the controller never uploaded the descriptor anywhere). RU boxes would have 404'd on every refresh. Use `descriptor-publish-now` instead — it does both halves (upload + presign).
 
 ### 7.4 Bring up the RU box (one command)
 
@@ -536,44 +548,32 @@ Paste the IPv4 into the wizard prompt + Enter. The wizard:
 
 If the wizard times out, open the TimeWeb web console for the VM and run `journalctl -u cloud-final -n 80 --no-pager` to see what cloud-init did. Most often the VM has no outbound internet (check TimeWeb firewall) or the agent presigned URL expired (`mthydra-ops agent-publish` again to refresh).
 
-### 7.7 Wire your vantage for automatic probes
+### 7.7 Wire your vantage for automatic probes (one command)
 
-The spec-P probe runner SSHes into each registered vantage every 30 minutes and runs `tls_fall_through` / `cover_domain_consistency` / `surface_scan` for every live box. Set that up once per vantage.
+The spec-P probe runner SSHes into each registered vantage every 30 minutes and runs `tls_fall_through` / `cover_domain_consistency` / `surface_scan` for every live box. To get a vantage onto that loop, you need (a) a probe SSH key on the EU host, (b) a `probe` user with that key on the vantage, (c) `openssl` + `ncat` on the vantage, (d) the vantage's host key pinned in known_hosts, (e) the SSH config registered with the controller. **One command does all five:**
 
-On the EU host, put your SSH private key (one you generate locally) somewhere only `mthydra` can read:
 ```bash
-sudo mkdir -p /var/lib/mthydra/ssh
-sudo ssh-keygen -t ed25519 -N '' -f /var/lib/mthydra/ssh/ru-msk-1.key -C "mthydra-probe-runner@eu1"
-sudo cat /var/lib/mthydra/ssh/ru-msk-1.key.pub        # the PUBLIC half
-sudo chown -R mthydra:mthydra /var/lib/mthydra/ssh
-sudo chmod 700 /var/lib/mthydra/ssh
-sudo chmod 600 /var/lib/mthydra/ssh/ru-msk-1.key
+sudo -u mthydra mthydra-ops vantage-setup \
+    --vantage-id ru-msk-1 \
+    --vantage-host <VANTAGE_IPv4> \
+    --root-key /root/.ssh/timeweb-root.pem
 ```
 
-On the vantage VPS (`ssh root@<VANTAGE_IPv4>`):
-```bash
-adduser --disabled-password --gecos '' probe
-mkdir -p /home/probe/.ssh && chmod 700 /home/probe/.ssh
-echo '<PASTE THE .pub LINE HERE>' >> /home/probe/.ssh/authorized_keys
-chown -R probe:probe /home/probe/.ssh && chmod 600 /home/probe/.ssh/authorized_keys
-apt-get install -y openssl ncat   # the probers shell to these
-```
+(The `--root-key` is the SSH key with root access on the vantage VPS — the one TimeWeb gave you, or your hand-injected key. It's used once during setup and not stored.)
 
-Pin the host key once (avoids prompts at runtime):
-```bash
-sudo -u mthydra ssh-keyscan -H <VANTAGE_IPv4> >> /var/lib/mthydra/ssh/known_hosts
-```
-
-Register the SSH config with the controller:
-```bash
-mthydra-controller vantage-set-ssh ru-msk-1 \
-    --host <VANTAGE_IPv4> --user probe \
-    --key-path /var/lib/mthydra/ssh/ru-msk-1.key \
-    --known-hosts /var/lib/mthydra/ssh/known_hosts \
-    --db-path /var/lib/mthydra/state.sqlite
-```
+The wizard:
+1. Ensures `/var/lib/mthydra/ssh` exists (0700).
+2. Generates an ed25519 keypair at `/var/lib/mthydra/ssh/ru-msk-1.key` if absent.
+3. SSHes to the vantage as root in a single session:
+   - creates user `probe` (idempotent)
+   - installs the EU-side pubkey to `/home/probe/.ssh/authorized_keys`
+   - `apt-get install -y openssl ncat`
+4. `ssh-keyscan` the vantage, append to `known_hosts`.
+5. Calls `mthydra-controller vantage-set-ssh ru-msk-1 ...`.
 
 Within 30 minutes (or restart `mthydra-controller` to force the next tick), `mthydra-controller probe-due --json` should show recent probes for your box. From this point forward, `probe_coverage_pending` will stay green automatically.
+
+> **Older quickstart had 7 manual commands across two hosts** for this step. The wizard collapses them. Run with `--ssh-dir <path>` if you keep your probe-runner keys somewhere other than `/var/lib/mthydra/ssh/`.
 
 ---
 
