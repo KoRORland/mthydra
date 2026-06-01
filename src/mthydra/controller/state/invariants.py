@@ -20,11 +20,16 @@ def check_all(
     expected_schema_version: int,
     mode: str = "production",
     now_iso: str | None = None,
+    heartbeat_interval_seconds: int = 86400,
 ) -> None:
     """Run every §10 (spec A) + §11 (spec B) invariant.
 
     Raise InvariantViolation on the first failure.
     mode and now_iso are used for spec B checks 13 and 16.
+    heartbeat_interval_seconds (default daily, matches W-1) drives the
+    check #42 staleness threshold; the threshold is 2× the cadence to
+    match the obs_heartbeat_proven obligation's next_due semantics
+    (one missed dispatch OK, two flags).
     """
 
     integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
@@ -343,7 +348,10 @@ def check_all(
 
     if expected_schema_version >= 9:
         _check_41_alert_log_triggers_present(conn)
-        _check_42_heartbeat_freshness_at_startup(conn, now_iso=_now_str)
+        _check_42_heartbeat_freshness_at_startup(
+            conn, now_iso=_now_str,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        )
 
     # --- spec K checks (#43) — gated on schema v10+ ---
 
@@ -445,12 +453,18 @@ def _check_41_alert_log_triggers_present(conn: sqlite3.Connection) -> None:
 
 def _check_42_heartbeat_freshness_at_startup(
     conn: sqlite3.Connection, *, now_iso: str,
+    heartbeat_interval_seconds: int = 86400,
 ) -> None:
     """If alert_log has any rows, the most-recent successful heartbeat must be
-    within 2 hours (the default heartbeat cadence × 2). Fresh installs with no
-    rows are exempt to avoid spurious raise.
+    within heartbeat_interval × 2 (matches the obs_heartbeat_proven obligation's
+    next_due semantics: one missed dispatch OK, two flags). Fresh installs
+    with no rows are exempt to avoid spurious raise.
 
     Active-only: standby nodes do not emit heartbeats.
+
+    The threshold floors at 2h so an aggressively-tuned configuration
+    (heartbeat_interval = 30m) doesn't yield a 1h window that flaps under
+    normal restart latency.
     """
     from datetime import datetime, timezone
 
@@ -484,10 +498,13 @@ def _check_42_heartbeat_freshness_at_startup(
         )
     except (ValueError, OSError):
         return
-    if now_s - last_s > 2 * 3600:
+    threshold_s = max(2 * 3600, heartbeat_interval_seconds * 2)
+    if now_s - last_s > threshold_s:
+        hours = threshold_s // 3600
         raise InvariantViolation(
             f"check 42: last successful heartbeat was {row[0]}; "
-            f"more than 2h ago at startup (dead-man's-switch breach detected)"
+            f"more than {hours}h ago at startup (dead-man's-switch breach "
+            f"detected; threshold = heartbeat_interval × 2)"
         )
 
 

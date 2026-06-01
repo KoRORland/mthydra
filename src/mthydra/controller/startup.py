@@ -41,6 +41,7 @@ def run_startup_checks(
     bucket_override: str | None = None,
     prod_bucket: str | None = None,
     destination=None,
+    heartbeat_interval_seconds: int = 86400,
 ) -> StartupCheckResult:
     """Run spec A §10 self-checks and return a structured result.
 
@@ -80,6 +81,7 @@ def run_startup_checks(
                 expected_schema_version=SCHEMA_VERSION,
                 mode=mode,
                 now_iso=_now_iso,
+                heartbeat_interval_seconds=heartbeat_interval_seconds,
             )
         except InvariantViolation as e:
             return _fail("invariant", str(e))

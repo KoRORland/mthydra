@@ -126,6 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
     sc_p.add_argument("--db-path", default=DEFAULT_DB)
     sc_p.add_argument("--age-recipient", default=None)
     sc_p.add_argument("--age-recipient-file", default=DEFAULT_RECIPIENT_FILE)
+    sc_p.add_argument("--config", default="/etc/mthydra/controller.toml",
+                      help="optional; used to derive the check-42 heartbeat "
+                           "staleness threshold from heartbeat_interval")
 
     # backup-now
     bn_p = sub.add_parser("backup-now", help="run a manual backup immediately")
@@ -847,11 +850,26 @@ def run(argv: list[str]) -> int:
             if Path(args.age_recipient_file).exists()
             else ""
         )
+        # Pass heartbeat cadence to make check #42 cadence-aware (fixes
+        # the post-upgrade "more than 2h" false positive under W-1's
+        # daily default). Best-effort config load — startup-check is
+        # spec A and may run before [observability] is wired.
+        _hb_interval = 86400
+        if getattr(args, "config", None):
+            try:
+                from mthydra.controller.config import (
+                    ConfigError as _CE, load_config as _lc,
+                )
+                _cfg = _lc(args.config)
+                _hb_interval = _cfg.observability.heartbeat_interval_seconds
+            except (_CE, OSError):
+                pass
         result = run_startup_checks(
             db_path=args.db_path,
             age_recipient=recipient,
             mode=mode,
             bucket_override=args.bucket_override,
+            heartbeat_interval_seconds=_hb_interval,
         )
         if result.ok:
             if mode != "production":
@@ -1738,6 +1756,7 @@ def _cmd_serve(args) -> int:
             mode=mode,
             bucket_override=args.bucket_override,
             destination=None,
+            heartbeat_interval_seconds=cfg.observability.heartbeat_interval_seconds,
         )
         if not sc.ok:
             print(

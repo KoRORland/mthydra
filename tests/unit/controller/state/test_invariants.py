@@ -807,16 +807,16 @@ def test_check_42_passes_with_fresh_heartbeat(tmp_db_path):
 
 
 def test_check_42_raises_on_stale_heartbeat(tmp_db_path):
-    """alert_log has a row, but heartbeat is > 2h old."""
+    """alert_log has a row, heartbeat older than threshold (interval*2)."""
     conn = _seeded(tmp_db_path)
+    # Heartbeat 4h old; with hourly cadence threshold = 2h → fails. With
+    # daily cadence (the new default), threshold = 48h → passes.
     conn.execute(
         "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
         "kind, target, dedupe_key, payload) "
         "VALUES (?, ?, 'email', 'heartbeat', 'heartbeat', NULL, 'h', 'ok')",
         ("2026-05-18T20:00:00Z", "2026-05-18T20:00:01Z"),
     )
-    # Some non-heartbeat row too so the table is non-empty even if heartbeat
-    # check finds nothing recent.
     conn.execute(
         "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
         "kind, target, dedupe_key, payload) "
@@ -824,8 +824,48 @@ def test_check_42_raises_on_stale_heartbeat(tmp_db_path):
         ("2026-05-19T00:00:00Z",),
     )
     conn.commit()
+    # Hourly cadence → 2h threshold → 4h old heartbeat fails.
     with pytest.raises(InvariantViolation, match="check 42"):
-        check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+        check_all(conn, expected_schema_version=SCHEMA_VERSION,
+                  now_iso=NOW, heartbeat_interval_seconds=3600)
+
+
+def test_check_42_tolerates_long_stale_under_daily_cadence(tmp_db_path):
+    """The previous fixed 2h threshold caused every upgrade-restart that
+    took >2h to fail startup. Now the threshold scales with the configured
+    heartbeat_interval (×2 to match the obs_heartbeat_proven obligation's
+    next_due semantics)."""
+    conn = _seeded(tmp_db_path)
+    # Heartbeat 4h old, daily cadence → threshold 48h → passes.
+    conn.execute(
+        "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+        "kind, target, dedupe_key, payload) "
+        "VALUES (?, ?, 'email', 'heartbeat', 'heartbeat', NULL, 'h', 'ok')",
+        ("2026-05-18T20:00:00Z", "2026-05-18T20:00:01Z"),
+    )
+    conn.commit()
+    # default heartbeat_interval_seconds=86400 (daily) → 48h threshold → ok
+    check_all(conn, expected_schema_version=SCHEMA_VERSION, now_iso=NOW)
+
+
+def test_check_42_threshold_floor_is_two_hours(tmp_db_path):
+    """Aggressively-tuned configs (30-min cadence) would yield a 1h
+    threshold that flaps under normal restart latency. Floor at 2h."""
+    conn = _seeded(tmp_db_path)
+    # Heartbeat 90 min old, 30-min cadence → naive threshold 60 min, but
+    # floor enforces 2h → passes.
+    from datetime import datetime, timedelta, timezone
+    now_dt = datetime.strptime(NOW, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    hb = (now_dt - timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn.execute(
+        "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "
+        "kind, target, dedupe_key, payload) "
+        "VALUES (?, ?, 'email', 'heartbeat', 'heartbeat', NULL, 'h', 'ok')",
+        (hb, hb),
+    )
+    conn.commit()
+    check_all(conn, expected_schema_version=SCHEMA_VERSION,
+              now_iso=NOW, heartbeat_interval_seconds=1800)
 
 
 def test_check_42_skipped_on_standby(tmp_db_path):
