@@ -7,6 +7,39 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
+## v0.0.10 — 2026-06-02
+
+**MVP bootstrap fix.** `mthydra-ops image-prepare --yes` (quickstart §7.1)
+failed on a fresh install for two compounding reasons:
+
+- **S-1** — The promotion gate required at least one canary box before
+  allowing the first-ever image promotion, but you cannot provision a box
+  without a promoted image. The gate now auto-detects when no image has
+  ever been promoted and skips canary-cohort, cycles, vantages, and
+  pending-kill checks. After the first promotion the gate enforces the
+  configured thresholds as before.
+
+- **S-2** — `image-build` crashed with
+  `UNIQUE constraint failed: ru_images.image_version` on retry when the
+  same upstream release was requested a second time. `build_image()` now
+  checks for an existing `ru_images` row by `upstream_release + upstream_repo`
+  before downloading anything. If found, it returns the existing
+  `image_version` immediately. Makes `image-prepare` safe to retry.
+
+**Operator action:** none required.
+
+```bash
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+```
+
+Or, to pick up these fixes before a tag exists:
+
+```bash
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade --ref 8f71c99
+```
+
+---
+
 ## v0.0.9 — 2026-06-01
 
 **Bug fix.** `mthydra-controller image-build` was sending
