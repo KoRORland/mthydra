@@ -270,6 +270,7 @@ class CoverPoolAutoReverifySweep:
         mode: str = "production",
         clock: Callable[[], str] | None = None,
         check_fn: Callable[[str], tuple[bool, str]] | None = None,
+        freeze_threshold: int = 2,
     ) -> None:
         self.db_path = Path(db_path)
         self.sweep_interval_seconds = sweep_interval_seconds
@@ -277,6 +278,10 @@ class CoverPoolAutoReverifySweep:
         self._clock = clock or _default_clock
         # Tests inject a fake check_fn to avoid real network calls.
         self._check = check_fn or auto_reverify_check
+        # Auto-rotate gate: only burn drifted candidate_verified domains when
+        # the pool stays at >= freeze_threshold healthy candidate_verified
+        # rows AFTER the burn. Matches cfg.cover_pool.freeze_threshold.
+        self.freeze_threshold = freeze_threshold
         self._scheduler: BackgroundScheduler | None = None
 
     def arm(self) -> None:
@@ -296,16 +301,24 @@ class CoverPoolAutoReverifySweep:
             self._scheduler = None
 
     def run_once(self) -> dict[str, list[str]]:
-        """Returns {'passed': [...], 'failed': [...]} for the sweep run."""
+        """Returns {'passed': [...], 'failed': [...], 'auto_burned': [...]}.
+
+        Failures get raised as drift anti-obligations UNLESS auto-rotate
+        succeeds first (candidate_verified drift with pool slack > freeze
+        threshold). Passes after prior failure clear the anti-obligation.
+        """
         now = self._clock()
         conn = connect(self.db_path)
         try:
-            domains: list[str] = []
+            # Capture state-keyed domain list once: we need both the domain
+            # identity AND its state to decide eligibility for auto-rotate.
+            state_for: dict[str, str] = {}
             for state in self._STATES_IN_SCOPE:
-                domains.extend(d.domain for d in list_by_state(conn, state))
+                for d in list_by_state(conn, state):
+                    state_for[d.domain] = state
             passed: list[str] = []
             failed: list[tuple[str, str]] = []
-            for domain in domains:
+            for domain in state_for:
                 ok, reason = self._check(domain)
                 if ok:
                     passed.append(domain)
@@ -324,10 +337,52 @@ class CoverPoolAutoReverifySweep:
                     details=json.dumps({"passed": len(passed), "failed": len(failed)}),
                 )
 
-            # Per-domain drift anti-obligations. Failures get raised;
-            # passes after prior failure get cleared (the operator's only
-            # action is investigation, so a self-cleared drift is a win).
+            # Auto-rotate gate: for each drifted candidate_verified domain,
+            # check whether burning it would still leave the pool at
+            # >= freeze_threshold candidate_verified. If yes, burn it
+            # (no anti-obligation, no operator triage). If no, fall
+            # through to raise the anti-obligation as before.
+            # in_use drift is NEVER auto-burned — burning an active SNI
+            # orphans the boxes using it; that's a box-replacement flow,
+            # not a sweep flow.
+            candidate_verified_count = sum(
+                1 for s in state_for.values() if s == "candidate_verified"
+            )
+            auto_burned: list[str] = []
             for domain, reason in failed:
+                if state_for[domain] != "candidate_verified":
+                    continue
+                # candidate_verified_count tracks the live count as we burn.
+                if candidate_verified_count - 1 < self.freeze_threshold:
+                    continue  # pool too tight; leave for operator
+                try:
+                    _self_burn(conn, domain, reason=reason, at=now)
+                except Exception as e:
+                    # Burn failed (concurrent assign_to_box, integrity?).
+                    # Leave the anti-obligation to flag it.
+                    log_event(
+                        conn, ts=now, actor="auto_reverify_sweep",
+                        action="cover_auto_burn_failed", target=domain,
+                        details_json=json.dumps({
+                            "reason": reason, "error": str(e),
+                        }),
+                    )
+                    continue
+                auto_burned.append(domain)
+                candidate_verified_count -= 1
+                # Self-burn took care of the drift; also clear any pre-existing
+                # anti-obligation row for this domain (recovery via burn).
+                conn.execute(
+                    "DELETE FROM obligation_clocks WHERE obligation_id=?",
+                    (f"{self._DRIFT_PREFIX}::{domain}",),
+                )
+
+            # Per-domain drift anti-obligations for domains we did NOT
+            # auto-burn (either in_use, or pool too tight, or burn failed).
+            burned_set = set(auto_burned)
+            for domain, reason in failed:
+                if domain in burned_set:
+                    continue
                 ob_id = f"{self._DRIFT_PREFIX}::{domain}"
                 set_obligation(
                     conn,
@@ -335,7 +390,10 @@ class CoverPoolAutoReverifySweep:
                     last_proven_at=now,
                     proven_by="auto_reverify_sweep",
                     next_due_at=now,  # anti-obligation: 'now' = currently failing
-                    details=json.dumps({"reason": reason}),
+                    details=json.dumps({
+                        "reason": reason,
+                        "state": state_for[domain],
+                    }),
                 )
             for domain in passed:
                 ob_id = f"{self._DRIFT_PREFIX}::{domain}"
@@ -348,10 +406,45 @@ class CoverPoolAutoReverifySweep:
                 conn, ts=now, actor="auto_reverify_sweep",
                 action="cover_auto_reverify_sweep", target=None,
                 details_json=json.dumps({
-                    "passed": passed, "failed": [d for d, _ in failed],
+                    "passed": passed,
+                    "failed": [d for d, _ in failed],
+                    "auto_burned": auto_burned,
                 }),
             )
             conn.commit()
-            return {"passed": passed, "failed": [d for d, _ in failed]}
+            return {
+                "passed": passed,
+                "failed": [d for d, _ in failed],
+                "auto_burned": auto_burned,
+            }
         finally:
             conn.close()
+
+
+def _self_burn(conn, domain: str, *, reason: str, at: str) -> None:
+    """V-Task 1: burn a drifted candidate_verified domain on the sweep's
+    own authority — no operator action required. Uses the same mark_burned
+    path the rotate-and-burn flow uses, with last_box_id=None and reason
+    'auto_reverify_drift' so audit trail makes the source visible.
+
+    Caller MUST have already confirmed:
+      - domain is candidate_verified (not in_use — that's a box flow)
+      - post-burn pool still meets freeze_threshold
+    """
+    from mthydra.controller.state.burned import mark_burned
+    details = json.dumps({
+        "trigger": "cover_auto_reverify_sweep",
+        "reverify_reason": reason,
+    })
+    log_event(
+        conn, ts=at, actor="auto_reverify_sweep",
+        action="cover_auto_burned", target=domain,
+        details_json=details,
+    )
+    mark_burned(
+        conn, domain,
+        reason="auto_reverify_drift",
+        last_box_id=None,
+        at=at,
+        details=details,
+    )

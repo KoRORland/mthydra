@@ -56,6 +56,7 @@ Listed by the spec that introduced the automation; cumulative.
 | Standby promotion + credential rotation | F (T2) | bare-metal restore-from-laptop |
 | Descriptor publish + presign | (T-1 partial) | manual `aws s3 presign` on laptop (against a non-existent key, no less) |
 | Vantage SSH provisioning | (T-2) | 7 manual commands across two hosts |
+| Cover-domain auto-burn on drift (slack-gated) | V-1 | one cover_pool_reverify_drift_pending per drifted candidate_verified — now silent self-heal when pool has slack |
 
 ---
 
@@ -93,11 +94,13 @@ automated.
   go bad. Precedent: Spec Q's auto-rollback (revert on health-check
   failure). Apply same pattern at the image layer.
 
-- **Auto-rotate cover-domain when ONE drifts but siblings are healthy.**
-  Spec U U-D1 raises `cover_pool_reverify_drift_pending::<domain>`. If
-  the pool has ≥`freeze_threshold + 1` healthy alternatives, just rotate
-  the drifted domain to `retired` and pick from the verified candidates.
-  Only raise to operator when the pool would breach the freeze threshold.
+- ~~**Auto-rotate cover-domain when ONE drifts but siblings are healthy.**~~
+  ✓ shipped as V-1. Auto-reverify sweep now self-burns drifted
+  candidate_verified domains when the pool stays at >= freeze_threshold
+  post-burn. in_use drift is never auto-burned (would orphan boxes —
+  that's a separate flow). Operator only sees the anti-obligation
+  when the pool is at threshold (genuine "you need to act") or when
+  the drift is on an in_use SNI (operator decision required).
 
 - **GitHub Release creation in `git tag` flow.** Today operator manually
   creates Releases in the web UI (or skips, falling through to S-2's

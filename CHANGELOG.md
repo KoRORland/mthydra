@@ -24,6 +24,18 @@ one-command:
   steps (ssh-keygen on EU, scp pubkey, adduser+install on vantage,
   ssh-keyscan, vantage-set-ssh) into one wizard. End-to-end idempotent.
 
+**V-1 — cover-domain auto-rotate on drift (slack-gated).** Extension of
+U-D1. When the auto-reverify sweep detects drift on a
+`candidate_verified` domain AND burning it would leave the pool at
+`>= freeze_threshold` healthy candidate_verified rows, the sweep
+silently burns it (audit row `cover_auto_burned`,
+`burned_domains.reason = "auto_reverify_drift"`) instead of raising
+`cover_pool_reverify_drift_pending::<domain>`. `in_use` drift is
+never auto-burned — burning the SNI orphans every box pointing at it,
+which is a box-replacement flow, not a sweep flow. Multi-domain drift
+in one tick burns until the pool reaches threshold and raises the
+remainder.
+
 **Spec U — operator-obligation auto-resolution.** Four reductions in
 operator alert load:
 

@@ -281,9 +281,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     crn = sub.add_parser(
         "cover-reverify-now",
-        help="controller-side auto-reverify of cover domains (U-D1)",
+        help="controller-side auto-reverify of cover domains (U-D1 + V-1)",
     )
     crn.add_argument("--db-path", default=DEFAULT_DB)
+    crn.add_argument("--config", default="/etc/mthydra/controller.toml",
+                     help="read freeze_threshold for the auto-rotate gate")
 
     cl = sub.add_parser("cover-list", help="list cover_domain_pool rows")
     cl.add_argument("--db-path", default=DEFAULT_DB)
@@ -1990,24 +1992,43 @@ def _cmd_cover_attest_verified(args) -> int:
 
 
 def _cmd_cover_reverify_now(args) -> int:
-    """U-D1: run one auto-reverify sweep cycle and print the verdict."""
+    """U-D1 + V-1: run one auto-reverify sweep cycle and print the verdict.
+    Includes auto-burn of drifted candidate_verified domains when the pool
+    has slack above freeze_threshold."""
+    from mthydra.controller.config import ConfigError, load_config
     from mthydra.controller.state.cover_pool_scheduler import CoverPoolAutoReverifySweep
+
     # Cadence doesn't matter for a one-shot — pass an hour so next_due_at
     # math is sensible if the operator inspects the obligation row.
+    # freeze_threshold comes from config when --config is given; default 2
+    # matches pool_health's signature so an operator running with a stub
+    # config still gets sensible behaviour.
+    freeze_threshold = 2
+    if getattr(args, "config", None):
+        try:
+            cfg = load_config(args.config)
+            freeze_threshold = cfg.cover_pool.freeze_threshold
+        except (ConfigError, FileNotFoundError):
+            pass
+
     sweep = CoverPoolAutoReverifySweep(
         db_path=args.db_path,
         sweep_interval_seconds=3600,
         mode="production",
+        freeze_threshold=freeze_threshold,
     )
     result = sweep.run_once()
     print(
         f"cover-reverify-now: {len(result['passed'])} passed, "
-        f"{len(result['failed'])} failed"
+        f"{len(result['failed'])} failed, "
+        f"{len(result.get('auto_burned', []))} auto-burned"
     )
     for d in result["passed"]:
         print(f"  PASS {d}")
     for d in result["failed"]:
         print(f"  FAIL {d}")
+    for d in result.get("auto_burned", []):
+        print(f"  BURN {d}  (drift; pool had slack)")
     return 0 if not result["failed"] else 1
 
 
