@@ -573,6 +573,30 @@ def _phase_setup_host(ctx: Ctx) -> None:
         return rc
 
     _main.setup_host_core(run_step, dry_run=ctx.dry_run)
+    chown_install_tree(ctx)
+
+
+def chown_install_tree(ctx: Ctx) -> None:
+    """S-Task 1: hand /opt/mthydra/{src,venv} to the mthydra service user.
+
+    install.sh creates both as root (it has to — only root can clone into
+    /opt and create a venv there). Leaving them root-owned means
+    mthydra-ops upgrade (which runs as mthydra) cannot overwrite the
+    venv's entry-point scripts during `pip install -e`, and fails with
+    EACCES on /opt/mthydra/venv/bin/mthydra-controller. Discovered
+    2026-06-01 during the user's first prod mthydra-ops upgrade.
+    """
+    for path_str in (ctx.config.src_dir, ctx.config.venv_dir):
+        p = Path(path_str)
+        if not p.exists():
+            continue
+        ctx.say(f"chown -R mthydra:mthydra {p}")
+        if ctx.dry_run:
+            continue
+        subprocess.run(
+            ["chown", "-R", "mthydra:mthydra", str(p)],
+            check=True,
+        )
 
 
 def _phase_bootstrap(ctx: Ctx) -> None:

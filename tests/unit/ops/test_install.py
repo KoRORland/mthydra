@@ -304,6 +304,46 @@ def test_build_active_phases_order(tmp_path):
     ]
 
 
+def test_chown_install_tree_chowns_existing_src_and_venv(tmp_path, monkeypatch):
+    """S-Task 1: install must chown /opt/mthydra/{src,venv} to mthydra so
+    later mthydra-ops upgrade (running as mthydra) can update the venv.
+    Discovered 2026-06-01: user's first prod upgrade failed EACCES on
+    /opt/mthydra/venv/bin/mthydra-controller because install left the
+    venv root-owned."""
+    src_dir = tmp_path / "src"
+    venv_dir = tmp_path / "venv"
+    src_dir.mkdir()
+    venv_dir.mkdir()
+    calls = []
+    monkeypatch.setattr(
+        install.subprocess, "run",
+        lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    ctx = _ctx(tmp_path)
+    object.__setattr__(ctx.config, "src_dir", str(src_dir))
+    object.__setattr__(ctx.config, "venv_dir", str(venv_dir))
+    install.chown_install_tree(ctx)
+    chowns = [a for a in calls if a[0] == "chown"]
+    assert len(chowns) == 2
+    assert chowns[0] == ["chown", "-R", "mthydra:mthydra", str(src_dir)]
+    assert chowns[1] == ["chown", "-R", "mthydra:mthydra", str(venv_dir)]
+
+
+def test_chown_install_tree_skips_nonexistent_paths(tmp_path, monkeypatch):
+    """A missing path is a no-op (not an error) — keeps the function
+    safe to call from idempotent phases."""
+    calls = []
+    monkeypatch.setattr(
+        install.subprocess, "run",
+        lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    ctx = _ctx(tmp_path)
+    object.__setattr__(ctx.config, "src_dir", str(tmp_path / "nope-src"))
+    object.__setattr__(ctx.config, "venv_dir", str(tmp_path / "nope-venv"))
+    install.chown_install_tree(ctx)
+    assert calls == []
+
+
 def test_install_polkit_rule_writes_rules_d_file(tmp_path, monkeypatch):
     """S-Task 4: install must drop a polkit rule so mthydra can systemctl
     its own service without auth prompts. Without this, mthydra-ops upgrade
