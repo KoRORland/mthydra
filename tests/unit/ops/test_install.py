@@ -574,3 +574,45 @@ def test_ctx_say_prints_when_log_not_echoing(tmp_path, capsys):
     log.close()
     captured = capsys.readouterr()
     assert "hello world" in captured.out
+
+
+def _patch_bash_profile_path(tmp_path, monkeypatch):
+    """Redirect the hardcoded /var/lib/mthydra/.bash_profile into tmp_path.
+
+    Returns the redirected target Path so tests can assert on it.
+    """
+    profile_dir = tmp_path / "var" / "lib" / "mthydra"
+    profile_dir.mkdir(parents=True)
+    target_path = profile_dir / ".bash_profile"
+    original_path = install.Path
+
+    class PatchedPath(type(original_path("/tmp"))):
+        def __new__(cls, *args):
+            s = str(original_path(*args))
+            if s == "/var/lib/mthydra/.bash_profile":
+                return original_path(target_path)
+            return original_path(*args)
+
+    monkeypatch.setattr(install, "Path", PatchedPath)
+    return target_path
+
+
+def test_write_bash_profile_real_function(tmp_path, monkeypatch):
+    """T-2 direct: call the real _write_bash_profile with a patched Path target."""
+    target_path = _patch_bash_profile_path(tmp_path, monkeypatch)
+    ctx = _ctx(tmp_path)
+    install._write_bash_profile(ctx)
+
+    assert target_path.exists()
+    text = target_path.read_text()
+    assert f'export PATH="{ctx.config.venv_dir}/bin:$PATH"' in text
+    assert (target_path.stat().st_mode & 0o777) == 0o644
+
+
+def test_write_bash_profile_dry_run_skips_write(tmp_path, monkeypatch):
+    """T-2: in dry_run mode, _write_bash_profile must NOT write the file."""
+    target_path = _patch_bash_profile_path(tmp_path, monkeypatch)
+    ctx = _ctx(tmp_path, dry_run=True)
+    install._write_bash_profile(ctx)
+
+    assert not target_path.exists()

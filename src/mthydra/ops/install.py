@@ -564,6 +564,26 @@ def _precondition_check(ctx: Ctx) -> None:
     )  # config already validated at load
 
 
+def _write_bash_profile(ctx: Ctx) -> None:
+    """T-2: put venv/bin on PATH for interactive mthydra login shells.
+
+    sudo -u mthydra -i sources /var/lib/mthydra/.bash_profile (login shell).
+    Without this the operator must type the full venv path every time.
+    """
+    target = Path("/var/lib/mthydra/.bash_profile")
+    content = (
+        "# Added by mthydra installer.\n"
+        "# Puts mthydra-controller and mthydra-ops on PATH for interactive sessions.\n"
+        f'export PATH="{ctx.config.venv_dir}/bin:$PATH"\n'
+    )
+    ctx.say(f"writing {target}")
+    if ctx.dry_run:
+        return
+    target.write_text(content)
+    target.chmod(0o644)
+    # /var/lib/mthydra is already owned mthydra:mthydra — the file inherits correctly
+
+
 def _phase_setup_host(ctx: Ctx) -> None:
     def run_step(argv: list[str], allow_fail: bool) -> int:
         ctx.log.write("$ " + " ".join(argv) + "\n")
@@ -574,6 +594,7 @@ def _phase_setup_host(ctx: Ctx) -> None:
 
     _main.setup_host_core(run_step, dry_run=ctx.dry_run)
     chown_install_tree(ctx)
+    _write_bash_profile(ctx)
 
 
 def chown_install_tree(ctx: Ctx) -> None:
