@@ -37,6 +37,8 @@ _ANTI_PREFIXES = frozenset({
     "dist_user_heartbeat_breach",
     # Spec D2 — rollback-pending boxes (J snapshot amendment).
     "image_rollback_pending",
+    # Spec U U-D1 — cover-domain auto-reverify drift.
+    "cover_pool_reverify_drift_pending",
 })
 
 

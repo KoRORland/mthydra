@@ -351,6 +351,27 @@ def test_rotate_provider_credential_unreadable_file_exits_2(tmp_path, capsys):
     assert "rotate-provider-credential: cannot read --credential-file" in err
 
 
+def test_cover_reverify_now_runs_and_reports(tmp_path, monkeypatch, capsys):
+    """U-D1: cover-reverify-now subcommand runs the sweep and reports the
+    verdict. Exits 0 on all-pass, 1 if any domain failed."""
+    from mthydra.controller.state import cover_pool, cover_pool_scheduler
+    db, toml = _init_db(tmp_path)
+    # Seed one attested domain so the sweep has something to check.
+    conn = connect(db)
+    cover_pool.add_candidate(conn, "ok.example", added_at="2026-06-01T00:00:00Z")
+    cover_pool.attest_verified(conn, "ok.example",
+                               from_vantage="ru-vps-01",
+                               at="2026-06-01T00:00:00Z")
+    conn.close()
+    monkeypatch.setattr(cover_pool_scheduler, "auto_reverify_check",
+                        lambda d, **kw: (True, "tls-handshake-ok"))
+    rc = run(["cover-reverify-now", "--db-path", str(db)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 passed, 0 failed" in out
+    assert "PASS ok.example" in out
+
+
 def test_schema_migrate_on_already_current_db_is_noop(tmp_path, capsys):
     """R-D7: schema-migrate on a DB already at SCHEMA_VERSION must exit 0
     and report the no-op clearly."""

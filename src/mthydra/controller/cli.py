@@ -279,6 +279,12 @@ def build_parser() -> argparse.ArgumentParser:
     cav.add_argument("--evidence", default=None)
     cav.add_argument("--db-path", default=DEFAULT_DB)
 
+    crn = sub.add_parser(
+        "cover-reverify-now",
+        help="controller-side auto-reverify of cover domains (U-D1)",
+    )
+    crn.add_argument("--db-path", default=DEFAULT_DB)
+
     cl = sub.add_parser("cover-list", help="list cover_domain_pool rows")
     cl.add_argument("--db-path", default=DEFAULT_DB)
     cl.add_argument("--state",
@@ -955,6 +961,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "cover-attest-verified":
         return _cmd_cover_attest_verified(args)
+
+    if args.cmd == "cover-reverify-now":
+        return _cmd_cover_reverify_now(args)
 
     if args.cmd == "cover-list":
         return _cmd_cover_list(args)
@@ -1970,6 +1979,28 @@ def _cmd_cover_attest_verified(args) -> int:
         return 0
     finally:
         conn.close()
+
+
+def _cmd_cover_reverify_now(args) -> int:
+    """U-D1: run one auto-reverify sweep cycle and print the verdict."""
+    from mthydra.controller.state.cover_pool_scheduler import CoverPoolAutoReverifySweep
+    # Cadence doesn't matter for a one-shot — pass an hour so next_due_at
+    # math is sensible if the operator inspects the obligation row.
+    sweep = CoverPoolAutoReverifySweep(
+        db_path=args.db_path,
+        sweep_interval_seconds=3600,
+        mode="production",
+    )
+    result = sweep.run_once()
+    print(
+        f"cover-reverify-now: {len(result['passed'])} passed, "
+        f"{len(result['failed'])} failed"
+    )
+    for d in result["passed"]:
+        print(f"  PASS {d}")
+    for d in result["failed"]:
+        print(f"  FAIL {d}")
+    return 0 if not result["failed"] else 1
 
 
 def _cmd_cover_list(args) -> int:
