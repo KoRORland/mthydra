@@ -294,3 +294,110 @@ def test_smtp_smoke_helper_handles_unreachable_host():
     assert result["ok"] is False
     assert "error" in result
     assert "\n" not in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# W-3 — overdue + anti-obligation enrichment in heartbeat body
+# ---------------------------------------------------------------------------
+
+
+def test_body_lists_overdue_obligations_with_remediation_hints(db):
+    """W-3: when the snapshot has overdue obligations, the heartbeat body
+    must enumerate them with the operator action inline. No clicking
+    through to docs."""
+    # Plant an overdue obligation in the DB.
+    conn = connect(db)
+    from mthydra.controller.state.obligations import set_obligation
+    set_obligation(
+        conn,
+        obligation_id="cover_pool_replenishment_proven",
+        last_proven_at="2026-01-01T00:00:00Z",
+        proven_by="op",
+        next_due_at="2026-01-02T00:00:00Z",  # long overdue vs NOW
+        details=None,
+    )
+    conn.commit()
+    conn.close()
+
+    em = DryRunSink(label="email")
+    pub = _pub(db, sink=em)
+    pub.run_once()
+    payload = em.calls[0]
+    assert "OVERDUE OBLIGATIONS" in payload.body
+    assert "cover_pool_replenishment_proven" in payload.body
+    # The remediation hint must be inline.
+    assert "cover-add" in payload.body
+
+
+def test_body_omits_overdue_section_when_none(db):
+    """W-3: no overdue → no OVERDUE OBLIGATIONS header (avoids confusing
+    'OVERDUE OBLIGATIONS (0):' lines)."""
+    em = DryRunSink(label="email")
+    pub = _pub(db, sink=em)
+    pub.run_once()
+    assert "OVERDUE OBLIGATIONS" not in em.calls[0].body
+
+
+def test_body_lists_anti_obligations_with_details(db):
+    """W-3: anti-obligations come with their details_json snippet so the
+    operator can triage from the email."""
+    conn = connect(db)
+    from mthydra.controller.state.obligations import set_obligation
+    set_obligation(
+        conn,
+        obligation_id="probe_vantage_unreachable::ru-msk-1",
+        last_proven_at=NOW,
+        proven_by="probe_runner",
+        next_due_at=NOW,
+        details='{"reason": "ssh-timeout"}',
+    )
+    conn.commit(); conn.close()
+
+    em = DryRunSink(label="email")
+    pub = _pub(db, sink=em)
+    pub.run_once()
+    body = em.calls[0].body
+    assert "ANTI-OBLIGATIONS" in body
+    assert "probe_vantage_unreachable::ru-msk-1" in body
+    assert "ssh-timeout" in body
+
+
+def test_remediation_for_known_singleton():
+    from mthydra.controller.observability.remediation import remediation_for
+    r = remediation_for("backup_integrity_proven")
+    assert r is not None
+    assert "backup-integrity-now" in r
+
+
+def test_remediation_for_per_target_matches_prefix():
+    from mthydra.controller.observability.remediation import remediation_for
+    r = remediation_for("credential_rotation_proven::aws")
+    assert r is not None
+    assert "rotate-provider-credential" in r
+
+
+def test_remediation_for_unknown_returns_none():
+    from mthydra.controller.observability.remediation import remediation_for
+    assert remediation_for("never_heard_of_this") is None
+
+
+def test_format_overdue_block_includes_age_hint():
+    """Operator sees 'overdue 2h' at a glance, not just the obligation id."""
+    from dataclasses import dataclass
+    from mthydra.controller.observability.remediation import format_overdue_block
+
+    @dataclass
+    class _Ob:
+        obligation_id: str
+        severity: str
+        overdue_seconds: int
+
+    block = format_overdue_block([_Ob("obs_heartbeat_proven", "warn", 7200)])
+    assert "obs_heartbeat_proven" in block
+    assert "overdue 2h" in block
+    assert "[warn]" in block
+
+
+def test_format_overdue_block_empty_for_no_overdue():
+    from mthydra.controller.observability.remediation import format_overdue_block
+    assert format_overdue_block([]) == ""

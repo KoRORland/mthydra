@@ -59,6 +59,9 @@ Listed by the spec that introduced the automation; cumulative.
 | Cover-domain auto-burn on drift (slack-gated) | V-1 | one cover_pool_reverify_drift_pending per drifted candidate_verified — now silent self-heal when pool has slack |
 | Backup integrity smoke (weekly sweep + CLI) | V-2 | invisible class of failures: silent S3 corruption, wrong-bucket reads, post-upload mutation — caught before the next restore drill |
 | Provider credential rotation reminders | V-3 | "SMTP failed" / "SignatureDoesNotMatch" surprises when app passwords age out — now calendar reminder in obs-status |
+| Heartbeat cadence → daily | W-1 | hourly was background noise; daily survives unread |
+| min_distinct_vantages auto-tunes from fleet | W-2 | 1-vantage MVP perma-yellow on kill + canary gates — now scales with fleet |
+| Heartbeat body lists overdue obligations + remediation inline | W-3 | "N obligations overdue, go look" → enumerated with per-obligation operator action |
 
 ---
 

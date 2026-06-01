@@ -167,6 +167,28 @@ class ObsHeartbeatPublisher:
                 f"mthydra heartbeat @ {now} — "
                 f"{ident['hostname']} v{ident['version']}"
             )
+            # W-3: enumerate overdue obligations + remediation hints inline
+            # so the operator can act from the email instead of logging in.
+            from mthydra.controller.observability.remediation import (
+                format_overdue_block,
+            )
+            overdue_block = ""
+            if snap.obligations_overdue:
+                overdue_block = (
+                    f"\n\nOVERDUE OBLIGATIONS ({len(snap.obligations_overdue)}):\n"
+                    + format_overdue_block(snap.obligations_overdue)
+                )
+            anti_block = ""
+            if snap.anti_obligations:
+                anti_lines = []
+                for a in snap.anti_obligations:
+                    anti_lines.append(f"  [{a.severity}] {a.obligation_id}")
+                    if a.details:
+                        anti_lines.append(f"    details: {a.details[:200]}")
+                anti_block = (
+                    f"\n\nANTI-OBLIGATIONS ({len(snap.anti_obligations)}):\n"
+                    + "\n".join(anti_lines)
+                )
             body = (
                 f"version: {ident['version']}\n"
                 f"hostname: {ident['hostname']}\n"
@@ -174,6 +196,8 @@ class ObsHeartbeatPublisher:
                 f"HEAD: {ident['head_sha']}\n"
                 f"\n"
                 f"{snap.summary_line}"
+                f"{overdue_block}"
+                f"{anti_block}"
             )
             payload = AlertPayload(
                 severity="heartbeat", kind="heartbeat", target=None,

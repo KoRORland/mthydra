@@ -7,6 +7,51 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
+## v0.0.6 — 2026-06-01
+
+**Tuning + content pass** — three follow-ups to 0.0.5 driven by operator
+feedback:
+
+- **W-1 — heartbeat cadence default → daily** (was hourly). Hourly
+  emails became background noise; operators set up auto-archive rules
+  and the dead-man's-switch stopped switching. Daily survives unread
+  better. The `obs_heartbeat_proven` obligation goes overdue at
+  interval × 2 = 48h, so one missed day is OK; two flags. Breach
+  threshold (3 consecutive missed dispatches) unchanged. Existing
+  TOMLs with explicit `heartbeat_interval` keep their value; only the
+  default (and the install template) changed.
+
+- **W-2 — `min_distinct_vantages` auto-tunes from active fleet**.
+  Default config value was 2; a 1-vantage MVP was perma-yellow on the
+  kill evaluator and image-promote gate. Now: `0` (or absent) selects
+  auto-derive `max(1, active_count // 2)`; explicit positive values
+  are honored but capped at fleet size so shrinking the fleet doesn't
+  break the gate. Applies to `probe.evaluator` kill decisions AND
+  `image.gate` canary promotion.
+
+- **W-3 — heartbeat + alert bodies enumerate overdue obligations +
+  remediation hints**. The daily email body now lists each overdue
+  obligation with `[severity] obligation_id (overdue Nh) → operator
+  action` inline, plus all anti-obligations with their details_json
+  snippet. New `observability.remediation` module with a static
+  per-obligation hint map (covers 18 known obligation kinds plus
+  per-target prefixes like `credential_rotation_proven::<provider>`).
+  Operator triages from the email; no doc-hunting.
+
+**Operator action when upgrading from 0.0.5:** none required.
+- The daily-cadence default only affects new installs. Existing
+  controllers keep their `heartbeat_interval` from their `controller.toml`.
+  Want daily? Edit the TOML: `heartbeat_interval = "24h"` and `systemctl
+  restart mthydra-controller`.
+- The auto-tune kicks in on every probe evaluation tick automatically.
+- The richer heartbeat body lands on the next scheduled heartbeat.
+
+```bash
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+```
+
+---
+
 ## v0.0.5 — 2026-06-01
 
 **Quickstart §7 automation.** Two of the manual steps in Part 7 are now
