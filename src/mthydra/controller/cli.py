@@ -729,7 +729,17 @@ def run(argv: list[str]) -> int:
         return 1
 
     if args.cmd == "init":
-        recipient = args.age_recipient or _read_recipient(args.age_recipient_file)
+        if args.age_recipient:
+            recipient = args.age_recipient
+        else:
+            try:
+                recipient = _read_recipient(args.age_recipient_file)
+            except OSError as e:
+                print(
+                    f"init: cannot read --age-recipient-file: {e}",
+                    file=sys.stderr,
+                )
+                return 2
         try:
             provider_credentials = _parse_kv(args.provider_credential)
             provider_credentials.update(_parse_kv_env(args.provider_credential_env))
@@ -871,11 +881,17 @@ def run(argv: list[str]) -> int:
         return 0
 
     if args.cmd == "rotate-provider-credential":
-        cred = (
-            args.credential
-            if args.credential
-            else Path(args.credential_file).read_text().strip()
-        )
+        if args.credential:
+            cred = args.credential
+        else:
+            try:
+                cred = Path(args.credential_file).read_text().strip()
+            except OSError as e:
+                print(
+                    f"rotate-provider-credential: cannot read --credential-file: {e}",
+                    file=sys.stderr,
+                )
+                return 2
         from mthydra.controller.state.audit import log_event
         from mthydra.controller.state.tokens import set_provider_credential
         conn = connect(args.db_path)
@@ -1090,8 +1106,11 @@ def _cmd_backup_now(args, mode: str) -> int:
 
     try:
         recipient = _read_recipient(DEFAULT_RECIPIENT_FILE)
-    except FileNotFoundError:
-        print(f"backup-now: age recipient file not found: {DEFAULT_RECIPIENT_FILE}", file=sys.stderr)
+    except OSError as e:
+        print(
+            f"backup-now: cannot read age recipient file "
+            f"{DEFAULT_RECIPIENT_FILE}: {e}", file=sys.stderr,
+        )
         return 6
 
     conn = connect(args.db_path)
@@ -1183,8 +1202,16 @@ def _cmd_descriptor_show(args) -> int:
 
 def _cmd_descriptor_verify(args) -> int:
     from mthydra.descriptor.verify import TrustedKey, VerifyError, verify_descriptor
-    blob = Path(args.payload_file).read_bytes()
-    sig = Path(args.sig_file).read_bytes()
+    try:
+        blob = Path(args.payload_file).read_bytes()
+    except OSError as e:
+        print(f"descriptor-verify: cannot read --payload-file: {e}", file=sys.stderr)
+        return 2
+    try:
+        sig = Path(args.sig_file).read_bytes()
+    except OSError as e:
+        print(f"descriptor-verify: cannot read --sig-file: {e}", file=sys.stderr)
+        return 2
     now_str = args.now or _now()
     conn = connect(args.db_path)
     try:
@@ -1515,8 +1542,11 @@ def _cmd_serve(args) -> int:
     recipient_path = DEFAULT_RECIPIENT_FILE
     try:
         recipient = _read_recipient(recipient_path)
-    except FileNotFoundError:
-        print(f"age recipient file not found: {recipient_path}", file=sys.stderr)
+    except OSError as e:
+        print(
+            f"cannot read age recipient file {recipient_path}: {e}",
+            file=sys.stderr,
+        )
         return 6
 
     conn = connect(args.db_path)
@@ -2806,9 +2836,11 @@ def _cmd_data_exit_config_show(args) -> int:
         return 2
     try:
         reality_pk = Path(cfg.data_exit.reality_key_path).read_text().strip()
-    except FileNotFoundError:
-        print("data-exit-config-show: reality key not present at "
-              f"{cfg.data_exit.reality_key_path}", file=sys.stderr)
+    except OSError as e:
+        print(
+            f"data-exit-config-show: cannot read reality key at "
+            f"{cfg.data_exit.reality_key_path}: {e}", file=sys.stderr,
+        )
         return 4
     conn = connect(args.db_path)
     try:

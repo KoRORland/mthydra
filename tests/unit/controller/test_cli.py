@@ -329,6 +329,46 @@ def test_rotate_provider_credential_updates_db(tmp_path):
     assert get_provider_credential(conn, "b2") == "new_secret"
 
 
+def test_rotate_provider_credential_unreadable_file_exits_2(tmp_path, capsys):
+    """R-D4: --credential-file that exists but the process cannot read must
+    exit 2 with a friendly stderr message, not a raw PermissionError
+    traceback. Discovered 2026-05-31 when the operator put the temp file in
+    /root/ (mthydra user couldn't traverse it).
+    """
+    bad = tmp_path / "no-such-file.cred"
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    run(["init", "--db-path", str(db), "--age-recipient-file", str(recipient_file),
+         "--provider-credential", "b2=old"])
+    exit_code = run([
+        "rotate-provider-credential", "b2",
+        "--db-path", str(db),
+        "--credential-file", str(bad),
+    ])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "rotate-provider-credential: cannot read --credential-file" in err
+
+
+def test_descriptor_verify_unreadable_payload_exits_2(tmp_path, capsys):
+    """R-D4: descriptor-verify with a missing --payload-file must exit 2,
+    not raise FileNotFoundError."""
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    run(["init", "--db-path", str(db), "--age-recipient-file", str(recipient_file),
+         "--provider-credential", "b2=x"])
+    exit_code = run([
+        "descriptor-verify",
+        str(tmp_path / "does-not-exist-payload.bin"),
+        str(tmp_path / "does-not-exist-sig.bin"),
+        "--db-path", str(db),
+    ])
+    assert exit_code == 2
+    assert "cannot read --payload-file" in capsys.readouterr().err
+
+
 def test_rotate_provider_credential_writes_audit_row(tmp_path):
     from mthydra.controller.state.audit import recent_events
     db = tmp_path / "state.sqlite"
