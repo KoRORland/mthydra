@@ -207,3 +207,30 @@ def test_build_image_b2_upload_failure_no_db_row(conn, tmp_path):
             http_client=_mock_http(release_json, asset_bytes, checksum_text),
         )
     assert list_images(conn) == []
+
+
+def test_default_http_get_omits_accept_header(monkeypatch):
+    """Regression: previously _default_http_get sent
+    Accept: application/octet-stream for all requests, which made GitHub
+    return 415 Unsupported Media Type on the release-metadata API call.
+    Removing the header lets GitHub default to JSON for /repos endpoints
+    while binary asset downloads (which redirect to GitHub's CDN) work
+    regardless of Accept.
+
+    Discovered 2026-06-01 on a real mthydra-ops image-prepare run."""
+    from mthydra.controller.image import builder as builder_mod
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["headers"] = dict(req.header_items())
+        class _R:
+            def getcode(self_):
+                return 200
+            def read(self_):
+                return b'{}'
+        return _R()
+
+    monkeypatch.setattr(builder_mod.urllib.request, "urlopen", fake_urlopen)
+    builder_mod._default_http_get("https://api.github.com/repos/x/y/releases/tags/v1")
+    # No Accept header at all — let GitHub use its default content negotiation.
+    assert "Accept" not in captured["headers"]

@@ -27,8 +27,18 @@ _CHECKSUM_ASSET_CANDIDATES = ("SHA256SUMS", "checksums.txt")
 
 def _default_http_get(url: str):
     """urllib.request stdlib client; returns a response-like object with
-    .status (int) and .read() -> bytes."""
-    req = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
+    .status (int) and .read() -> bytes.
+
+    No Accept header: the same function is called for GitHub release
+    METADATA (wants JSON — sending Accept: octet-stream made GitHub
+    return 415 Unsupported Media Type, breaking image-build) AND for
+    the binary asset download (browser_download_url, which redirects
+    through to GitHub's CDN and ignores Accept). Default — no Accept
+    header — works for both: GitHub API returns JSON by default; the
+    asset download follows redirects to objects.githubusercontent.com
+    which serves the bytes regardless.
+    """
+    req = urllib.request.Request(url)
     resp = urllib.request.urlopen(req, timeout=30)
     class _R:
         def __init__(self, r):

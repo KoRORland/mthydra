@@ -7,6 +7,29 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
+## v0.0.9 — 2026-06-01
+
+**Bug fix.** `mthydra-controller image-build` was sending
+`Accept: application/octet-stream` for every HTTP call — including
+the GitHub release-metadata API request that wants JSON. GitHub
+correctly responds 415 Unsupported Media Type and the build aborts.
+
+Fix: drop the inappropriate Accept header. The same helper is used
+for the API call (JSON) AND the binary asset download (which
+redirects through to GitHub's CDN and ignores Accept), so omitting
+Accept entirely works for both. Regression test pins the no-Accept
+behavior.
+
+**Operator action when upgrading from 0.0.8:** none required.
+`mthydra-ops upgrade` after this lands, and `image-prepare` /
+`image-build` start working again.
+
+```bash
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+```
+
+---
+
 ## v0.0.8 — 2026-06-01
 
 **Two upgrade-flow fixes** caught by a real `mthydra-ops upgrade` run.
