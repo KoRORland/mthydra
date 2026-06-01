@@ -33,6 +33,16 @@ argument through `_get_s3_credentials`, `_make_s3_client`, and
 `publish_agent`. The same bug existed in `ru_bringup.py` and is fixed there
 too.
 
+**Agent-publish also broke on the secret-only credential form** with
+`RuntimeError: provider credential malformed (expected KEY:SECRET)`. The
+R-D1 fix made the backup pipeline accept either `KEY:SECRET` or just
+`SECRET` (falling back to `cfg.backup.access_key_id`), but `agent_ops`
+had its own credential parser that still required the colon. After the
+R-D1 workaround flow rotated credentials to secret-only, `backup-now`
+worked but `agent-publish` refused. `_get_s3_credentials` now mirrors
+the `_build_destination` split-or-fallback logic. No operator action;
+fix is code-only.
+
 **T-2 — Installer now writes `/var/lib/mthydra/.bash_profile`** so
 `sudo -u mthydra -i` gives a login shell with `mthydra-controller` and
 `mthydra-ops` on PATH. No more typing `/opt/mthydra/venv/bin/` prefixes.
