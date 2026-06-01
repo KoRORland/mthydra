@@ -83,11 +83,16 @@ def wait_for_reachable(host: str, port: int, sni: str, *,
 
 def mint_seed(provider: str, region: str, *, canary: bool,
               agent_source_url: str, agent_source_sha256: str,
-              descriptor_refresh_url: str, cloud_init_out: str,
+              descriptor_refresh_url: str, cloud_init_out: str | None = None,
               db_path: str = _DEFAULT_DB,
-              config: str = _DEFAULT_CONFIG) -> str:
+              config: str = _DEFAULT_CONFIG) -> tuple[str, str]:
     """Run provision-seed; write the stdout cloud-init bundle to cloud_init_out
-    (mode 0600); return the box_id parsed from stderr.
+    (mode 0600); return (box_id, cloud_init_path).
+
+    cloud_init_out=None → default to /tmp/ru-cloud-init-<box_id>.yaml (the
+    path the --cloud-init-out help text promises). The default needs box_id,
+    which only exists after provision-seed runs, so it's resolved here rather
+    than in the CLI layer — that's why this returns the resolved path.
 
     provision-seed has NO --cloud-init-out flag — it prints the bundle to
     stdout. We capture both streams (stdout = bundle, stderr = box_id line)
@@ -120,11 +125,13 @@ def mint_seed(provider: str, region: str, *, canary: bool,
         raise RuntimeError(
             "provision-seed succeeded but emitted no 'box_id=' line "
             "(controller version mismatch?)")
+    if cloud_init_out is None:
+        cloud_init_out = f"/tmp/ru-cloud-init-{box_id}.yaml"
     out = Path(cloud_init_out)
     out.write_text(res.stdout or "")
     with contextlib.suppress(OSError):  # best-effort; tmpfs / non-owner cases
         out.chmod(0o600)
-    return box_id
+    return box_id, cloud_init_out
 
 
 def mark_live(box_id: str, public_ip: str,
@@ -245,14 +252,14 @@ def cmd_ru_bringup(args) -> int:
              + (" (canary)" if args.canary else ""))
         agent_url, agent_sha = _resolve_agent(args)
         _say(f"agent: {agent_url[:60]}…  sha={agent_sha[:12]}…")
-        box_id = mint_seed(
+        box_id, cloud_init_path = mint_seed(
             args.provider, args.region, canary=args.canary,
             agent_source_url=agent_url,
             agent_source_sha256=agent_sha,
             descriptor_refresh_url=args.descriptor_refresh_url,
             cloud_init_out=args.cloud_init_out,
         )
-        _say(f"minted box_id={box_id}; cloud-init at {args.cloud_init_out}")
+        _say(f"minted box_id={box_id}; cloud-init at {cloud_init_path}")
 
     # Phase 2: boot-handoff. Get public IP.
     public_ip = args.public_ip
@@ -390,11 +397,11 @@ def cmd_ru_image_cycle(args) -> int:  # noqa: C901
             continue
         # Mint + bring up this canary.
         cloud_init = str(state_dir / f"{args.release}-c{idx + 1}.yaml")
-        box_id = mint_seed(target.provider, target.region, canary=True,
-                           agent_source_url=args.agent_source_url,
-                           agent_source_sha256=args.agent_source_sha256,
-                           descriptor_refresh_url=args.descriptor_refresh_url,
-                           cloud_init_out=cloud_init)
+        box_id, _ = mint_seed(target.provider, target.region, canary=True,
+                              agent_source_url=args.agent_source_url,
+                              agent_source_sha256=args.agent_source_sha256,
+                              descriptor_refresh_url=args.descriptor_refresh_url,
+                              cloud_init_out=cloud_init)
         # Cycle always prompts for canary IPs as VMs come up — there is no
         # CLI shape for pre-staging N IPs at invocation. `--non-interactive`
         # on the cycle is a no-op for IP collection.

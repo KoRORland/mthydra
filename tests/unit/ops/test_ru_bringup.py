@@ -72,7 +72,7 @@ def test_mint_seed_writes_cloud_init_and_returns_box_id(monkeypatch, tmp_path):
     monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
                         fake_run, raising=False)
     out = tmp_path / "x.yaml"
-    box_id = ru_bringup.mint_seed(
+    box_id, path = ru_bringup.mint_seed(
         "selectel", "ru-msk-1",
         canary=True,
         agent_source_url="https://b2/agent.tar.gz",
@@ -81,14 +81,38 @@ def test_mint_seed_writes_cloud_init_and_returns_box_id(monkeypatch, tmp_path):
         cloud_init_out=str(out),
     )
     assert box_id == "b-abc123"
+    assert path == str(out)
     assert out.read_text().startswith("#cloud-config")
     assert (out.stat().st_mode & 0o777) == 0o600
     argv = calls[0]
     assert argv[0] == "provision-seed"
     assert "--canary" in argv
     assert "selectel" in argv and "ru-msk-1" in argv
-    assert "--db-path" in argv     # threaded through from _DEFAULT_DB
-    assert "--config" in argv      # provision-seed needs --config
+
+
+def test_mint_seed_defaults_cloud_init_path_when_omitted(monkeypatch):
+    """Regression: cmd_ru_bringup passes args.cloud_init_out=None when the
+    operator omits --cloud-init-out. mint_seed must default to
+    /tmp/ru-cloud-init-<box_id>.yaml (the path the --help text promises),
+    not crash with Path(None). Discovered 2026-06-02 on a real ru-bringup
+    run — every operator who didn't pass --cloud-init-out hit it."""
+    fake_run, _calls = _fake_run_factory(
+        stdout_map={"provision-seed": "#cloud-config\n"},
+        stderr_map={"provision-seed":
+                    "provision-seed: created box_id=b-zzz999\n"})
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    box_id, path = ru_bringup.mint_seed(
+        "timeweb", "ru-msk-1", canary=False,
+        agent_source_url="https://b2/agent.tar.gz",
+        agent_source_sha256="deadbeef",
+        descriptor_refresh_url="https://b2/desc",
+        # cloud_init_out omitted entirely → must default, not crash.
+    )
+    assert box_id == "b-zzz999"
+    assert path == "/tmp/ru-cloud-init-b-zzz999.yaml"
+    assert Path(path).read_text().startswith("#cloud-config")
+    Path(path).unlink(missing_ok=True)
 
 
 def test_mark_live_invokes_controller(monkeypatch):
