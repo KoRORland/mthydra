@@ -429,7 +429,9 @@ def test_load_config_probe_defaults(tmp_path):
     cfg = load_config(p)
     assert cfg.probe.soft_fail_window_M == 4
     assert cfg.probe.soft_fail_threshold_N == 3
-    assert cfg.probe.min_distinct_vantages == 2
+    # W-2: default is 0 (auto-tune from active vantage fleet at evaluation
+    # time). Explicit positive values still honored as a per-canary floor.
+    assert cfg.probe.min_distinct_vantages == 0
 
 
 def test_load_config_observability_section(tmp_path):

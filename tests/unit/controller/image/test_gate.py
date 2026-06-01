@@ -91,11 +91,28 @@ def test_canary_with_too_few_cycles_fails(conn):
     assert any("below threshold" in r for r in res.reasons)
 
 
-def test_canary_with_enough_cycles_one_vantage_fails(conn):
-    """Cycles enough but only 1 vantage; need 2 distinct."""
+def test_canary_with_one_vantage_passes_under_auto_tune(conn):
+    """W-2: with only 1 vantage in the active fleet, the distinct-vantage
+    threshold auto-tunes down. Previously this scenario always failed
+    ("need 2 distinct"); now the operator's config_value=2 is capped at
+    the fleet's max (1), so 1 vantage worth of probes is enough."""
     _seed_image(conn)
     pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
     _seed_vantage(conn, "v1", "kz1")
+    _seed_canary(conn, "b1", "v_new")
+    _record_cycles(conn, "b1", "v1", "v_new", count=4)
+    res = evaluate_promotion_gate(conn, "v_new", cfg=CFG)
+    assert res.passed, res.reasons
+
+
+def test_canary_with_two_vantages_but_probed_from_one_fails(conn):
+    """W-2: with 2 active vantages, effective_min auto-tunes to max(1, 2//2)
+    = 1. CFG value of 2 caps it at min(2, fleet)=2 so the canary needs to
+    be probed from both. Probing from only one fails."""
+    _seed_image(conn)
+    pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
+    _seed_vantage(conn, "v1", "kz1")
+    _seed_vantage(conn, "v2", "by1")
     _seed_canary(conn, "b1", "v_new")
     _record_cycles(conn, "b1", "v1", "v_new", count=4)
     res = evaluate_promotion_gate(conn, "v_new", cfg=CFG)

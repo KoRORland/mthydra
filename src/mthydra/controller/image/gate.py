@@ -66,6 +66,15 @@ def evaluate_promotion_gate(
         )
 
     # 3. per-canary probe cycle + distinct-vantage thresholds.
+    # W-2: same auto-tune as the kill-decision evaluator. A 1-vantage MVP
+    # can't satisfy "distinct_vantages >= 2"; auto-derive from fleet.
+    from mthydra.controller.probe.evaluator import (
+        count_active_vantages, effective_min_distinct_vantages,
+    )
+    effective_min = effective_min_distinct_vantages(
+        active_count=count_active_vantages(conn),
+        config_value=cfg.min_distinct_vantages,
+    )
     cycles_total = 0
     distinct_vantages_overall: set[str] = set()
     if canary_box_ids:
@@ -80,7 +89,7 @@ def evaluate_promotion_gate(
             distinct_vantages_overall |= box_vantages
             if (
                 len(box_rows) < cfg.min_cycles_per_box
-                or len(box_vantages) < cfg.min_distinct_vantages
+                or len(box_vantages) < effective_min
             ):
                 per_box_short.append(
                     (box_id, len(box_rows), len(box_vantages))
@@ -89,7 +98,7 @@ def evaluate_promotion_gate(
             reasons.append(
                 f"canary {box_id!r} below threshold: "
                 f"cycles={cycles} (need >= {cfg.min_cycles_per_box}), "
-                f"distinct_vantages={vants} (need >= {cfg.min_distinct_vantages})"
+                f"distinct_vantages={vants} (need >= {effective_min})"
             )
 
     # 4. no live canary may carry a probe_kill_pending obligation.

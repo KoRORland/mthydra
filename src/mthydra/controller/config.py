@@ -442,8 +442,12 @@ def _load_probe(data: dict) -> ProbeConfig:
     return ProbeConfig(
         soft_fail_window_M=M,
         soft_fail_threshold_N=N,
+        # W-2: 0 (or absent) selects auto-tune from active vantage count.
+        # See probe.evaluator.effective_min_distinct_vantages.
         min_distinct_vantages=_require_positive(
-            "probe.min_distinct_vantages", sec.get("min_distinct_vantages", 2), positive=True
+            "probe.min_distinct_vantages",
+            sec.get("min_distinct_vantages", 0),
+            positive=False,
         ),
         coverage_window_seconds=_parse_interval_seconds(
             "probe.coverage_window", sec.get("coverage_window", 3600),

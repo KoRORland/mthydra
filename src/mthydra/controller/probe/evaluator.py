@@ -7,6 +7,13 @@
   * fewer than N or fewer than min_distinct vantages -> 'soft_pending'
   * everything else -> 'healthy'
 
+W-2: min_distinct_vantages is auto-tuned from the active vantage fleet.
+With 1 vantage registered, requiring "2 distinct" is impossible; the
+gate becomes perpetual-yellow. effective_min_distinct_vantages() scales
+the threshold with fleet size (default: max(1, active // 2)). Operator
+can pin an explicit floor via cfg.probe.min_distinct_vantages > 0; the
+value 0 (or absent in config) selects auto.
+
 The function refuses to evaluate a box whose image_version has no
 image_profiles row (T3's "compared against the wrong reference" failure;
 §8 §357). Caller (the audit wheel) surfaces this as a separate obligation.
@@ -15,6 +22,37 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+
+
+def count_active_vantages(conn: sqlite3.Connection) -> int:
+    """Count probe_vantages rows in state='active'. Helper for W-2 auto-tune."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM probe_vantages WHERE state='active'"
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def effective_min_distinct_vantages(
+    *, active_count: int, config_value: int,
+) -> int:
+    """W-2: derive the minimum-distinct-vantages threshold actually used by
+    evaluate_box / evaluate_promotion_gate.
+
+      config_value <= 0 → auto-tune: max(1, active_count // 2)
+                          (1 vantage → 1, 2 → 1, 4 → 2, 10 → 5)
+      config_value > 0  → use the operator's explicit value, BUT capped
+                          at the fleet size (never demand more than
+                          physically possible). Floor 1.
+
+    The cap matters: an operator who set `min_distinct_vantages = 3` and
+    later shrank their fleet to 2 vantages shouldn't get a perma-yellow
+    gate — they should get 2 (the realistic max), with the inherent
+    safety reduction visible elsewhere (vantage count itself is a
+    metric).
+    """
+    if config_value <= 0:
+        return max(1, active_count // 2)
+    return max(1, min(config_value, max(1, active_count)))
 
 
 @dataclass(frozen=True)
@@ -88,10 +126,17 @@ def evaluate_box(
         )
 
     # Soft-fail N-of-M with distinct-vantage requirement.
+    # W-2: auto-tune the distinct-vantage threshold from the active fleet
+    # so a 1-vantage MVP isn't perma-yellow. Config value is a hard cap
+    # (operator opt-in); 0 / absent selects pure auto-derive.
     fail_rows = [r for r in rows if r[3] == "soft_fail"]
     distinct_vantages = len({r[1] for r in fail_rows})
+    effective_min = effective_min_distinct_vantages(
+        active_count=count_active_vantages(conn),
+        config_value=cfg.min_distinct_vantages,
+    )
     if len(fail_rows) >= cfg.soft_fail_threshold_N:
-        if distinct_vantages >= cfg.min_distinct_vantages:
+        if distinct_vantages >= effective_min:
             return EvaluationResult(
                 box_id=box_id, verdict="soft_threshold_reached",
                 offending_checks=tuple(sorted({r[2] for r in fail_rows})),

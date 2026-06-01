@@ -307,7 +307,9 @@ reshuffle_sweep_interval  = "1h"
 [probe]
 soft_fail_window_M           = 4
 soft_fail_threshold_N        = 3
-min_distinct_vantages        = 2
+# W-2: 0 = auto-tune from active fleet (max(1, vantage_count // 2)).
+# Set explicitly (e.g. = 2) to override with a hard floor.
+min_distinct_vantages        = 0
 coverage_window_seconds      = 3600
 probe_vantage_ttl_days       = 14
 probe_audit_sweep_interval   = "5m"

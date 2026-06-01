@@ -148,3 +148,64 @@ def test_missing_image_profile_raises(conn):
 def test_unknown_box_raises(conn):
     with pytest.raises(EvaluationError, match="unknown box"):
         evaluate_box(conn, box_id="nope", cfg=CFG, now="2026-05-25T01:00:00Z")
+
+
+# ---------------------------------------------------------------------------
+# W-2 — effective_min_distinct_vantages auto-tune
+# ---------------------------------------------------------------------------
+
+
+def test_effective_min_auto_with_one_vantage_returns_one():
+    from mthydra.controller.probe.evaluator import effective_min_distinct_vantages
+    # config_value=0 selects auto. 1 active vantage → 1.
+    assert effective_min_distinct_vantages(active_count=1, config_value=0) == 1
+
+
+def test_effective_min_auto_with_four_vantages_returns_two():
+    from mthydra.controller.probe.evaluator import effective_min_distinct_vantages
+    assert effective_min_distinct_vantages(active_count=4, config_value=0) == 2
+
+
+def test_effective_min_auto_with_zero_vantages_returns_one():
+    """Floor of 1 — never demand 0 distinct vantages (that would always pass)."""
+    from mthydra.controller.probe.evaluator import effective_min_distinct_vantages
+    assert effective_min_distinct_vantages(active_count=0, config_value=0) == 1
+
+
+def test_effective_min_explicit_config_caps_at_fleet_size():
+    """An operator who set min_distinct_vantages=5 in config but has only 2
+    vantages right now shouldn't be perma-yellow — cap at fleet."""
+    from mthydra.controller.probe.evaluator import effective_min_distinct_vantages
+    assert effective_min_distinct_vantages(active_count=2, config_value=5) == 2
+
+
+def test_effective_min_explicit_config_respected_when_fleet_is_bigger():
+    """Operator says 'I demand exactly 2'; fleet has 10 → still use 2."""
+    from mthydra.controller.probe.evaluator import effective_min_distinct_vantages
+    assert effective_min_distinct_vantages(active_count=10, config_value=2) == 2
+
+
+def test_count_active_vantages_filters_state(tmp_path):
+    """Only vantages in state='active' count toward the auto-tune."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.probe.evaluator import count_active_vantages
+    db = tmp_path / "s.sqlite"
+    c = connect(db)
+    apply_schema(c)
+    now = "2026-06-01T00:00:00Z"
+    c.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, "
+        "added_at, attested_at) "
+        "VALUES ('v1', 'l1', 'cloud-cis', 'active', ?, ?)",
+        (now, now),
+    )
+    c.execute(
+        "INSERT INTO probe_vantages (vantage_id, label, source_kind, state, "
+        "added_at, attested_at) "
+        "VALUES ('v2', 'l2', 'cloud-cis', 'retired', ?, ?)",
+        (now, now),
+    )
+    c.commit()
+    assert count_active_vantages(c) == 1
+    c.close()
