@@ -391,8 +391,7 @@ That's it — the vantage doesn't run any mthydra software. It's just a host fro
 SSH back into the EU EC2 host as the `mthydra` user:
 ```bash
 ssh -i ~/.ssh/mthydra-eu-1.pem ubuntu@<EC2_PUBLIC_IPv4>
-sudo -u mthydra -i        # become the mthydra user
-source /opt/mthydra/venv/bin/activate
+sudo -u mthydra -i        # become the mthydra user — mthydra-controller and mthydra-ops are on PATH
 ```
 
 Pick a short label for your vantage — e.g. `ru-msk-1`. Register it:
@@ -692,7 +691,7 @@ journalctl -u mthydra-controller -n 5 --no-pager | grep "armed"
 **Ad-hoc, when you want to verify by hand:**
 - `mthydra-controller cover-reverify-now --db-path /var/lib/mthydra/state.sqlite --config /etc/mthydra/controller.toml` — run the cover-domain smell test immediately instead of waiting for the next hourly tick. Prints `PASS`/`FAIL`/`BURN` per domain.
 - `mthydra-controller backup-integrity-now --db-path /var/lib/mthydra/state.sqlite --config /etc/mthydra/controller.toml` — re-hash a random recent backup gen now instead of waiting for the weekly tick. Add `--generation N` to test a specific gen (e.g. after fixing an earlier `backup_integrity_failed` alert).
-- `sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops daily-check --db-path /var/lib/mthydra/state.sqlite` — same JSON snapshot the daily timer runs, on demand.
+- `sudo -u mthydra -i -c 'mthydra-ops daily-check --db-path /var/lib/mthydra/state.sqlite'` — same JSON snapshot the daily timer runs, on demand.
 
 **When the operator-alert Telegram bot pings you:**
 - Read the message. The `dedupe_key` says which kind of problem. Common alerts and what they mean:
@@ -725,7 +724,7 @@ Most common causes, in order:
        "SELECT details FROM obligation_clocks WHERE obligation_id='obs_dead_mans_switch_breach';" | jq .
    ```
 2. SSH into EC2: `systemctl status mthydra-controller` — should be `active (running)`. If not: `systemctl start mthydra-controller`.
-3. Force one heartbeat manually: `sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller obs-heartbeat-now --db-path /var/lib/mthydra/state.sqlite --config /etc/mthydra/controller.toml`. If this errors, the SMTP creds are stale — go to 2.4.
+3. Force one heartbeat manually: `sudo -u mthydra -i -c 'mthydra-controller obs-heartbeat-now --db-path /var/lib/mthydra/state.sqlite --config /etc/mthydra/controller.toml'`. If this errors, the SMTP creds are stale — go to 2.4.
 
 ### Backup integrity alert (`backup_integrity_failed::<gen>`)
 
@@ -773,8 +772,8 @@ You have backups in S3, encrypted with your age key:
 When a new version is tagged on GitHub:
 
 ```bash
-# On the EU host as root:
-sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+# On the EU host — as root or as the mthydra user:
+sudo -u mthydra -i -c 'mthydra-ops upgrade'
 ```
 
 That single command runs the full 8-phase upgrade:

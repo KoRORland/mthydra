@@ -99,17 +99,18 @@ Create a Backblaze B2 bucket with **Object Lock = Compliance, 30 days**. Object 
 
 ### §1.4 — Install mthydra on the EU host
 
-```bash
-# On the EU host as mthydra user:
-su - mthydra
-python3.12 -m venv /home/mthydra/venv
-. /home/mthydra/venv/bin/activate
-pip install -e /path/to/checked-out/mthydra-source
-# Or, if shipped as a wheel:
-# pip install mthydra-X.Y.Z-py3-none-any.whl
+Run the installer (see `doc/quickstart-mvp.md` §3 for the full walkthrough).
+The installer handles venv creation, user setup, and systemd service wiring.
 
-mthydra-controller --help    # smoke test
+After install, become the `mthydra` user for all operator commands:
+
+```bash
+sudo -u mthydra -i
+mthydra-controller --help    # smoke test — should print the subcommand list
 ```
+
+The installer writes `/var/lib/mthydra/.bash_profile` so `sudo -u mthydra -i`
+gives a login shell with `mthydra-controller` and `mthydra-ops` on PATH.
 
 **Verify:** `mthydra-controller --help` prints the subcommand list. If not, the install is broken — STOP, don't proceed.
 
@@ -1004,7 +1005,7 @@ mthydra-controller obligation-proven t2_dryrun_caseA \
 ### §12.1 — Normal upgrade (0.0.2+) — `mthydra-ops upgrade`
 
 ```bash
-sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+sudo -u mthydra -i -c 'mthydra-ops upgrade'
 ```
 
 Optional flags:
@@ -1069,10 +1070,10 @@ the upgrade tool itself is broken.
 
 ```bash
 # 1. Pre-upgrade backup as recovery floor (note the generation number)
-sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller backup-now \
+sudo -u mthydra -i -c 'mthydra-controller backup-now \
     --db-path /var/lib/mthydra/state.sqlite \
     --config /etc/mthydra/controller.toml \
-    --reason "pre-upgrade snapshot"
+    --reason "pre-upgrade snapshot"'
 
 # 2. Fetch + checkout
 git -C /opt/mthydra/src fetch origin <target-tag>
@@ -1082,17 +1083,17 @@ git -C /opt/mthydra/src reset --hard FETCH_HEAD
 ( umask 022 && /opt/mthydra/venv/bin/pip install -e /opt/mthydra/src )
 
 # 4. Run schema-migrate if SCHEMA_VERSION advanced (R-7 subcommand, 0.0.3+)
-sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller schema-migrate \
-    --db-path /var/lib/mthydra/state.sqlite
+sudo -u mthydra -i -c 'mthydra-controller schema-migrate \
+    --db-path /var/lib/mthydra/state.sqlite'
 
 # 5. Restart + verify
 systemctl restart mthydra-controller
 systemctl is-active mthydra-controller
-sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller startup-check \
-    --db-path /var/lib/mthydra/state.sqlite
-sudo -u mthydra /opt/mthydra/venv/bin/mthydra-controller obs-heartbeat-now \
+sudo -u mthydra -i -c 'mthydra-controller startup-check \
+    --db-path /var/lib/mthydra/state.sqlite'
+sudo -u mthydra -i -c 'mthydra-controller obs-heartbeat-now \
     --db-path /var/lib/mthydra/state.sqlite \
-    --config /etc/mthydra/controller.toml
+    --config /etc/mthydra/controller.toml'
 ```
 
 **If verify fails:** roll back via
