@@ -733,6 +733,54 @@ def test_bootstrap_core_passes_secret_via_env_not_argv():
     assert "SECRET" in " ".join(init_env.values())
 
 
+def test_bootstrap_generated_toml_satisfies_load_config_and_provision_seed(tmp_path):
+    """Contract test: the controller.toml that `bootstrap` writes must parse
+    via the REAL load_config AND contain every section the commands need.
+
+    This is the test that was missing — provision-seed crashed in prod with
+    '[data_exit] section is required' because the bootstrap template had no
+    [data_exit] block, and nothing ever loaded the generated config to check.
+    Now we render the real template and run the real loader (2026-06-02).
+    """
+    from mthydra.ops import main as m
+    from mthydra.controller.config import load_config
+
+    cfg_path = tmp_path / "controller.toml"
+    db_path = tmp_path / "state.sqlite"  # never created (fake run)
+
+    def fake_run(*args, check=True, capture=False, env=None):
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    m.bootstrap_core(
+        fake_run, lambda *_: None,
+        db_path=str(db_path), config_path=str(cfg_path),
+        age_recipient="age1abc", b2_application_key="SECRET",
+        hostname="eu-1", role="active",
+        b2_endpoint="https://s3.eu-west-1.amazonaws.com",
+        b2_bucket="b", b2_key_id="k",
+        obs_tg_bot_token="t", obs_tg_chat_id="1", obs_smtp_host="s",
+        obs_smtp_port=587, obs_smtp_from="a@b", obs_smtp_to="c@d",
+        obs_smtp_user="u", obs_smtp_pass="p", dist_tg_bot_token="t2",
+        dist_smtp_host="s", dist_smtp_port=587, dist_smtp_from="e@f",
+        dist_smtp_user="u", dist_smtp_pass="p",
+    )
+    assert cfg_path.exists()
+
+    # The real loader must accept it without raising ConfigError.
+    cfg = load_config(cfg_path)
+
+    # [data_exit] — required by provision-seed (seed bundle v2).
+    assert cfg.data_exit is not None, "bootstrap toml is missing [data_exit]"
+    # provision-seed reads these; they must be non-empty.
+    assert cfg.data_exit.telegram_dcs_v4, "telegram_dcs.v4 must be non-empty"
+    assert cfg.data_exit.telegram_dcs_v6, "telegram_dcs.v6 must be non-empty"
+    assert cfg.data_exit.cover_sni_default
+    # Sanity on the other sections commands depend on.
+    assert cfg.backup.bucket == "b"
+    assert cfg.observability is not None
+    assert cfg.distribution is not None
+
+
 def test_install_subcommands_parse():
     from mthydra.ops import main as m
     p = m.build_parser()

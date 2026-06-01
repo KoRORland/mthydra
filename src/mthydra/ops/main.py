@@ -351,6 +351,38 @@ smtp_port = {dist_smtp_port}
 from_addr = "{dist_smtp_from}"
 username  = "{dist_smtp_user}"
 password  = "{dist_smtp_pass}"
+
+[data_exit]
+# Required by provision-seed (seed bundle v2) and the data-exit subcommands.
+# Telegram MTProto DC subnets are hardcoded below; the cover SNI default
+# should be replaced with a real, reachable HTTPS host once you have one.
+listen_port      = 443
+sing_box_socket  = "/run/mthydra/sing-box.sock"
+config_path      = "/etc/mthydra/sing-box.json"
+reality_key_path = "/etc/mthydra/reality.key"
+
+[data_exit.telegram_dcs]
+# Telegram MTProto DC subnets. Update on the rare occasions Telegram changes
+# its IP plan.
+v4 = [
+  "149.154.160.0/20",
+  "91.108.4.0/22",
+  "91.108.8.0/22",
+  "91.108.16.0/22",
+  "91.108.56.0/22",
+  "95.161.64.0/20",
+]
+v6 = [
+  "2001:b28:f23d::/48",
+  "2001:b28:f23f::/48",
+  "2001:67c:4e8::/48",
+]
+
+[data_exit.cover_sni]
+# Cover SNI presented on probe fall-through. MUST be a real reachable HTTPS
+# host that looks like credible Western-Internet traffic. Override per host
+# by adding `<node_id> = "host.specific.example"`.
+default = "{data_exit_cover_sni}"
 """
 
 
@@ -391,6 +423,11 @@ def bootstrap_core(
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             hostname=hostname,
             operator_email=operator_email,
+            # Placeholder cover SNI so [data_exit] parses; operator replaces
+            # it with a real reachable HTTPS host. pop() so it doesn't collide
+            # with the **toml splat below.
+            data_exit_cover_sni=toml.pop(
+                "data_exit_cover_sni", "www.example-cover-domain.invalid"),
             **toml,
         ))
         os.chmod(cfg, 0o600)
