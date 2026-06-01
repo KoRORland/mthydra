@@ -77,11 +77,11 @@ def read_manifest(path=None) -> AgentManifest | None:
     return AgentManifest(**raw)
 
 
-def _get_s3_credentials(cfg) -> tuple[str, str]:
+def _get_s3_credentials(cfg, db_path: str) -> tuple[str, str]:
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.tokens import get_provider_credential
 
-    with connect(cfg._db_path) as conn:
+    with connect(db_path) as conn:
         cred = get_provider_credential(conn, "b2")
     key_id, _, secret = cred.partition(":")
     if not secret:
@@ -89,8 +89,8 @@ def _get_s3_credentials(cfg) -> tuple[str, str]:
     return key_id, secret
 
 
-def _make_s3_client(cfg):
-    key_id, secret = _get_s3_credentials(cfg)
+def _make_s3_client(cfg, db_path: str):
+    key_id, secret = _get_s3_credentials(cfg, db_path)
     return boto3.client(
         "s3",
         endpoint_url=cfg.backup.endpoint,
@@ -127,6 +127,7 @@ def publish_agent(
     cfg,
     tar_bytes: bytes,
     sha: str,
+    db_path: str,
     *,
     ttl_days: int = 7,
     bucket: str | None = None,
@@ -144,7 +145,7 @@ def publish_agent(
 
     bucket = bucket or cfg.backup.bucket
     key = f"agent/mthydra-ru-agent-{sha[:12]}.tar.gz"
-    client = _make_s3_client(cfg)
+    client = _make_s3_client(cfg, db_path)
     client.put_object(Bucket=bucket, Key=key, Body=tar_bytes)
     url = client.generate_presigned_url(
         "get_object",
@@ -170,18 +171,11 @@ def publish_agent(
     return manifest
 
 
-def _load_cfg(db_path: str, config: str):
-    """Load the controller config + stash db_path for _get_s3_credentials."""
-    from mthydra.controller.config import load_config
-    cfg = load_config(Path(config))
-    cfg._db_path = db_path
-    return cfg
-
-
 def cmd_agent_publish(args) -> int:
-    cfg = _load_cfg(args.db_path, args.config)
+    from mthydra.controller.config import load_config
+    cfg = load_config(Path(args.config))
     tar_bytes, sha = package_agent(args.source_dir)
-    manifest = publish_agent(cfg, tar_bytes, sha, ttl_days=args.ttl_days)
+    manifest = publish_agent(cfg, tar_bytes, sha, args.db_path, ttl_days=args.ttl_days)
     print(json.dumps({
         "url": manifest.url, "sha256": manifest.sha256,
         "published_at": manifest.published_at,

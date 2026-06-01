@@ -7,6 +7,7 @@ import json
 import tarfile
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
+from unittest.mock import MagicMock, patch
 
 from mthydra.ops import agent_ops
 
@@ -65,12 +66,15 @@ class _FakeCfg:
 
 def test_publish_agent_uploads_and_writes_manifest(monkeypatch, tmp_path):
     fake = _FakeS3Client()
-    monkeypatch.setattr(agent_ops, "_make_s3_client", lambda cfg: fake)
-    monkeypatch.setattr(agent_ops, "_get_s3_credentials", lambda cfg: ("AKIA", "SECRET"))
+    monkeypatch.setattr(agent_ops, "_make_s3_client", lambda cfg, db_path: fake)
+    monkeypatch.setattr(agent_ops, "_get_s3_credentials",
+                        lambda cfg, db_path: ("AKIA", "SECRET"))
     monkeypatch.setattr(agent_ops, "AGENT_MANIFEST_PATH", tmp_path / "agent.json")
 
     m = agent_ops.publish_agent(_FakeCfg(), tar_bytes=b"hello",
-                                sha="0123456789abcdef" * 4, ttl_days=7)
+                                sha="0123456789abcdef" * 4,
+                                db_path=str(tmp_path / "stub.sqlite"),
+                                ttl_days=7)
     assert m.url.startswith("https://fake.example/agent/")
     assert m.sha256 == "0123456789abcdef" * 4
     assert "agent/mthydra-ru-agent-0123456789ab.tar.gz" in fake.put_calls[0]["Key"]
@@ -92,9 +96,10 @@ def test_publish_agent_skips_when_manifest_fresh_and_sha_matches(monkeypatch, tm
     monkeypatch.setattr(agent_ops, "AGENT_MANIFEST_PATH", manifest_path)
     fake = _FakeS3Client()
     monkeypatch.setattr(agent_ops, "_make_s3_client",
-                        lambda cfg: (_ for _ in ()).throw(
+                        lambda cfg, db_path: (_ for _ in ()).throw(
                             AssertionError("should not call S3")))
-    m = agent_ops.publish_agent(_FakeCfg(), tar_bytes=b"x", sha=sha, ttl_days=7)
+    m = agent_ops.publish_agent(_FakeCfg(), tar_bytes=b"x", sha=sha,
+                                db_path=str(tmp_path / "stub.sqlite"), ttl_days=7)
     assert m.url == "https://existing.example/agent.tar.gz"
     assert fake.put_calls == []
 
@@ -108,13 +113,14 @@ def test_cmd_agent_publish_tars_uploads_and_prints_manifest(monkeypatch, tmp_pat
     monkeypatch.setattr(agent_ops, "AGENT_MANIFEST_PATH",
                         tmp_path / "agent.json")
 
-    class _FakeCfg2(_FakeCfg):
-        pass
-    monkeypatch.setattr(agent_ops, "_load_cfg",
-                        lambda db, config: _FakeCfg2())
-    captured = {"sha": None}
-    def _fake_publish(cfg, tar_bytes, sha, *, ttl_days, bucket=None):
+    # Patch load_config at the module level where cmd_agent_publish imports it.
+    import mthydra.controller.config as _cfg_mod
+    monkeypatch.setattr(_cfg_mod, "load_config", lambda path: _FakeCfg())
+
+    captured = {"sha": None, "db_path": None}
+    def _fake_publish(cfg, tar_bytes, sha, db_path, *, ttl_days, bucket=None):
         captured["sha"] = sha
+        captured["db_path"] = db_path
         return agent_ops.AgentManifest(
             url="https://fake/x", sha256=sha,
             published_at="2026-05-30T00:00:00Z",
@@ -130,3 +136,47 @@ def test_cmd_agent_publish_tars_uploads_and_prints_manifest(monkeypatch, tmp_pat
     rc = agent_ops.cmd_agent_publish(args)
     assert rc == 0
     assert captured["sha"]
+    assert captured["db_path"] == str(tmp_path / "x.sqlite")
+
+
+# ---------------------------------------------------------------------------
+# Regression: FrozenInstanceError (T-1)
+# ---------------------------------------------------------------------------
+
+
+def test_publish_agent_no_frozen_instance_error(monkeypatch, tmp_path):
+    """publish_agent must not raise FrozenInstanceError.
+
+    The original _load_cfg tried `cfg._db_path = db_path` on a frozen
+    dataclass.  The fix threads db_path explicitly so no mutation is needed.
+    """
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.tokens import set_provider_credential
+
+    # Set up a real in-memory SQLite DB with the full schema and a seeded
+    # B2 credential.
+    db_path = str(tmp_path / "state.sqlite")
+    with connect(db_path) as conn:
+        apply_schema(conn)
+        set_provider_credential(conn, "b2", "KEYID:SECRET", "2026-01-01T00:00:00Z")
+
+    # Patch out the boto3 client so no real network calls happen.
+    fake_client = MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://fake.example/agent.tar.gz?sig=x"
+
+    monkeypatch.setattr(agent_ops, "AGENT_MANIFEST_PATH", tmp_path / "agent.json")
+
+    with patch("boto3.client", return_value=fake_client):
+        # This must not raise dataclasses.FrozenInstanceError.
+        manifest = agent_ops.publish_agent(
+            _FakeCfg(),
+            b"fake-tar-data",
+            "aabbccdd" * 8,
+            db_path,
+            ttl_days=7,
+        )
+
+    assert manifest.sha256 == "aabbccdd" * 8
+    assert fake_client.put_object.called
+    assert fake_client.generate_presigned_url.called

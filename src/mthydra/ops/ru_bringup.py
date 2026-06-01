@@ -227,10 +227,11 @@ def _resolve_agent(args, cfg=None) -> tuple[str, str]:
                 need_publish = True
     if need_publish:
         if cfg is None:
-            cfg = agent_ops._load_cfg(args.db_path, args.config or
-                                      "/etc/mthydra/controller.toml")
+            from mthydra.controller.config import load_config
+            cfg = load_config(Path(args.config or "/etc/mthydra/controller.toml"))
+        db_path = args.db_path
         tar_bytes, sha = agent_ops.package_agent("/opt/mthydra/src/src")
-        manifest = agent_ops.publish_agent(cfg, tar_bytes, sha, ttl_days=7)
+        manifest = agent_ops.publish_agent(cfg, tar_bytes, sha, db_path, ttl_days=7)
     return manifest.url, manifest.sha256
 
 
