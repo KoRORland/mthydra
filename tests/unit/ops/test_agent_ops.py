@@ -355,3 +355,61 @@ def test_publish_agent_end_to_end_real_client_moto(monkeypatch, tmp_path):
     # Manifest actually written to disk.
     on_disk = json.loads((tmp_path / "agent.json").read_text())
     assert on_disk["sha256"] == sha
+
+
+def test_agent_publish_full_cli_dispatch_real_path(monkeypatch, tmp_path):
+    """End-to-end through the REAL CLI entry point: main(['agent-publish',...])
+    → load_config(real TOML) → package_agent(real tree) → publish_agent →
+    real boto3 (moto). No function under test is mocked. This is the path
+    that actually runs in prod; mocking _make_s3_client in the other tests
+    is exactly why three config/credential crashes reached the operator
+    (2026-06-02)."""
+    import boto3
+    from moto import mock_aws
+    from mthydra.ops import main as ops_main
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.tokens import set_provider_credential
+
+    monkeypatch.delenv("MTHYDRA_BACKUP_REGION", raising=False)
+    toml = (
+        "[node]\nrole='active'\nhostname='h'\n"
+        "[backup]\nfloor_interval_hours=24\non_change_debounce_seconds=30\n"
+        "endpoint=''\nbucket='mthydra-agent-bucket'\naccess_key_id='AKIAFROMCFG'\n"
+        "[backup.retention]\nkeep_daily=30\nkeep_monthly=12\nobject_lock_days=365\n"
+        "[gap_monitor]\npoll_interval_minutes=30\nalarm_threshold_hours=48\n"
+        "recipient_email='op@example.org'\n"
+        "[descriptor]\nrotation_interval_hours=1\nvalidity_window_hours=24\n"
+        "[obligations]\n[obligations.timers_hours]\n"
+        "[cover_pool]\nrotation_ttl_days=14\nreverify_after_days=30\n"
+        "freeze_threshold=2\nreverify_sweep_interval='1h'\n"
+        "rotation_sweep_interval='1h'\nreplenishment_interval_days=90\n"
+    )
+    src = tmp_path / "src"
+    (src / "mthydra" / "ru_agent").mkdir(parents=True)
+    (src / "mthydra" / "__init__.py").write_text("")
+    (src / "mthydra" / "ru_agent" / "__init__.py").write_text("")
+    cfg = tmp_path / "controller.toml"; cfg.write_text(toml)
+    db = tmp_path / "state.sqlite"
+    c = connect(db); apply_schema(c)
+    # Secret-only credential — the exact prod condition that crashed.
+    set_provider_credential(c, "b2", "just-the-secret", "2026-06-02T00:00:00Z")
+    c.close()
+    monkeypatch.setattr(agent_ops, "AGENT_MANIFEST_PATH", tmp_path / "agent.json")
+
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(
+            Bucket="mthydra-agent-bucket")
+        rc = ops_main.main([
+            "agent-publish",
+            "--source-dir", str(src),
+            "--db-path", str(db),
+            "--config", str(cfg),
+            "--ttl-days", "7",
+        ])
+    assert rc == 0
+    manifest = json.loads((tmp_path / "agent.json").read_text())
+    assert len(manifest["sha256"]) == 64
+    assert "agent/mthydra-ru-agent-" in manifest["url"]
+    # Proves the secret-only credential resolved to the config access key.
+    assert "AKIAFROMCFG" in manifest["url"]
