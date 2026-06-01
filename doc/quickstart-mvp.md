@@ -181,7 +181,7 @@ Repeat 2.2 with a different name (e.g. `mthydra_yourname_dist_bot`). Save the to
 
 ### 2.4 Create an email "app password" for the controller
 
-The controller emails you a hourly heartbeat + a hard-fail alert when something is wrong. We use your existing mailbox via SMTP with an app password (not your real password).
+The controller emails you a **daily heartbeat** + a hard-fail alert when something is wrong. We use your existing mailbox via SMTP with an app password (not your real password). One email per day is quiet enough that you'll actually read it — the heartbeat body lists which obligations are due so you don't need to log in to know.
 
 **Gmail:**
 1. https://myaccount.google.com/security → 2-Step Verification must be ON.
@@ -356,7 +356,7 @@ journalctl -u mthydra-controller -n 30 --no-pager
 ```
 Should show a line like `serve: backup orchestrator + descriptor rotator + ... armed`.
 
-Wait 5–10 minutes, then check your email — you should receive an automated **heartbeat** email from the controller. (One arrives every hour after that.)
+Wait 5–10 minutes, then check your email — you should receive an automated **heartbeat** email from the controller. (One arrives every 24 hours after that. See the daily-check on §9.2 for the rhythm.)
 
 If you see all three (systemd active, log line, heartbeat email), the EU controller is **live and self-monitoring**. Take a breath.
 
@@ -659,7 +659,7 @@ For each person in your trusted circle:
 | **probe runner** | 30 min | SSHes into each vantage, runs `tls_fall_through` / `cover_domain_consistency` / `surface_scan` for every live box. Per-vantage pre-flight: a dead vantage = one `probe_vantage_unreachable::<vantage>` alert, not N box-level soft_fails |
 | **probe audit wheel** | 5 min | detects probe coverage gaps + raises `probe_kill_pending` on N-of-M soft fails |
 | **obs alerter** | 2 min | turns overdue obligations / anti-obligations into Telegram + email alerts |
-| **obs heartbeat** | hourly | dead-man's-switch email; subject = `mthydra heartbeat @ ... — <host> v<version>`; on N consecutive failures, raises `obs_dead_mans_switch_breach` with SMTP-smoke verdict + recent error strings in details |
+| **obs heartbeat** | daily | dead-man's-switch email; subject = `mthydra heartbeat @ ... — <host> v<version>`; body enumerates any overdue obligations + the remediation step for each (W-3); on N consecutive failures, raises `obs_dead_mans_switch_breach` with SMTP-smoke verdict + recent error strings in details (U-D4) |
 | **backup orchestrator** | continuous | takes encrypted state snapshot every 24 h floor / on-change debounce |
 | **backup integrity smoke** | weekly | downloads a random recent gen from S3, re-hashes, compares to recorded sha256; catches silent corruption nothing else surfaces |
 | **standby heartbeat poller** | 5 min | pulls the active's heartbeat from S3 (only when this node is `--role standby`) |
@@ -684,7 +684,7 @@ journalctl -u mthydra-controller -n 5 --no-pager | grep "armed"
 ### 9.2 What you must do manually, ongoing
 
 **Every day (~30 seconds):**
-- Glance at your inbox. Did the hourly heartbeat arrive overnight? If yes, you're good. The subject identifies the running version + host: `mthydra heartbeat @ 2026-06-01T07:00:00Z — eu-1 v0.0.5`. If you didn't see one in the last 2 hours — `systemctl status mthydra-controller`.
+- Glance at your inbox. Did the daily heartbeat arrive? If yes, you're good — the body tells you whether anything is overdue and what to do. The subject identifies the running version + host: `mthydra heartbeat @ 2026-06-01T07:00:00Z — eu-1 v0.0.6`. If you didn't see one in the last 36h — `systemctl status mthydra-controller`.
 
 **Weekly (~2 minutes):**
 - Open the latest `mthydra-ops daily-check` log: `journalctl -u mthydra-daily-check.service -n 100 --no-pager`. Look for any `overdue` or `anti_obligation` lines. The automations in §9.1 should keep them empty in normal operation — recurring entries mean something is wedged.

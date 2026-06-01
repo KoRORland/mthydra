@@ -467,6 +467,35 @@ password = "app-pw"
     assert cfg.observability.email.smtp_port == 587
 
 
+def test_load_config_heartbeat_interval_defaults_to_daily(tmp_path):
+    """W-1: default heartbeat cadence is 24h. Hourly was too aggressive —
+    operators set up filters and the dead-man's-switch stopped working."""
+    from mthydra.controller.config import load_config
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _MIN_BASE_TOML
+        + """
+[observability]
+alerter_sweep_interval = "2m"
+heartbeat_breach_threshold = 3
+
+[observability.telegram]
+bot_token = "abc"
+chat_id = "12345"
+
+[observability.email]
+smtp_host = "smtp.example.org"
+smtp_port = 587
+from_addr = "ops@example.org"
+to_addr = "operator@example.org"
+username = "ops@example.org"
+password = "app-pw"
+"""
+    )
+    cfg = load_config(p)
+    assert cfg.observability.heartbeat_interval_seconds == 86400
+
+
 def test_load_config_observability_credentials_optional(tmp_path):
     """Missing telegram/email leaves them as None — the active-mode refusal
     happens in _cmd_serve, not the loader."""

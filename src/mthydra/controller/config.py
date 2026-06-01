@@ -403,7 +403,12 @@ def _load_observability(data: dict) -> ObservabilityConfig:
         ),
         heartbeat_interval_seconds=_parse_interval_seconds(
             "observability.heartbeat_interval",
-            sec.get("heartbeat_interval", 3600),
+            # W-1: daily default. Hourly was too aggressive — operators
+            # set up filters/auto-archive, defeating the dead-man's-switch
+            # intent. Daily survives unread better; the obs_heartbeat_proven
+            # obligation goes overdue at interval*2 (48h) so 1 missed day
+            # is OK, 2 missed days flags.
+            sec.get("heartbeat_interval", 86400),
         ),
         heartbeat_breach_threshold=_require_positive(
             "observability.heartbeat_breach_threshold",

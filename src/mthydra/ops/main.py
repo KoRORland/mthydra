@@ -314,7 +314,10 @@ probe_audit_sweep_interval   = "5m"
 
 [observability]
 alerter_sweep_interval              = "2m"
-heartbeat_interval                  = "1h"
+# W-1: daily heartbeat. Hourly was too noisy — operators auto-archive
+# and the dead-man's-switch stops working. Obligation overdue 48h after
+# last send; breach raises after 3 missed dispatch attempts (~3d).
+heartbeat_interval                  = "24h"
 heartbeat_breach_threshold          = 3
 alert_dedupe_window_warn_seconds    = 3600
 alert_dedupe_window_crit_seconds    = 900
