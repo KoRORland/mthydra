@@ -287,6 +287,15 @@ def build_parser() -> argparse.ArgumentParser:
     crn.add_argument("--config", default="/etc/mthydra/controller.toml",
                      help="read freeze_threshold for the auto-rotate gate")
 
+    bin_ = sub.add_parser(
+        "backup-integrity-now",
+        help="re-hash a recent backup blob and compare to recorded sha256 (V-2)",
+    )
+    bin_.add_argument("--db-path", default=DEFAULT_DB)
+    bin_.add_argument("--config", default="/etc/mthydra/controller.toml")
+    bin_.add_argument("--generation", type=int, default=None,
+                      help="check a specific generation instead of a random recent one")
+
     cl = sub.add_parser("cover-list", help="list cover_domain_pool rows")
     cl.add_argument("--db-path", default=DEFAULT_DB)
     cl.add_argument("--state",
@@ -966,6 +975,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "cover-reverify-now":
         return _cmd_cover_reverify_now(args)
+
+    if args.cmd == "backup-integrity-now":
+        return _cmd_backup_integrity_now(args, mode)
 
     if args.cmd == "cover-list":
         return _cmd_cover_list(args)
@@ -2030,6 +2042,73 @@ def _cmd_cover_reverify_now(args) -> int:
     for d in result.get("auto_burned", []):
         print(f"  BURN {d}  (drift; pool had slack)")
     return 0 if not result["failed"] else 1
+
+
+def _cmd_backup_integrity_now(args, mode: str) -> int:
+    """V-2: operator-triggered backup integrity smoke. Picks a random recent
+    generation (or --generation if specified), re-hashes the encrypted blob,
+    compares to the sha256 recorded at write time."""
+    import random as _random
+
+    from mthydra.controller.backup.integrity import BackupIntegritySweep
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.tokens import get_provider_credential
+
+    if mode == "offline":
+        print("backup-integrity-now refused: controller is in offline mode",
+              file=sys.stderr)
+        return 1
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"backup-integrity-now: config error: {e}", file=sys.stderr)
+        return 2
+    conn = connect(args.db_path)
+    try:
+        try:
+            secret = get_provider_credential(conn, "b2")
+        except (KeyError, LookupError):
+            print("backup-integrity-now: b2 credential not in DB",
+                  file=sys.stderr)
+            return 7
+    finally:
+        conn.close()
+    dest = _build_destination(cfg, secret, mode=mode,
+                              bucket_override=args.bucket_override)
+    # Pin the RNG when --generation is given so the sweep checks that gen.
+    if args.generation is not None:
+        rng = _random.Random()
+        sweep = BackupIntegritySweep(
+            db_path=args.db_path, destination=dest,
+            mode="production", rng=rng,
+        )
+        # Inject a fake recent-list of one to force the choice.
+        from mthydra.controller.state import backup_log
+        orig = backup_log.list_recent_pushed
+        try:
+            def _pinned(conn, limit=10):
+                rows = orig(conn, limit=100)
+                for r in rows:
+                    if r.generation == args.generation:
+                        return [r]
+                return []
+            backup_log.list_recent_pushed = _pinned
+            result = sweep.run_once()
+        finally:
+            backup_log.list_recent_pushed = orig
+    else:
+        sweep = BackupIntegritySweep(
+            db_path=args.db_path, destination=dest, mode="production",
+        )
+        result = sweep.run_once()
+
+    gen = result.get("checked")
+    if result["ok"]:
+        print(f"backup-integrity-now: OK (generation {gen})")
+        return 0
+    print(f"backup-integrity-now: FAIL (generation {gen}): {result['reason']}",
+          file=sys.stderr)
+    return 1
 
 
 def _cmd_cover_list(args) -> int:

@@ -41,6 +41,8 @@ _ANTI_PREFIXES = frozenset({
     "cover_pool_reverify_drift_pending",
     # Spec U U-D2 — probe vantage SSH unreachable.
     "probe_vantage_unreachable",
+    # V-2 — backup integrity smoke failure (per generation).
+    "backup_integrity_failed",
 })
 
 
@@ -132,6 +134,7 @@ _DEFAULT_CADENCE: dict[str, int] = {
     "probe_vantage_rotation_proven": 28 * 86400,
     "cover_pool_reverify_pass_proven": 60 * 86400,
     "cover_pool_replenishment_proven": 90 * 86400,
+    "backup_integrity_proven": 7 * 86400,  # weekly sweep (V-2)
 }
 
 

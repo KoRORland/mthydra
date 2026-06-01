@@ -82,6 +82,15 @@ class S3Destination:
                 return False
             raise
 
+    def get_blob(self, generation: int) -> bytes:
+        """V-2: download the encrypted backup blob for integrity smoke.
+        Returns the raw bytes — caller hashes and compares to the
+        sha256 recorded at write time in backup_log."""
+        obj = self._client.get_object(
+            Bucket=self.bucket, Key=self._key_for_gen(generation),
+        )
+        return obj["Body"].read()
+
     @staticmethod
     def _heartbeat_key(node_id: str) -> str:
         return f"standby/{node_id}/heartbeat.json"

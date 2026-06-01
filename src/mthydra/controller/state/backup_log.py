@@ -123,3 +123,18 @@ def list_pending_reconciliation(conn: sqlite3.Connection) -> list[BackupRecord]:
         "ORDER BY generation"
     ).fetchall()
     return [BackupRecord(*r) for r in rows]
+
+
+def list_recent_pushed(
+    conn: sqlite3.Connection, *, limit: int = 10,
+) -> list[BackupRecord]:
+    """V-2: return the most recent pushed backups (with sha256), newest first.
+    Used by the integrity-smoke sweep to pick a random gen to re-hash."""
+    rows = conn.execute(
+        "SELECT generation, created_at, size_bytes, sha256, pushed_at, "
+        "index_updated_at, trigger "
+        "FROM backup_log WHERE pushed_at IS NOT NULL AND sha256 IS NOT NULL "
+        "ORDER BY generation DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [BackupRecord(*r) for r in rows]
