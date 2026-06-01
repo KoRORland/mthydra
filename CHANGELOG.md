@@ -26,10 +26,31 @@ failed on a fresh install for two compounding reasons:
   before downloading anything. If found, it returns the existing
   `image_version` immediately. Makes `image-prepare` safe to retry.
 
-**Operator action:** none required.
+**T-1 — `mthydra-ops agent-publish` crashed** with
+`dataclasses.FrozenInstanceError` because `_load_cfg` tried to set a field
+on the frozen config dataclass. Fixed by threading `db_path` as an explicit
+argument through `_get_s3_credentials`, `_make_s3_client`, and
+`publish_agent`. The same bug existed in `ru_bringup.py` and is fixed there
+too.
+
+**T-2 — Installer now writes `/var/lib/mthydra/.bash_profile`** so
+`sudo -u mthydra -i` gives a login shell with `mthydra-controller` and
+`mthydra-ops` on PATH. No more typing `/opt/mthydra/venv/bin/` prefixes.
+
+**Operator action:** none required for T-1 (code fix only). For T-2, new
+installs get the file automatically. Existing hosts: write it once:
 
 ```bash
-sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+# As root on the EU host:
+printf '# Added by mthydra installer.\nexport PATH="/opt/mthydra/venv/bin:$PATH"\n' \
+    > /var/lib/mthydra/.bash_profile
+chmod 644 /var/lib/mthydra/.bash_profile
+```
+
+Then upgrade:
+
+```bash
+sudo -u mthydra -i -c 'mthydra-ops upgrade'
 ```
 
 ---
