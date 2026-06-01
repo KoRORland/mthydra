@@ -150,23 +150,49 @@ def _schema_would_migrate(src_dir: Path, db_path: str
 
 
 def _fetch_and_checkout(src_dir: Path, ref: str) -> None:
-    """`git fetch origin <ref>` + `git reset --hard FETCH_HEAD` — same pattern
-    as scripts/install.sh. Works for branches, tags, and SHAs."""
+    """`git fetch origin <ref>` + `git reset --hard FETCH_HEAD` for the
+    branch/tag/full-SHA case. Short SHAs aren't supported by `git fetch`
+    over the wire (the server has no way to expand a partial SHA), so we
+    fall back to `git fetch origin` (everything) + `git reset --hard <ref>`
+    when the targeted fetch fails. Same pattern as scripts/install.sh,
+    extended to handle SHA refs the operator might paste from `git log`.
+    """
     src = str(Path(src_dir))
-    res = subprocess.run(
+    targeted = subprocess.run(
         ["git", "-C", src, "fetch", "origin", ref],
         capture_output=True, text=True,
     )
-    if res.returncode != 0:
+    if targeted.returncode == 0:
+        res = subprocess.run(
+            ["git", "-C", src, "reset", "--hard", "FETCH_HEAD"],
+            capture_output=True, text=True,
+        )
+        if res.returncode != 0:
+            raise UpgradeError(
+                f"git reset --hard FETCH_HEAD failed: {res.stderr.strip()}")
+        return
+
+    # Targeted fetch failed — likely a partial SHA. Fetch everything from
+    # origin and try the reset locally; that's the only way to resolve a
+    # short SHA without pre-knowing the full one.
+    full_fetch = subprocess.run(
+        ["git", "-C", src, "fetch", "origin"],
+        capture_output=True, text=True,
+    )
+    if full_fetch.returncode != 0:
         raise UpgradeError(
-            f"git fetch origin {ref!r} failed: {res.stderr.strip()}")
+            f"git fetch origin {ref!r} failed: {targeted.stderr.strip()}; "
+            f"fallback `git fetch origin` also failed: "
+            f"{full_fetch.stderr.strip()}")
     res = subprocess.run(
-        ["git", "-C", src, "reset", "--hard", "FETCH_HEAD"],
+        ["git", "-C", src, "reset", "--hard", ref],
         capture_output=True, text=True,
     )
     if res.returncode != 0:
         raise UpgradeError(
-            f"git reset --hard FETCH_HEAD failed: {res.stderr.strip()}")
+            f"git fetch origin {ref!r} failed (likely a partial SHA), "
+            f"and `git reset --hard {ref}` after `git fetch origin` "
+            f"also failed: {res.stderr.strip()}")
 
 
 def _pip_install(venv_dir: Path, src_dir: Path) -> None:

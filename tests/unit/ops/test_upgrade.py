@@ -154,8 +154,32 @@ def test_fetch_and_checkout_invokes_git_correctly(monkeypatch):
     assert calls[1] == ["git", "-C", "/opt/mthydra/src", "reset", "--hard", "FETCH_HEAD"]
 
 
+def test_fetch_and_checkout_falls_back_to_full_fetch_on_short_sha(monkeypatch):
+    """`git fetch origin <short-sha>` fails with 'couldn't find remote ref'
+    because git's wire protocol can't expand partial SHAs on the server.
+    Fall back to `git fetch origin` (full refs) + `git reset --hard <ref>`
+    locally.
+    """
+    calls = []
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        # Targeted fetch fails the way a short SHA would; the broad fetch
+        # and the reset both succeed.
+        if argv[:5] == ["git", "-C", "/src", "fetch", "origin"] and len(argv) == 6:
+            return subprocess.CompletedProcess(
+                argv, 128, "", "fatal: couldn't find remote ref 60934e5")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+    upgrade._fetch_and_checkout(Path("/src"), "60934e5")
+    # The fallback sequence: targeted fetch attempt → full fetch → reset.
+    assert calls[0] == ["git", "-C", "/src", "fetch", "origin", "60934e5"]
+    assert calls[1] == ["git", "-C", "/src", "fetch", "origin"]
+    assert calls[2] == ["git", "-C", "/src", "reset", "--hard", "60934e5"]
+
+
 def test_fetch_and_checkout_raises_on_failure(monkeypatch):
     def fake_run(argv, **kw):
+        # Both the targeted fetch AND the fallback full fetch fail.
         return subprocess.CompletedProcess(argv, 128, "", "fatal: bad ref")
     monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
     with pytest.raises(upgrade.UpgradeError, match="git fetch"):
