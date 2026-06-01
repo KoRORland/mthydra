@@ -132,8 +132,29 @@ def test_cmd_image_prepare_end_to_end(monkeypatch, tmp_path):
     assert "image-build" in subs and "image-promote" in subs
     ib = next(a for a in calls if a[0] == "image-build")
     assert "--release" in ib and "v2.2.8" in ib
-    assert "--asset" in ib and "mtg-v2.2.8-linux-amd64.tar.gz" in ib
-    assert "--profile-json" in ib
+    # Asset filename must use the version WITHOUT the leading 'v'.
+    # Upstream's actual release assets are named e.g. mtg-2.2.8-linux-amd64.tar.gz
+    # (no 'v'). Discovered 2026-06-01 — using 'v2.2.8' here yields a
+    # "asset not present in release" error.
+    asset_idx = ib.index("--asset")
+    assert ib[asset_idx + 1] == "mtg-2.2.8-linux-amd64.tar.gz"
+
+
+def test_cmd_image_prepare_handles_tag_without_v_prefix(monkeypatch, tmp_path):
+    """Defensive: if upstream tags a release without the 'v' prefix
+    (e.g. '2.3.0' instead of 'v2.3.0'), the asset name is still right."""
+    monkeypatch.setattr(image_ops, "resolve_latest_tag",
+                        lambda **kw: "2.3.0")
+    calls = []
+    def fake_run(*args, check=True, capture=False, env=None):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(image_ops, "_run_controller", fake_run, raising=False)
+    rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path))
+    assert rc == 0
+    ib = next(a for a in calls if a[0] == "image-build")
+    asset_idx = ib.index("--asset")
+    assert ib[asset_idx + 1] == "mtg-2.3.0-linux-amd64.tar.gz"
 
 
 def test_cmd_image_prepare_skips_promote_without_yes(monkeypatch, tmp_path):
@@ -147,3 +168,62 @@ def test_cmd_image_prepare_skips_promote_without_yes(monkeypatch, tmp_path):
                                                    non_interactive=False))
     assert rc == 0
     assert [a[0] for a in calls] == ["image-build"]
+
+
+def test_detect_host_arch_mapping():
+    """Auto-detect maps platform.machine() to mtg release-asset arch suffix.
+    Covers the common Linux machines an EU controller might run on."""
+    import platform
+    from mthydra.ops import image_ops as io
+    real = platform.machine
+    try:
+        platform.machine = lambda: "aarch64"
+        assert io.detect_host_arch() == "linux-arm64"
+        platform.machine = lambda: "x86_64"
+        assert io.detect_host_arch() == "linux-amd64"
+        platform.machine = lambda: "armv7l"
+        assert io.detect_host_arch() == "linux-armv7"
+        platform.machine = lambda: "unknown-cpu"  # fallback
+        assert io.detect_host_arch() == "linux-amd64"
+    finally:
+        platform.machine = real
+
+
+def test_cmd_image_prepare_auto_detects_arch_when_not_passed(monkeypatch, tmp_path):
+    """When --arch is not on the CLI (default=None), the wizard uses
+    detect_host_arch(). Fixes the 'wrong default arch on arm64 EC2' trap."""
+    monkeypatch.setattr(image_ops, "resolve_latest_tag",
+                        lambda **kw: "v2.2.8")
+    monkeypatch.setattr(image_ops, "detect_host_arch",
+                        lambda: "linux-arm64")
+    calls = []
+    def fake_run(*args, check=True, capture=False, env=None):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(image_ops, "_run_controller", fake_run, raising=False)
+    # Pass arch=None to simulate "operator didn't specify".
+    rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path, arch=None))
+    assert rc == 0
+    ib = next(a for a in calls if a[0] == "image-build")
+    asset_idx = ib.index("--asset")
+    assert ib[asset_idx + 1] == "mtg-2.2.8-linux-arm64.tar.gz"
+
+
+def test_cmd_image_prepare_honors_explicit_arch_override(monkeypatch, tmp_path):
+    """--arch on the CLI wins over host auto-detect (operator might be on
+    arm64 EU controller but want amd64 mtg for RU boxes)."""
+    monkeypatch.setattr(image_ops, "resolve_latest_tag",
+                        lambda **kw: "v2.2.8")
+    # Auto-detect would say arm64 but operator passed amd64 — explicit wins.
+    monkeypatch.setattr(image_ops, "detect_host_arch",
+                        lambda: "linux-arm64")
+    calls = []
+    def fake_run(*args, check=True, capture=False, env=None):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(image_ops, "_run_controller", fake_run, raising=False)
+    rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path, arch="linux-amd64"))
+    assert rc == 0
+    ib = next(a for a in calls if a[0] == "image-build")
+    asset_idx = ib.index("--asset")
+    assert ib[asset_idx + 1] == "mtg-2.2.8-linux-amd64.tar.gz"

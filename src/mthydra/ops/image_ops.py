@@ -120,6 +120,24 @@ def default_profile_json(tag: str, arch: str) -> dict:
     }
 
 
+_MACHINE_TO_MTG_ARCH = {
+    "x86_64": "linux-amd64", "amd64": "linux-amd64",
+    "aarch64": "linux-arm64", "arm64": "linux-arm64",
+    "armv7l": "linux-armv7", "armv7": "linux-armv7",
+    "armv6l": "linux-armv6", "armv6": "linux-armv6",
+    "i386": "linux-386", "i686": "linux-386",
+}
+
+
+def detect_host_arch() -> str:
+    """Map platform.machine() to mtg's release-asset arch suffix.
+    Falls back to linux-amd64 (most common RU VPS arch) on unknown
+    platforms — operator can always override with --arch.
+    """
+    import platform
+    return _MACHINE_TO_MTG_ARCH.get(platform.machine().lower(), "linux-amd64")
+
+
 def cmd_image_prepare(args) -> int:
     """Resolve latest → build → (optionally) promote, in one wizard."""
     tag = args.release
@@ -133,13 +151,25 @@ def cmd_image_prepare(args) -> int:
             return 2
         _say(f"latest = {tag}")
 
-    asset = f"mtg-{tag}-{args.arch}.tar.gz"
+    # If --arch wasn't passed (None from new default), auto-detect from
+    # the host so an operator on a non-amd64 EC2 (e.g. arm64 t4g.small)
+    # doesn't have to know the magic asset-name dialect.
+    arch = args.arch or detect_host_arch()
+    if args.arch is None:
+        _say(f"arch (auto-detected from host) = {arch}")
+
+    # Upstream tags are 'v2.2.8' but the release asset filenames use the
+    # version *without* the v prefix: 'mtg-2.2.8-linux-amd64.tar.gz'. Strip
+    # the leading 'v' when building the asset name; keep the original tag
+    # for the GitHub API call (which uses the tag verbatim).
+    asset_version = tag[1:] if tag.startswith("v") and len(tag) > 1 else tag
+    asset = f"mtg-{asset_version}-{arch}.tar.gz"
     _say(f"asset = {asset}")
 
     if args.profile_json == "auto":
         import json as _j
         import tempfile
-        profile = default_profile_json(tag, args.arch)
+        profile = default_profile_json(tag, arch)
         fd, profile_path = tempfile.mkstemp(prefix="profile-", suffix=".json")
         with os.fdopen(fd, "w") as f:
             _j.dump(profile, f, indent=2, sort_keys=True)

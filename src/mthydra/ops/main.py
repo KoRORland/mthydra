@@ -982,7 +982,12 @@ def build_parser() -> argparse.ArgumentParser:
     ip = sub.add_parser("image-prepare",
                         help="resolve latest mtg release → build → (optionally) promote")
     ip.add_argument("--release", default="latest")
-    ip.add_argument("--arch", default="linux-amd64")
+    # default=None → image_ops auto-detects from host platform.machine().
+    # Operator can pin explicitly: --arch linux-amd64 / linux-arm64 / etc.
+    ip.add_argument("--arch", default=None,
+                    help="upstream asset arch suffix (default: auto-detect "
+                         "from host platform — linux-amd64 / linux-arm64 / "
+                         "linux-armv7 / linux-armv6 / linux-386)")
     ip.add_argument("--profile-json", default="auto",
                     help="'auto' = generate a minimal placeholder; otherwise a path")
     ip.add_argument("--yes", action="store_true",
