@@ -7,7 +7,7 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
-## Unreleased (heading toward 0.0.5) — main branch as of 2026-06-01
+## v0.0.5 — 2026-06-01
 
 **Quickstart §7 automation.** Two of the manual steps in Part 7 are now
 one-command:
@@ -23,6 +23,24 @@ one-command:
 - **T-2** — `mthydra-ops vantage-setup` collapses §7.7's seven manual
   steps (ssh-keygen on EU, scp pubkey, adduser+install on vantage,
   ssh-keyscan, vantage-set-ssh) into one wizard. End-to-end idempotent.
+
+**V-3 — provider credential rotation reminders.** Calendar-driven
+`credential_rotation_proven::<provider>` obligation stamped at init
+(when credentials are first seeded) and on every
+`rotate-provider-credential` call. Default cadences: aws/gmail = 90d,
+b2 = 180d, fallback 90d. Override with `--rotation-days N`. The
+operator sees the overdue obligation in `obs-status` / `daily-check`
+before the credential silently fails in production.
+
+**V-2 — backup integrity smoke sweep + CLI.** Weekly sweep
+(`BackupIntegritySweep`) picks a random recent backup gen, downloads
+the encrypted blob from S3, re-hashes, and compares to the sha256
+recorded at write time. Catches silent S3 corruption, wrong-bucket
+reads, and post-upload mutations — failure modes nothing else
+surfaces. Stamps `backup_integrity_proven` (singleton) on pass,
+raises `backup_integrity_failed::<generation>` per-target on
+mismatch. New `mthydra-controller backup-integrity-now
+[--generation N]` for operator-triggered runs.
 
 **V-1 — cover-domain auto-rotate on drift (slack-gated).** Extension of
 U-D1. When the auto-reverify sweep detects drift on a
@@ -69,8 +87,21 @@ operator alert load:
 behaviour. Existing manual cover-attest-verified flows still work; the
 auto-sweep just makes them redundant for the common case.
 
-Not tagged as a release yet — more 0.0.5 content expected before the
-bump.
+**Operator action when upgrading from 0.0.4:** none required. All
+0.0.5 additions are opt-in or additive — existing flows keep working.
+On install, fresh credentials will pick up the V-3 rotation
+reminders; pre-existing credentials only get the reminder on the next
+`rotate-provider-credential` call (re-stamp manually with
+`obligation-proven credential_rotation_proven::<provider>
+--next-due-hours 2160` for an immediate calendar entry, or just wait
+for the next real rotation).
+
+```bash
+sudo -u mthydra /opt/mthydra/venv/bin/mthydra-ops upgrade
+```
+
+`mthydra-ops upgrade` (no `--ref` needed from 0.0.4+ thanks to S-2's
+git-ls-remote fallback). No schema migration in 0.0.5.
 
 ---
 

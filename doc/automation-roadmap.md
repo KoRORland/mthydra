@@ -57,6 +57,8 @@ Listed by the spec that introduced the automation; cumulative.
 | Descriptor publish + presign | (T-1 partial) | manual `aws s3 presign` on laptop (against a non-existent key, no less) |
 | Vantage SSH provisioning | (T-2) | 7 manual commands across two hosts |
 | Cover-domain auto-burn on drift (slack-gated) | V-1 | one cover_pool_reverify_drift_pending per drifted candidate_verified — now silent self-heal when pool has slack |
+| Backup integrity smoke (weekly sweep + CLI) | V-2 | invisible class of failures: silent S3 corruption, wrong-bucket reads, post-upload mutation — caught before the next restore drill |
+| Provider credential rotation reminders | V-3 | "SMTP failed" / "SignatureDoesNotMatch" surprises when app passwords age out — now calendar reminder in obs-status |
 
 ---
 
@@ -110,21 +112,20 @@ automated.
 
 ### Medium value
 
-- **Backup integrity smoke test.** Weekly: download a random recent
-  generation, decrypt, hash-check against the gen's recorded sha256.
-  Raise `backup_integrity_failed::<gen>` on mismatch. Today the operator
-  does this manually (or not at all).
+- ~~**Backup integrity smoke test.**~~ ✓ shipped as V-2. Weekly sweep
+  re-hashes the encrypted blob against the recorded sha256;
+  CLI `backup-integrity-now` for ad-hoc operator runs.
 
 - **`authority-rotate` cadence + automated triggering.** Today purely
   operator-triggered ("rotate keys periodically per your threat model").
   Could ship a config-driven cadence (`[authority] rotation_interval_days`)
   + an automated trigger; operator still has the override.
 
-- **Provider credential rotation reminders.** B2/AWS app keys typically
-  expire (Gmail app passwords every 90d, AWS root-key rotation per
-  org policy). Today the operator gets a vague "SMTP failed" alert.
-  Add a calendar-driven `credential_rotation_due::<provider>` obligation
-  with the provider's typical cadence as default.
+- ~~**Provider credential rotation reminders.**~~ ✓ shipped as V-3.
+  Calendar obligation per provider with sensible defaults
+  (aws=90d, gmail=90d, b2=180d); stamped at init + on every
+  rotate-provider-credential. Operator can override per call with
+  --rotation-days.
 
 - **Self-service for `dist_user_heartbeat_breach::<user>`.** When a
   user's channel breaches, automated probe of the channel (send a
