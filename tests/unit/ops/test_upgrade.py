@@ -396,3 +396,70 @@ def test_cmd_upgrade_noop_when_already_at_target(monkeypatch, tmp_path):
     rc = upgrade.cmd_upgrade(_upgrade_args(tmp_path, ref=prior_sha))
     assert rc == 0
     assert fetched["v"] is False
+
+
+def test_cmd_upgrade_runs_schema_migrate_when_acknowledged(monkeypatch, tmp_path):
+    """R-D7: when --allow-schema-migration is set AND a migration is needed,
+    cmd_upgrade must invoke `mthydra-controller schema-migrate` after pip
+    install and before stop-service. Spec Q's flag was previously a gate-only
+    no-op — the migration never actually ran."""
+    prior_sha = _seed_min_src(tmp_path / "src")
+    _seed_schema_db(tmp_path / "db.sqlite", 14)
+    monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
+                        lambda **kw: "v0.0.3")
+    monkeypatch.setattr(upgrade, "_schema_would_migrate",
+                        lambda src, db: (True, 15, 14))
+    monkeypatch.setattr(upgrade, "_fetch_and_checkout", lambda src, ref: None)
+    monkeypatch.setattr(upgrade, "_pip_install", lambda v, s: None)
+    monkeypatch.setattr(upgrade, "_stop_service", lambda u, timeout_s=30: None)
+    monkeypatch.setattr(upgrade, "_start_and_verify", lambda *a, **kw: None)
+
+    schema_migrate_calls = {"n": 0}
+    def fake_run(*args, **kw):
+        argv = args[0] if args else []
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(args, 0, prior_sha + "\n", "")
+        if "backup-now" in argv:
+            return subprocess.CompletedProcess(
+                args, 0, "backup-now: pushed generation 9\n", "")
+        if "schema-migrate" in argv:
+            schema_migrate_calls["n"] += 1
+            return subprocess.CompletedProcess(
+                args, 0, "schema-migrate: db v14 -> v15 OK\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+
+    rc = upgrade.cmd_upgrade(_upgrade_args(tmp_path, allow_schema_migration=True))
+    assert rc == 0
+    assert schema_migrate_calls["n"] == 1
+
+
+def test_cmd_upgrade_aborts_if_schema_migrate_fails(monkeypatch, tmp_path):
+    """R-D7: schema-migrate failure must abort BEFORE stop-service, so the
+    old code keeps running against the old (un-migrated) schema."""
+    prior_sha = _seed_min_src(tmp_path / "src")
+    _seed_schema_db(tmp_path / "db.sqlite", 14)
+    monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
+                        lambda **kw: "v0.0.3")
+    monkeypatch.setattr(upgrade, "_schema_would_migrate",
+                        lambda src, db: (True, 15, 14))
+    monkeypatch.setattr(upgrade, "_fetch_and_checkout", lambda src, ref: None)
+    monkeypatch.setattr(upgrade, "_pip_install", lambda v, s: None)
+    monkeypatch.setattr(upgrade, "_stop_service",
+                        lambda u, timeout_s=30: (_ for _ in ()).throw(
+                            AssertionError("must not stop service on migrate fail")))
+
+    def fake_run(*args, **kw):
+        argv = args[0] if args else []
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(args, 0, prior_sha + "\n", "")
+        if "backup-now" in argv:
+            return subprocess.CompletedProcess(
+                args, 0, "backup-now: pushed generation 9\n", "")
+        if "schema-migrate" in argv:
+            return subprocess.CompletedProcess(args, 3, "", "boom\n")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(upgrade.subprocess, "run", fake_run)
+
+    rc = upgrade.cmd_upgrade(_upgrade_args(tmp_path, allow_schema_migration=True))
+    assert rc != 0

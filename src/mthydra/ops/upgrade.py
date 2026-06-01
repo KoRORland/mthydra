@@ -350,6 +350,23 @@ def cmd_upgrade(args) -> int:  # noqa: C901 — orchestrator
         _err(f"pip-install: {e}")
         return 7
 
+    # Phase 5b (R-D7): run schema-migrate when the new code requires it.
+    # Spec Q's --allow-schema-migration flag only gated the upgrade; it never
+    # actually triggered the migration. Without this step the DB stays at the
+    # old version and startup-check fails post-restart.
+    if will_migrate:
+        _say(f"phase 5b/8: schema-migrate {cur_schema} -> {tgt_schema}")
+        res = subprocess.run(
+            [_controller_bin(), "schema-migrate", "--db-path", args.db_path],
+            capture_output=True, text=True,
+        )
+        if res.returncode != 0:
+            _err(f"schema-migrate failed (exit {res.returncode}): "
+                 f"{res.stderr.strip() or res.stdout.strip()}")
+            _err("upgrade aborting BEFORE service restart so the old code "
+                 "can still run against the old schema.")
+            return 7
+
     # Phase 6: stop service
     _say(f"phase 6/8: stop {args.unit}")
     try:

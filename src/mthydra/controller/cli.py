@@ -239,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
     amp.add_argument("--db-path", default=DEFAULT_DB)
     amp.add_argument("--config", default="/etc/mthydra/controller.toml")
 
+    sm = sub.add_parser(
+        "schema-migrate",
+        help="walk apply_schema to bring DB up to the code's SCHEMA_VERSION (R-D7)",
+    )
+    sm.add_argument("--db-path", default=DEFAULT_DB)
+
     # serve — long-running daemon stub (spec F will expand this)
     srv_p = sub.add_parser(
         "serve",
@@ -952,6 +958,9 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "authority-migrate-placeholder":
         return _cmd_authority_migrate_placeholder(args)
+
+    if args.cmd == "schema-migrate":
+        return _cmd_schema_migrate(args)
 
     if args.cmd == "promote-active":
         return _cmd_promote_active(args)
@@ -2040,6 +2049,41 @@ def _cmd_authority_rotate(args) -> int:
                                              "retired_generation": current.generation}))
         print(f"authority-rotate: new generation {new_gen} active; "
               f"generation {current.generation} retired")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_schema_migrate(args) -> int:
+    """R-D7: walk apply_schema to bring an existing DB up to the code's
+    SCHEMA_VERSION. apply_schema() is otherwise only called by fresh init
+    or by standby promote, leaving existing-DB upgrades with no path to
+    migrate forward."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
+
+    try:
+        conn = connect(args.db_path)
+    except OSError as e:
+        print(f"schema-migrate: cannot open --db-path: {e}", file=sys.stderr)
+        return 2
+    try:
+        row = conn.execute(
+            "SELECT version FROM schema_version WHERE rowid=1"
+        ).fetchone()
+        before = int(row[0]) if row else None
+        if before == SCHEMA_VERSION:
+            print(f"schema-migrate: already at v{SCHEMA_VERSION}")
+            return 0
+        try:
+            apply_schema(conn)
+        except Exception as e:
+            print(f"schema-migrate: migration failed: {e}", file=sys.stderr)
+            return 3
+        after = conn.execute(
+            "SELECT version FROM schema_version WHERE rowid=1"
+        ).fetchone()[0]
+        print(f"schema-migrate: db v{before} → v{after} OK")
         return 0
     finally:
         conn.close()

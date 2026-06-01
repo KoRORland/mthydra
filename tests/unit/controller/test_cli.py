@@ -351,6 +351,44 @@ def test_rotate_provider_credential_unreadable_file_exits_2(tmp_path, capsys):
     assert "rotate-provider-credential: cannot read --credential-file" in err
 
 
+def test_schema_migrate_on_already_current_db_is_noop(tmp_path, capsys):
+    """R-D7: schema-migrate on a DB already at SCHEMA_VERSION must exit 0
+    and report the no-op clearly."""
+    from mthydra.controller.state.schema import SCHEMA_VERSION
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    run(["init", "--db-path", str(db), "--age-recipient-file", str(recipient_file),
+         "--provider-credential", "b2=x"])  # init creates DB at current SCHEMA_VERSION
+    exit_code = run(["schema-migrate", "--db-path", str(db)])
+    assert exit_code == 0
+    assert f"already at v{SCHEMA_VERSION}" in capsys.readouterr().out
+
+
+def test_schema_migrate_walks_from_older_version(tmp_path, capsys):
+    """R-D7: schema-migrate on a DB at v14 must walk apply_schema and end at
+    SCHEMA_VERSION. The user hit this on 2026-06-01 — db=14, code=15, no
+    way to migrate without a python one-liner."""
+    from mthydra.controller.state.schema import SCHEMA_VERSION
+    db = tmp_path / "state.sqlite"
+    recipient_file = tmp_path / "age-recipient.txt"
+    recipient_file.write_text(FAKE_RECIPIENT + "\n")
+    run(["init", "--db-path", str(db), "--age-recipient-file", str(recipient_file),
+         "--provider-credential", "b2=x"])
+    # Force the DB back to an older version to simulate a pre-upgrade state.
+    conn = connect(db)
+    conn.execute("UPDATE schema_version SET version=14 WHERE rowid=1")
+    conn.commit()
+    conn.close()
+    exit_code = run(["schema-migrate", "--db-path", str(db)])
+    assert exit_code == 0
+    assert f"db v14 → v{SCHEMA_VERSION} OK" in capsys.readouterr().out
+    conn = connect(db)
+    assert conn.execute(
+        "SELECT version FROM schema_version WHERE rowid=1"
+    ).fetchone()[0] == SCHEMA_VERSION
+
+
 def test_descriptor_verify_unreadable_payload_exits_2(tmp_path, capsys):
     """R-D4: descriptor-verify with a missing --payload-file must exit 2,
     not raise FileNotFoundError."""
