@@ -67,6 +67,16 @@ def build_image(
     Returns the new image_version (hex sha256). Raises BuildError on any
     failure path; never partially writes (B2 upload precedes DB insert).
     """
+    # S-2: idempotent — skip download + insert if this release already exists.
+    existing = conn.execute(
+        "SELECT image_version FROM ru_images "
+        "WHERE upstream_release=? AND upstream_repo=? "
+        "LIMIT 1",
+        (upstream_release, upstream_repo),
+    ).fetchone()
+    if existing is not None:
+        return existing[0]
+
     get = http_client or _default_http_get
     tmp_dir = Path(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)

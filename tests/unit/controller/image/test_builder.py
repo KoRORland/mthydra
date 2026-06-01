@@ -257,6 +257,52 @@ def test_build_image_b2_upload_failure_no_db_row(conn, tmp_path):
     assert list_images(conn) == []
 
 
+def _make_conn(tmp_path):
+    """Standalone helper: open a fresh in-memory-like DB in tmp_path with full schema."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    c = connect(tmp_path / "state.sqlite")
+    apply_schema(c)
+    return c
+
+
+def test_build_image_idempotent_skip_existing(tmp_path):
+    """If a ru_images row exists for the same upstream_release+repo, skip download."""
+    conn = _make_conn(tmp_path)
+    # Pre-insert a candidate row for the same upstream_release + repo
+    conn.execute(
+        "INSERT INTO ru_images "
+        "(image_version, upstream_release, upstream_repo, binary_url, manifest_url, "
+        " binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('existing_sha256', 'v2.2.8', '9seconds/mtg', '', '', '', 0, 'candidate', 'now')"
+    )
+    conn.commit()
+
+    calls = []
+
+    class FakeB2:
+        def put_image(self, **kw):
+            calls.append(("put_image", kw))
+
+    def never_called_http(url):
+        raise AssertionError(f"http should not be called, but got: {url}")
+
+    result = build_image(
+        conn=conn,
+        b2_destination=FakeB2(),
+        upstream_repo="9seconds/mtg",
+        upstream_release="v2.2.8",
+        asset_filename="mtg-2.2.8-linux-arm64.tar.gz",
+        github_api_url="https://api.github.com",
+        tmp_dir=tmp_path,
+        now="now",
+        http_client=never_called_http,
+    )
+
+    assert result == "existing_sha256"
+    assert len(calls) == 0  # B2 upload not called
+
+
 def test_default_http_get_omits_accept_header(monkeypatch):
     """Regression: previously _default_http_get sent
     Accept: application/octet-stream for all requests, which made GitHub
