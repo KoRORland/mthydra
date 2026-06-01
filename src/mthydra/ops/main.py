@@ -1131,6 +1131,23 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--dry-run", action="store_true")
     # `promote_yes` is set only by tests via Namespace; no CLI flag (O-D7).
 
+    # vantage-setup  —  T-Task 2 one-command vantage SSH provisioning
+    vs = sub.add_parser(
+        "vantage-setup",
+        help="one-command vantage SSH provisioning (replaces quickstart §7.7 manual steps)",
+    )
+    vs.add_argument("--vantage-id", required=True,
+                    help="must match a vantage-add row in the controller DB")
+    vs.add_argument("--vantage-host", required=True,
+                    help="public IPv4 / hostname of the vantage VPS")
+    vs.add_argument("--vantage-port", type=int, default=22,
+                    help="vantage SSH port (default 22)")
+    vs.add_argument("--root-key", required=True,
+                    help="path to the SSH private key with root access on the vantage")
+    vs.add_argument("--ssh-dir", default="/var/lib/mthydra/ssh",
+                    help="where to store the probe-runner's keys + known_hosts")
+    vs.add_argument("--db-path", default=_DEFAULT_DB)
+
     # upgrade  —  spec Q one-command controller upgrade
     upg = sub.add_parser(
         "upgrade",
@@ -1198,6 +1215,11 @@ def _dispatch_upgrade(args) -> int:
     return upgrade.cmd_upgrade(args)
 
 
+def _dispatch_vantage_setup(args) -> int:
+    from . import vantage_setup
+    return vantage_setup.cmd_vantage_setup(args)
+
+
 _DISPATCH: dict[str, object] = {
     "setup-host": cmd_setup_host,
     "gen-age-key": cmd_gen_age_key,
@@ -1217,6 +1239,7 @@ _DISPATCH: dict[str, object] = {
     "image-prepare": _dispatch_image_prepare,
     "agent-publish": _dispatch_agent_publish,
     "upgrade": _dispatch_upgrade,
+    "vantage-setup": _dispatch_vantage_setup,
 }
 
 
