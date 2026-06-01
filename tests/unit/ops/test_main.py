@@ -984,3 +984,49 @@ def test_upgrade_subcommand_parses_and_routes(monkeypatch):
     assert args.allow_schema_migration is True
     assert args.no_auto_rollback is False
     assert args.unit == "mthydra-controller"
+
+
+# ---------------------------------------------------------------------------
+# main() must never emit a traceback for an expected/operational failure
+# (2026-06-02: ru-bringup dumped a stack trace when no cover domain existed)
+# ---------------------------------------------------------------------------
+
+
+def test_main_converts_runtime_error_to_clean_exit(monkeypatch, capsys):
+    """A command raising RuntimeError (operational failure, e.g. a missing
+    precondition surfaced from a controller subprocess) must produce a clean
+    [mthydra-ops] ERROR line and a nonzero exit — NOT a Python traceback."""
+    from mthydra.ops import main as m
+
+    def _boom(args):
+        raise RuntimeError(
+            "provision-seed failed (exit 3):\n  no candidate_verified "
+            "cover_domain available; run cover-add + cover-attest-verified")
+    monkeypatch.setitem(m._DISPATCH, "daily-check", _boom)
+
+    # Must return, not raise.
+    rc = m.main(["daily-check", "--db-path", "/tmp/x.sqlite"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no candidate_verified cover_domain" in err
+    assert "Traceback" not in err
+    assert err.startswith("[mthydra-ops] ERROR:")
+
+
+def test_main_converts_called_process_error_to_clean_exit(monkeypatch, capsys):
+    """A leaked CalledProcessError must surface the child's stderr cleanly
+    and preserve its exit code, not traceback."""
+    import subprocess as _sp
+    from mthydra.ops import main as m
+
+    def _boom(args):
+        raise _sp.CalledProcessError(
+            7, ["mthydra-controller", "backup-now"],
+            stderr="backup-now: b2 credential not in DB\n")
+    monkeypatch.setitem(m._DISPATCH, "daily-check", _boom)
+
+    rc = m.main(["daily-check", "--db-path", "/tmp/x.sqlite"])
+    assert rc == 7
+    err = capsys.readouterr().err
+    assert "b2 credential not in DB" in err
+    assert "Traceback" not in err

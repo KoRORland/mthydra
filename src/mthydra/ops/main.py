@@ -1293,7 +1293,24 @@ _DISPATCH: dict[str, object] = {
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     fn = _DISPATCH[args.cmd]
-    return int(fn(args) or 0)
+    try:
+        return int(fn(args) or 0)
+    except KeyboardInterrupt:
+        _err("interrupted")
+        return 130
+    except subprocess.CalledProcessError as e:
+        # A controller subprocess failed. Its own stderr already carried a
+        # clean message; surface it without a Python traceback.
+        msg = (e.stderr or "").strip() if hasattr(e, "stderr") else ""
+        _err(msg or f"{' '.join(map(str, e.cmd))} failed (exit {e.returncode})")
+        return e.returncode or 1
+    except RuntimeError as e:
+        # Expected/operational failure (e.g. a missing precondition like
+        # "no candidate_verified cover_domain available"). The command layer
+        # raises RuntimeError with an operator-facing message; print it
+        # cleanly. A traceback here would imply a bug, which this is not.
+        _err(str(e))
+        return 1
 
 
 if __name__ == "__main__":
