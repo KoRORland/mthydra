@@ -1745,6 +1745,13 @@ def test_image_promote_refused_by_gate(tmp_path, age_recipient, capsys):
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_images import insert_candidate
     conn = connect(db)
+    # Simulate a prior promotion so the gate doesn't auto-bypass (S-1).
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('iv0', 'r', 'r', 'x', 'x', 'x', 1, 'promoted', '2020-01-01T00:00:00Z')"
+    )
+    conn.commit()   # ensure prior-promotion row is visible to gate
     insert_candidate(
         conn, image_version="iv1", upstream_release="v2.1.7",
         upstream_repo="9seconds/mtg", binary_url="x", manifest_url="x",
@@ -3531,6 +3538,12 @@ def test_image_promote_status_failing_gate(tmp_path, age_recipient, capsys):
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_images import insert_candidate
     conn = connect(db)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('iv0', 'r', 'r', 'x', 'x', 'x', 1, 'promoted', '2020-01-01T00:00:00Z')"
+    )
+    conn.commit()   # ensure prior-promotion row is visible to gate
     insert_candidate(
         conn, image_version="iv1", upstream_release="v",
         upstream_repo="r", binary_url="x", manifest_url="x",
@@ -3559,6 +3572,12 @@ def test_image_promote_status_passing_gate(tmp_path, age_recipient, capsys):
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_images import insert_candidate
     conn = connect(db)
+    conn.execute(
+        "INSERT INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('iv0', 'r', 'r', 'x', 'x', 'x', 1, 'promoted', '2020-01-01T00:00:00Z')"
+    )
+    conn.commit()   # ensure prior-promotion row is visible to gate
     insert_candidate(
         conn, image_version="iv1", upstream_release="v",
         upstream_repo="r", binary_url="x", manifest_url="x",

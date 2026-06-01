@@ -48,6 +48,25 @@ def evaluate_promotion_gate(
             "run image-build with --profile-json"
         )
 
+    # S-1: first-ever promotion bypasses canary gate and profile check.
+    # image-build always writes a profile row atomically with the build, so
+    # on the normal flow the profile check would pass anyway. For the first
+    # promotion specifically, missing-profile is acceptable: the operator may
+    # be using a placeholder written by image-prepare.
+    has_promoted = conn.execute(
+        "SELECT 1 FROM ru_images WHERE state='promoted' LIMIT 1",
+    ).fetchone() is not None
+    if not has_promoted:
+        return GateResult(
+            image_version=image_version,
+            passed=True,
+            reasons=(),
+            canary_box_ids=(),
+            canary_probe_rows=0,
+            canary_distinct_vantages=0,
+            pending_kills=(),
+        )
+
     # 2. canary cohort — boxes in live OR terminated state for this image_version
     #    (terminated counts because a canary's death during soak is itself a hard
     #    signal the operator may have observed).

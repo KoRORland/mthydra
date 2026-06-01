@@ -36,6 +36,15 @@ def _seed_vantage(conn, vid, label):
     attest_active(conn, vid, at=NOW)
 
 
+def _seed_prior_promotion(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v_prior', 'r', 'r', 'u', 'm', 'sha', 1, 'promoted', '2000-01-01T00:00:00Z')"
+    )
+    conn.commit()
+
+
 def _seed_canary(conn, box_id, image_version, *, state="live", canary=True):
     insert_box(conn, box_id, "p", "r", f"10.0.0.{ord(box_id[-1]) & 0xff}",
                f"sni-{box_id}", image_version, NOW, is_canary=canary)
@@ -63,6 +72,7 @@ def conn(tmp_path):
 
 
 def test_no_profile_no_canary_fails(conn):
+    _seed_prior_promotion(conn)
     _seed_image(conn)
     res = evaluate_promotion_gate(conn, "v_new", cfg=CFG)
     assert not res.passed
@@ -72,6 +82,7 @@ def test_no_profile_no_canary_fails(conn):
 
 
 def test_profile_present_but_no_canary_fails(conn):
+    _seed_prior_promotion(conn)
     _seed_image(conn)
     pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
     res = evaluate_promotion_gate(conn, "v_new", cfg=CFG)
@@ -81,6 +92,7 @@ def test_profile_present_but_no_canary_fails(conn):
 
 
 def test_canary_with_too_few_cycles_fails(conn):
+    _seed_prior_promotion(conn)
     _seed_image(conn)
     pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
     _seed_vantage(conn, "v1", "kz1")
@@ -96,6 +108,7 @@ def test_canary_with_one_vantage_passes_under_auto_tune(conn):
     threshold auto-tunes down. Previously this scenario always failed
     ("need 2 distinct"); now the operator's config_value=2 is capped at
     the fleet's max (1), so 1 vantage worth of probes is enough."""
+    _seed_prior_promotion(conn)
     _seed_image(conn)
     pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
     _seed_vantage(conn, "v1", "kz1")
@@ -109,6 +122,7 @@ def test_canary_with_two_vantages_but_probed_from_one_fails(conn):
     """W-2: with 2 active vantages, effective_min auto-tunes to max(1, 2//2)
     = 1. CFG value of 2 caps it at min(2, fleet)=2 so the canary needs to
     be probed from both. Probing from only one fails."""
+    _seed_prior_promotion(conn)
     _seed_image(conn)
     pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
     _seed_vantage(conn, "v1", "kz1")
@@ -121,6 +135,7 @@ def test_canary_with_two_vantages_but_probed_from_one_fails(conn):
 
 
 def test_canary_passes_full_gate(conn):
+    _seed_prior_promotion(conn)
     _seed_image(conn)
     pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
     _seed_vantage(conn, "v1", "kz1")
@@ -136,6 +151,7 @@ def test_canary_passes_full_gate(conn):
 
 
 def test_canary_with_kill_pending_fails(conn):
+    _seed_prior_promotion(conn)
     _seed_image(conn)
     pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
     _seed_vantage(conn, "v1", "kz1")
@@ -159,6 +175,7 @@ def test_canary_with_kill_pending_fails(conn):
 
 def test_terminated_canary_counts_in_cohort(conn):
     """A canary that died during soak still counts towards min_canary_boxes."""
+    _seed_prior_promotion(conn)
     _seed_image(conn)
     pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
     _seed_canary(conn, "b1", "v_new", state="terminated")
@@ -172,6 +189,7 @@ def test_terminated_canary_counts_in_cohort(conn):
 def test_terminated_canary_kill_pending_ignored(conn):
     """A terminated canary with stale kill_pending should not block promotion
     — only live canaries' kill_pending counts."""
+    _seed_prior_promotion(conn)
     _seed_image(conn)
     pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
     _seed_vantage(conn, "v1", "kz1")
@@ -194,9 +212,29 @@ def test_terminated_canary_kill_pending_ignored(conn):
 
 def test_non_canary_box_with_image_version_ignored(conn):
     """A non-canary box from the same image_version must not be counted."""
+    _seed_prior_promotion(conn)
     _seed_image(conn)
     pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
     _seed_canary(conn, "b1", "v_new", canary=False)
     res = evaluate_promotion_gate(conn, "v_new", cfg=CFG)
     assert res.canary_box_ids == ()
+    assert any("insufficient canary boxes" in r for r in res.reasons)
+
+
+def test_first_ever_promotion_passes_without_canaries(conn):
+    """No ru_images row has state='promoted' → gate passes even with zero canaries."""
+    _seed_image(conn, state="candidate")
+    pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
+    res = evaluate_promotion_gate(conn, "v_new", cfg=CFG)
+    assert res.passed, res.reasons
+    assert res.reasons == ()
+
+
+def test_second_promotion_still_requires_canaries(conn):
+    """An already-promoted image exists → gate enforces canary thresholds."""
+    _seed_image(conn, version="v_old", state="promoted")
+    _seed_image(conn, version="v_new", state="candidate")
+    pin(conn, image_version="v_new", profile_json='{}', recorded_by="op", at=NOW)
+    res = evaluate_promotion_gate(conn, "v_new", cfg=CFG)
+    assert not res.passed
     assert any("insufficient canary boxes" in r for r in res.reasons)
