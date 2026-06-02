@@ -357,3 +357,4 @@ def test_cloud_init_contains_hardening_bootcmds(conn):
     assert "mount -t tmpfs tmpfs /var/log" in out
     assert "runcmd:" in out
     assert "agent" in out  # generic mention of agent install
+    assert "sing-box.app/install.sh" in out  # RU-side Reality client installed

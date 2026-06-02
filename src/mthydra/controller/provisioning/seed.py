@@ -111,6 +111,9 @@ class SeedBundle:
             "  - chmod 0700 /run/mthydra\n"
             "  - DEBIAN_FRONTEND=noninteractive apt-get update -y\n"
             "  - DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-cryptography iptables\n"
+            # sing-box is the RU-side Reality client the agent's supervisor execs
+            # (mtg is downloaded by the agent; sing-box must be on PATH).
+            "  - curl -fsSL https://sing-box.app/install.sh | sh\n"
             f"  - curl -fsSL '{self.agent_source_url}' -o /run/mthydra/agent.tar.gz\n"
             f"  - echo '{self.agent_source_sha256}  /run/mthydra/agent.tar.gz' | sha256sum -c -\n"
             "  - mkdir -p /run/mthydra/agent\n"
