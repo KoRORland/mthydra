@@ -9,6 +9,18 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**RU agent no longer powers off the box on a startup hiccup.** The agent is
+fail-closed: any startup step (hardening, seed, mtg download, iptables) called
+`shutdown -h now`. But the mtg download commonly fails transiently at boot — the
+VM clock is still at epoch (TLS/presigned-URL expiry reject) or the network/S3
+isn't ready — and powering off then was catastrophic: cloud-init is
+once-per-instance and the seed lives on tmpfs, so the box came back bare and
+unrecoverable, with the failure reason lost to volatile logs. Startup now retries
+(10× / 15s) and, if it still can't come up, **stays up** (exit non-zero) so the
+box is reachable and `journalctl -u mthydra-agent` shows why. Fail-closed
+shutdown is now reserved for *runtime* tamper (the periodic hardening-regression
+check). In practice this means the box self-heals once the clock syncs.
+
 **`mthydra-ops ru-bringup` is now one command (was four).** Quickstart §7.1–7.4
 collapse into `mthydra-ops ru-bringup --provider <p> --region <r>`. The wizard now
 auto-handles every controller-side prerequisite: ensures a promoted mtg image

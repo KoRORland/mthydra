@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 import threading
+import time
 from pathlib import Path
 
 from mthydra.ru_agent import (
@@ -18,17 +18,30 @@ from mthydra.ru_agent import (
     descriptor_refresh,
     hardening,
     iptables,
-    seed as seed_mod,
-    shutdown as shutdown_mod,
     supervisor,
 )
-
+from mthydra.ru_agent import seed as seed_mod
+from mthydra.ru_agent import shutdown as shutdown_mod
 
 SEED_PATH = "/run/mthydra/seed.json"
 MTG_PATH = "/run/mthydra/mtg"
 MTG_CONFIG_PATH = "/run/mthydra/mtg.toml"
 SING_BOX_CONFIG_PATH = "/run/mthydra/sing-box.json"
 TPROXY_PORT = 12345
+
+# Startup failures are usually transient at boot — the VM clock is still at epoch
+# (so the mtg presigned download fails on TLS/expiry), the network/S3 isn't ready,
+# or tmpfs isn't mounted yet. Retry a few times, then GIVE UP BY STAYING UP (exit
+# non-zero, box remains reachable for diagnosis) — never `shutdown -h now` on a
+# startup hiccup: cloud-init is once-per-instance and the seed lives on tmpfs, so
+# a power-off comes back bare and unrecoverable. Fail-closed shutdown is reserved
+# for *runtime* tamper (the periodic hardening-regression check).
+STARTUP_MAX_ATTEMPTS = 10
+STARTUP_RETRY_SECONDS = 15
+
+
+class _StartupError(RuntimeError):
+    """A startup step failed; treated as transient (retry), never power off."""
 
 
 def _terminate(reason: str) -> None:
@@ -56,25 +69,24 @@ def _atomic_write_bytes(path: str, data: bytes) -> None:
     os.replace(tmp, p)
 
 
-def main() -> int:
+def _startup():
+    """Run the startup sequence once. Returns the loaded seed on success;
+    raises _StartupError on any step failure (caller retries — never powers off
+    the box). Hardening → seed → mtg binary → configs → iptables."""
     # 1. Hardening verification.
     try:
         hardening.verify_all()
     except hardening.HardeningError as e:
-        print(f"agent: hardening failed: {e}", file=sys.stderr)
-        _terminate(f"hardening: {e}")
-        return 2
+        raise _StartupError(f"hardening: {e}") from e
 
     # 2. Load + verify seed.
     try:
         s = seed_mod.load(SEED_PATH)
         seed_mod.verify_credential(s)
     except seed_mod.SeedError as e:
-        print(f"agent: seed invalid: {e}", file=sys.stderr)
-        _terminate(f"seed: {e}")
-        return 2
+        raise _StartupError(f"seed: {e}") from e
 
-    # 3. Download + verify mtg binary.
+    # 3. Download + verify mtg binary (the common transient: clock/network/S3).
     try:
         binary.download_and_verify(
             url=s.image["url"],
@@ -82,12 +94,11 @@ def main() -> int:
             out_path=MTG_PATH,
         )
     except binary.BinaryError as e:
-        print(f"agent: binary download failed: {e}", file=sys.stderr)
-        _terminate(f"binary: {e}")
-        return 2
+        raise _StartupError(f"binary: {e}") from e
 
     # 4. Parse initial descriptor and render configs.
-    import base64, json, struct
+    import json
+    import struct
     blob = s.initial_descriptor
     n = struct.unpack(">H", blob[:2])[0]
     descriptor_payload = json.loads(blob[2:2 + n])
@@ -107,8 +118,27 @@ def main() -> int:
             tproxy_port=TPROXY_PORT,
         )
     except iptables.IptablesError as e:
-        print(f"agent: iptables install failed: {e}", file=sys.stderr)
-        _terminate(f"iptables: {e}")
+        raise _StartupError(f"iptables: {e}") from e
+    return s
+
+
+def main() -> int:
+    # Startup with bounded retry. On persistent failure, STAY UP (return 2) for
+    # diagnosis — do not power off (see STARTUP_MAX_ATTEMPTS comment).
+    s = None
+    for attempt in range(1, STARTUP_MAX_ATTEMPTS + 1):
+        try:
+            s = _startup()
+            break
+        except _StartupError as e:
+            print(f"agent: startup failed (attempt {attempt}/"
+                  f"{STARTUP_MAX_ATTEMPTS}): {e}", file=sys.stderr, flush=True)
+            if attempt < STARTUP_MAX_ATTEMPTS:
+                time.sleep(STARTUP_RETRY_SECONDS)
+    if s is None:
+        print("agent: startup did not succeed; staying up for diagnosis "
+              "(box NOT powered off — `journalctl -u mthydra-agent` for details)",
+              file=sys.stderr, flush=True)
         return 2
 
     # 6. Launch children.
@@ -121,6 +151,7 @@ def main() -> int:
 
     # 7. Descriptor refresh loop on a background thread.
     def _rewrite(blob: bytes) -> None:
+        import json
         import struct
         n = struct.unpack(">H", blob[:2])[0]
         payload = json.loads(blob[2:2 + n])
