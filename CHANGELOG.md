@@ -9,6 +9,12 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**`ru-bringup` now mints a 24h image-download URL (was 1h).** The mtg binary URL
+baked into the seed is fetched by the agent at VM boot; the 1h default meant that
+if you took longer than an hour to paste cloud-init, create the VM, and boot it,
+the box came up with an expired download URL and never started mtg. `ru-bringup`
+now requests a 24h TTL for that URL.
+
 **Fix: the agent tarball now ships its `mthydra.descriptor` dependency.** The RU
 agent imports `mthydra.descriptor.authority`, but `package_agent` bundled only
 `mthydra/ru_agent/*`, so the box died on boot with

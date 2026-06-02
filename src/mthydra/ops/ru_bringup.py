@@ -81,9 +81,17 @@ def wait_for_reachable(host: str, port: int, sni: str, *,
     return False
 
 
+# The mtg image URL is presigned into the seed and fetched by the agent at VM
+# boot. provision-seed defaults this to 1h, which is hostile to human-in-the-loop
+# provisioning (paste cloud-init → create VM → boot can exceed an hour), leaving
+# the box with an expired download URL. 24h gives a generous boot window.
+_IMAGE_URL_TTL_SECONDS = 86400
+
+
 def mint_seed(provider: str, region: str, *, canary: bool,
               agent_source_url: str, agent_source_sha256: str,
               descriptor_refresh_url: str, cloud_init_out: str | None = None,
+              image_url_ttl_seconds: int = _IMAGE_URL_TTL_SECONDS,
               db_path: str = _DEFAULT_DB,
               config: str = _DEFAULT_CONFIG) -> tuple[str, str]:
     """Run provision-seed; write the stdout cloud-init bundle to cloud_init_out
@@ -104,6 +112,7 @@ def mint_seed(provider: str, region: str, *, canary: bool,
         "--agent-source-url", agent_source_url,
         "--agent-source-sha256", agent_source_sha256,
         "--descriptor-refresh-url", descriptor_refresh_url,
+        "--ttl-seconds", str(image_url_ttl_seconds),
         "--db-path", db_path, "--config", config,
     ]
     if canary:

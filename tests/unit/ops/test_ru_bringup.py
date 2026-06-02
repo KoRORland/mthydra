@@ -90,6 +90,26 @@ def test_mint_seed_writes_cloud_init_and_returns_box_id(monkeypatch, tmp_path):
     assert "selectel" in argv and "ru-msk-1" in argv
 
 
+def test_mint_seed_uses_generous_image_url_ttl(monkeypatch, tmp_path):
+    """The mtg image URL baked into the seed has a TTL; the agent fetches it at
+    VM boot. The default 1h is hostile to human-in-the-loop provisioning (paste
+    cloud-init, create VM, boot can take longer), so the box dies with an expired
+    download URL. mint_seed must request a generous TTL (>= 24h)."""
+    fake_run, calls = _fake_run_factory(
+        stdout_map={"provision-seed": "#cloud-config\n"},
+        stderr_map={"provision-seed": "provision-seed: created box_id=b-ttl\n"})
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    ru_bringup.mint_seed(
+        "timeweb", "ru-moscow-1", canary=False,
+        agent_source_url="u", agent_source_sha256="d",
+        descriptor_refresh_url="r", cloud_init_out=str(tmp_path / "ci.yaml"))
+    argv = calls[0]
+    assert "--ttl-seconds" in argv
+    ttl = int(argv[argv.index("--ttl-seconds") + 1])
+    assert ttl >= 86400
+
+
 def test_mint_seed_defaults_cloud_init_path_when_omitted(monkeypatch):
     """Regression: cmd_ru_bringup passes args.cloud_init_out=None when the
     operator omits --cloud-init-out. mint_seed must default to
