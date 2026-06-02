@@ -19,10 +19,21 @@ _EXCLUDE_DIRS = {"__pycache__"}
 _EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 
 
+# mthydra subpackages the RU agent needs at runtime. ru_agent/seed.py imports
+# mthydra.descriptor.authority (onward-credential + descriptor verification);
+# descriptor.authority itself pulls only stdlib + cryptography (installed on the
+# box via apt). Shipping only ru_agent left the box dying on boot with
+# `ModuleNotFoundError: No module named 'mthydra.descriptor'` (first real RU box,
+# 2026-06-02). controller/* is deliberately NOT shipped — the agent never imports
+# it, and keeping it off an exposed box is good hygiene.
+_AGENT_SUBPACKAGES = ("ru_agent", "descriptor")
+
+
 def package_agent(source_dir: Path | str) -> tuple[bytes, str]:
-    """Tar mthydra/__init__.py + mthydra/ru_agent/* (excluding caches),
-    return (tar_bytes, sha256_hex). Deterministic across runs: file mtimes
-    are zeroed, members are added in sorted-name order, gzip mtime fixed at 0."""
+    """Tar mthydra/__init__.py + the agent's mthydra subpackages (ru_agent +
+    its runtime deps), excluding caches. Return (tar_bytes, sha256_hex).
+    Deterministic across runs: file mtimes are zeroed, members are added in
+    sorted-name order, gzip mtime fixed at 0."""
     src = Path(source_dir)
     members: list[Path] = []
     root = src / "mthydra"
@@ -31,14 +42,15 @@ def package_agent(source_dir: Path | str) -> tuple[bytes, str]:
     init = root / "__init__.py"
     if init.is_file():
         members.append(init)
-    for path in (root / "ru_agent").rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in _EXCLUDE_DIRS for part in path.parts):
-            continue
-        if path.suffix in _EXCLUDE_SUFFIXES:
-            continue
-        members.append(path)
+    for subpkg in _AGENT_SUBPACKAGES:
+        for path in (root / subpkg).rglob("*"):
+            if not path.is_file():
+                continue
+            if any(part in _EXCLUDE_DIRS for part in path.parts):
+                continue
+            if path.suffix in _EXCLUDE_SUFFIXES:
+                continue
+            members.append(path)
     members.sort(key=lambda p: p.relative_to(src).as_posix())
 
     buf = io.BytesIO()

@@ -34,6 +34,28 @@ def test_package_agent_includes_ru_agent_and_init(tmp_path):
     assert not any(n.endswith(".pyc") for n in names)
 
 
+def test_package_agent_includes_descriptor_dependency(tmp_path):
+    """The agent imports `mthydra.descriptor.authority` (ru_agent/seed.py). If the
+    tarball ships only ru_agent, the box dies on boot with
+    `ModuleNotFoundError: No module named 'mthydra.descriptor'`. Discovered
+    2026-06-02 on the first real RU box. The descriptor package must ship too."""
+    src = tmp_path / "src"
+    (src / "mthydra" / "ru_agent").mkdir(parents=True)
+    (src / "mthydra" / "descriptor").mkdir(parents=True)
+    (src / "mthydra" / "__init__.py").write_text("")
+    (src / "mthydra" / "ru_agent" / "__init__.py").write_text("")
+    (src / "mthydra" / "ru_agent" / "seed.py").write_text(
+        "from mthydra.descriptor.authority import verify_onward_credential\n")
+    (src / "mthydra" / "descriptor" / "__init__.py").write_text("")
+    (src / "mthydra" / "descriptor" / "authority.py").write_text("# authority\n")
+
+    tar_bytes, _sha = agent_ops.package_agent(src)
+    with tarfile.open(fileobj=BytesIO(tar_bytes), mode="r:gz") as tf:
+        names = sorted(m.name for m in tf.getmembers())
+    assert "mthydra/descriptor/__init__.py" in names
+    assert "mthydra/descriptor/authority.py" in names
+
+
 def test_package_agent_is_deterministic(tmp_path):
     src = tmp_path / "src"
     (src / "mthydra" / "ru_agent").mkdir(parents=True)

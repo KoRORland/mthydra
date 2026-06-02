@@ -9,6 +9,16 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**Fix: the agent tarball now ships its `mthydra.descriptor` dependency.** The RU
+agent imports `mthydra.descriptor.authority`, but `package_agent` bundled only
+`mthydra/ru_agent/*`, so the box died on boot with
+`ModuleNotFoundError: No module named 'mthydra.descriptor'` and never listened on
+:443. The tarball now includes the `descriptor` package too (its only runtime
+deps are stdlib + `cryptography`, which the box installs via apt). `controller/*`
+is still excluded — the agent never imports it and it shouldn't land on an
+exposed box. Re-publish the agent (`mthydra-ops` auto-republishes on the next
+`ru-bringup`) so new boxes get the complete tarball.
+
 **Fix: `ru-bringup` resume command now actually runs.** When you defer at the
 public-IP prompt, the tool prints `ru-bringup --box-id <id> --public-ip <ip>` to
 resume — but that command was rejected because `--provider`, `--region`, and
