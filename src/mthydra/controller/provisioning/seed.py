@@ -163,9 +163,26 @@ def provision_box(
     # 3. Pick a candidate_verified cover domain (oldest-first by added_at).
     candidates = cover_pool.list_by_state(conn, "candidate_verified")
     if not candidates:
+        # Enrich the message with the pool breakdown so the operator isn't
+        # left guessing. The common MVP case: their only domain is already
+        # in_use (each box consumes one), so adding/attesting another is the
+        # fix — not "I never added one".
+        n_in_use = len(cover_pool.list_by_state(conn, "in_use"))
+        n_unverified = len(cover_pool.list_by_state(conn, "candidate_unverified"))
+        detail = f"(pool: {n_in_use} in_use, {n_unverified} candidate_unverified)"
+        if n_unverified > 0:
+            hint = ("you have unverified domains — attest one with "
+                    "mthydra-controller cover-attest-verified <domain> "
+                    "--vantage <label>")
+        elif n_in_use > 0:
+            hint = ("every cover domain is already in_use (each RU box claims "
+                    "one). Add another: mthydra-controller cover-add <domain> "
+                    "+ cover-attest-verified <domain> --vantage <label>")
+        else:
+            hint = ("add one: mthydra-controller cover-add <domain> + "
+                    "cover-attest-verified <domain> --vantage <label>")
         raise ProvisionError(
-            "no candidate_verified cover_domain available; "
-            "run mthydra-controller cover-add + cover-attest-verified first"
+            f"no candidate_verified cover_domain available {detail}; {hint}"
         )
     candidates_sorted = sorted(candidates, key=lambda c: (c.added_at, c.domain))
     picked = candidates_sorted[0]

@@ -174,6 +174,34 @@ def test_provision_box_refuses_no_cover_domain(conn):
         )
 
 
+def test_provision_box_no_cover_message_explains_in_use(conn):
+    """When the only cover domain is already in_use (each box consumes one),
+    the error must say so + tell the operator to add another — not the
+    misleading 'run cover-add first' (they already did). Discovered
+    2026-06-02: operator had www.cloudflare.com in_use and the bare message
+    made it look like they'd skipped setup."""
+    _seed_authority(conn)
+    _seed_descriptor(conn)
+    _seed_image(conn)
+    # Put a domain into in_use (simulating a prior box that consumed it).
+    from mthydra.controller.state import cover_pool
+    cover_pool.add_candidate(conn, "www.cloudflare.com", added_at=NOW)
+    conn.execute(
+        "UPDATE cover_domain_pool SET state='in_use' WHERE domain=?",
+        ("www.cloudflare.com",),
+    )
+    conn.commit()
+    with pytest.raises(ProvisionError, match="in_use") as ei:
+        provision_box(
+            conn=conn, b2_destination=_b2_mock(),
+            provider="hetzner", region="fsn1",
+            image_signed_url_ttl_seconds=3600, now=NOW, **_V2_KWARGS,
+        )
+    msg = str(ei.value)
+    assert "1 in_use" in msg
+    assert "Add another" in msg or "cover-add" in msg
+
+
 def test_provision_box_refuses_no_descriptor(conn):
     _seed_authority(conn)
     _seed_image(conn)
