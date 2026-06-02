@@ -355,6 +355,9 @@ def test_cloud_init_contains_hardening_bootcmds(conn):
     assert "kernel.core_pattern" in out
     assert "Storage=volatile" in out
     assert "mount -t tmpfs tmpfs /var/log" in out
+    # /run/mthydra needs its own (exec-default) tmpfs — /run is noexec, so the
+    # downloaded mtg binary can't be exec'd there otherwise.
+    assert "tmpfs /run/mthydra" in out
     assert "runcmd:" in out
     assert "agent" in out  # generic mention of agent install
     assert "sing-box.app/install.sh" in out  # RU-side Reality client installed

@@ -98,6 +98,11 @@ class SeedBundle:
             "  - sysctl -w kernel.core_pattern='|/bin/false'\n"
             "  - mkdir -p /var/log /run/mthydra\n"
             "  - mount -t tmpfs tmpfs /var/log\n"
+            # Dedicated tmpfs for /run/mthydra: /run is mounted noexec, so the
+            # mtg binary downloaded there cannot be exec'd. A fresh tmpfs mount
+            # defaults to exec and shadows /run's noexec; it is also a proper
+            # tmpfs mountpoint (satisfies hardening) and stays in RAM.
+            "  - mount -t tmpfs -o nosuid,nodev,mode=0700 tmpfs /run/mthydra\n"
             "  - mkdir -p /etc/systemd/journald.conf.d\n"
             "  - printf '[Journal]\\nStorage=volatile\\n' > /etc/systemd/journald.conf.d/99-mthydra.conf\n"
             "  - systemctl restart systemd-journald\n"
