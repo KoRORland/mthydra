@@ -40,7 +40,7 @@ def test_render_sing_box_config_basic(tmp_path):
     )
     descriptor_payload = {
         "schema": "mthydra.descriptor.v2", "generation": 5,
-        "exits": [
+        "eu_exit_set": [
             {"fingerprint": "fp1", "endpoint": "1.2.3.4:443",
              "weight": 1, "cover_sni": "eu1cover.example",
              "reality_pubkey": "PUBKEY1"},
@@ -77,4 +77,43 @@ def test_render_sing_box_config_empty_exits_raises(tmp_path):
         telegram_dcs={}, issued_at="", issued_by_authority_generation=1,
     )
     with pytest.raises(ConfigError, match="no exits"):
-        render_sing_box_config(seed, {"exits": []}, tproxy_port=12345)
+        render_sing_box_config(seed, {"eu_exit_set": []}, tproxy_port=12345)
+
+
+def test_render_sing_box_config_consumes_real_controller_descriptor(tmp_path):
+    """Regression (2026-06-02, first RU box): the agent must read the descriptor
+    shape the controller actually signs. canonical_bytes emits key 'eu_exit_set';
+    the agent read 'exits', so every real box saw zero exits and refused. Build
+    the descriptor via the controller's own canonical_bytes so any future
+    key/field drift between the two sides fails here instead of on a live box."""
+    from mthydra.descriptor.payload import (
+        DescriptorPayload,
+        EUExit,
+        canonical_bytes,
+    )
+    from mthydra.ru_agent.config_gen import render_sing_box_config
+    from mthydra.ru_agent.seed import Seed
+
+    payload = DescriptorPayload(
+        generation=5, signing_key_gen=1,
+        issued_at="2026-06-02T00:00:00Z", valid_until="2026-06-03T00:00:00Z",
+        eu_exit_set=(
+            EUExit(fingerprint="fp1", endpoint="1.2.3.4:443", weight=1,
+                   cover_sni="eu1.example", reality_pubkey="PUB1"),
+        ),
+        previous_generation_hash=None, next_signing_pubkey=None,
+    )
+    descriptor_payload = json.loads(canonical_bytes(payload))
+    seed = Seed(
+        box_id="b1", sni="cover.example", transport_role="ru_relay",
+        reality_uuid="u1", onward_credential=b"", authority_pubkey_pem="",
+        descriptor_trust_anchors=(), initial_descriptor=b"", image={},
+        descriptor_refresh_url="", agent_source_url="", agent_source_sha256="",
+        telegram_dcs={}, issued_at="", issued_by_authority_generation=1,
+    )
+    out = render_sing_box_config(seed, descriptor_payload, tproxy_port=12345)
+    p = json.loads(out)
+    vless = [o for o in p["outbounds"] if o["type"] == "vless"]
+    assert len(vless) == 1
+    assert vless[0]["tag"] == "exit-fp1"
+    assert vless[0]["tls"]["server_name"] == "eu1.example"

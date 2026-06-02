@@ -9,6 +9,15 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**Fix: agent read the wrong descriptor key (`exits` vs `eu_exit_set`).** The
+controller signs the exit list under `eu_exit_set` (`descriptor.payload`), but the
+agent's `config_gen` read `descriptor_payload.get("exits")` — which never exists —
+so every real box refused with `descriptor contains no exits` regardless of
+configured exits. The unit test had used the same wrong key, so it passed while
+the integration was broken. Fixed the reader and rebuilt the test on the
+controller's own `canonical_bytes`, so any future key/field drift between signer
+and agent fails in CI instead of on a live box.
+
 **RU agent hardening: applies core_pattern + accepts tmpfs-backed paths.** Two
 proven bring-up blockers (first RU box, 2026-06-02, diagnosed from the box):
 - `kernel.core_pattern` — apport's service overwrites it at boot *after*

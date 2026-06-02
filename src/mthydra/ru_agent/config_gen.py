@@ -45,7 +45,9 @@ def render_sing_box_config(
     - outbounds: one Reality outbound per exit + a selector that random-picks
     - selector strategy 'random' for per-connection spread (E-D9)
     """
-    exits = descriptor_payload.get("exits", [])
+    # The controller signs this key as "eu_exit_set" (descriptor.payload
+    # canonical_bytes); reading "exits" silently saw zero exits on every box.
+    exits = descriptor_payload.get("eu_exit_set", [])
     if not exits:
         raise ConfigError("descriptor contains no exits")
 
