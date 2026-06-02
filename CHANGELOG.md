@@ -9,6 +9,14 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**Fix: `ru-bringup` resume command now actually runs.** When you defer at the
+public-IP prompt, the tool prints `ru-bringup --box-id <id> --public-ip <ip>` to
+resume — but that command was rejected because `--provider`, `--region`, and
+`--descriptor-refresh-url` were marked unconditionally required, even though
+resume skips the mint that uses them. Those three are now required only for a
+fresh mint (enforced in the command with a clean error + exit 2 if missing); a
+resume needs only `--box-id` + `--public-ip`.
+
 **Fix: a reclaimed cover domain is now actually reusable.** `ru-box-reclaim`
 returns a never-live box's cover domain to `candidate_verified`, but the
 terminated box still occupied `ru_boxes.sni` (a `UNIQUE` column), so

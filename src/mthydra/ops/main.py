@@ -1122,13 +1122,19 @@ def build_parser() -> argparse.ArgumentParser:
     # ru-bringup
     rb = sub.add_parser("ru-bringup",
                         help="per-box wizard: mint provision-seed → reach → mark-live")
-    rb.add_argument("--provider", required=True)
-    rb.add_argument("--region", required=True)
+    # Not required at the argparse level: resume mode (--box-id) skips the mint
+    # and never uses these. cmd_ru_bringup enforces them for the mint path. This
+    # lets the resume command the tool itself prints actually run.
+    rb.add_argument("--provider", default=None,
+                    help="required for a fresh mint; unused when --box-id resumes")
+    rb.add_argument("--region", default=None,
+                    help="required for a fresh mint; unused when --box-id resumes")
     rb.add_argument("--canary", action="store_true",
                     help="mark as canary (spec D2 soak cohort)")
     rb.add_argument("--agent-source-url", default=None)
     rb.add_argument("--agent-source-sha256", default=None)
-    rb.add_argument("--descriptor-refresh-url", required=True)
+    rb.add_argument("--descriptor-refresh-url", default=None,
+                    help="required for a fresh mint; unused when --box-id resumes")
     rb.add_argument("--cloud-init-out", default=None,
                     help="cloud-init bundle path (default /tmp/ru-cloud-init-<box>.yaml)")
     rb.add_argument("--public-ip", default=None,

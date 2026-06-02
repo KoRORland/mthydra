@@ -314,6 +314,23 @@ def test_cmd_ru_bringup_happy_path(monkeypatch, tmp_path):
     assert box_state["v"] == "live"
 
 
+def test_cmd_ru_bringup_mint_mode_requires_provider(monkeypatch, tmp_path):
+    """Mint mode (no --box-id) needs --provider/--region/--descriptor-refresh-url.
+    Missing → clean error, exit 2, no provision-seed attempted (no traceback)."""
+    calls = []
+    def fake_run(*args, **kw):
+        calls.append(args[0])
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    args = _bringup_args(tmp_path, box_id=None, provider=None, region=None,
+                         descriptor_refresh_url=None)
+    rc = ru_bringup.cmd_ru_bringup(args)
+    assert rc == 2
+    assert "provision-seed" not in calls
+
+
 def test_cmd_ru_bringup_resume_skips_mint(monkeypatch, tmp_path):
     calls = []
     def fake_run(*args, **kw):

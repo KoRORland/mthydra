@@ -810,6 +810,16 @@ def test_ru_bringup_subcommands_parse():
     ])
     assert a.cmd == "ru-bringup" and a.provider == "selectel" and a.canary is True
 
+    # Resume mode: the tool prints `--box-id <id> --public-ip <ip>` as the resume
+    # command, so that must PARSE without --provider/--region/--descriptor-refresh-url
+    # (they're only used for the initial mint, which resume skips).
+    r = p.parse_args([
+        "ru-bringup", "--box-id", "b-1", "--public-ip", "1.2.3.4",
+    ])
+    assert r.box_id == "b-1" and r.public_ip == "1.2.3.4"
+    assert r.provider is None and r.region is None
+    assert r.descriptor_refresh_url is None
+
     b = p.parse_args([
         "ru-image-cycle", "--release", "v1.0.0",
         "--profile-json", "/tmp/p.json", "--canaries", "2",

@@ -274,6 +274,17 @@ def cmd_ru_bringup(args) -> int:
         box_id = args.box_id
         _say(f"resume: using existing box {box_id}; skipping mint")
     else:
+        missing = [
+            flag for flag, val in (
+                ("--provider", args.provider),
+                ("--region", args.region),
+                ("--descriptor-refresh-url", args.descriptor_refresh_url),
+            ) if not val
+        ]
+        if missing:
+            _err(f"a fresh mint requires {', '.join(missing)} "
+                 f"(only --box-id + --public-ip are needed to resume)")
+            return 2
         _say(f"mint: provision-seed for {args.provider}/{args.region}"
              + (" (canary)" if args.canary else ""))
         agent_url, agent_sha = _resolve_agent(args)
