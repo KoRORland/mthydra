@@ -1,4 +1,4 @@
-"""Tests for mthydra.ru_agent.iptables — TPROXY rule install/verify/uninstall."""
+"""Tests for mthydra.ru_agent.iptables — REDIRECT rule install/verify/uninstall."""
 from __future__ import annotations
 
 
@@ -14,13 +14,16 @@ def test_install_runs_iptables_with_expected_args(monkeypatch):
         dc_cidrs_v6=["2001:b28:f23d::/48"],
         tproxy_port=12345,
     )
-    # Expect a TPROXY rule for each v4 + v6 CIDR.
-    v4_calls = [c for c in calls if c[0] == "iptables"]
-    v6_calls = [c for c in calls if c[0] == "ip6tables"]
-    assert len(v4_calls) >= 1
-    assert len(v6_calls) >= 1
-    # tproxy_port appears in the rule.
-    assert any("12345" in " ".join(c) for c in v4_calls)
+    # REDIRECT in the nat table (TPROXY is PREROUTING-only, invalid in OUTPUT).
+    redirect_calls = [c for c in calls if "REDIRECT" in c]
+    assert redirect_calls, "expected REDIRECT rules"
+    assert all("nat" in c and "TPROXY" not in c for c in redirect_calls)
+    assert any(c[0] == "iptables" and "--to-ports" in c and "12345" in c
+               for c in redirect_calls)
+    assert any(c[0] == "ip6tables" for c in redirect_calls)
+    # Idempotent: install tears down any prior chain first (-X before the -N).
+    n_idx = next(i for i, c in enumerate(calls) if "-N" in c)
+    assert any("-X" in c for c in calls[:n_idx]), "install must uninstall first"
 
 
 def test_install_raises_on_failure(monkeypatch):
@@ -42,7 +45,7 @@ def test_verify_installed_detects_present_rules(monkeypatch):
         iptables.subprocess, "run",
         lambda cmd, **kw: type("R", (), {
             "returncode": 0,
-            "stdout": b"-N MTHYDRA_DCS\n-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j TPROXY --on-port 12345\n",
+            "stdout": b"-N MTHYDRA_DCS\n-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j REDIRECT --to-ports 12345\n",
             "stderr": b"",
         })(),
     )
@@ -83,7 +86,7 @@ def test_verify_installed_rejects_substring_cidr_false_positive(monkeypatch):
         iptables.subprocess, "run",
         lambda cmd, **kw: type("R", (), {
             "returncode": 0,
-            "stdout": b"-N MTHYDRA_DCS\n-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j TPROXY --on-port 12345\n",
+            "stdout": b"-N MTHYDRA_DCS\n-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j REDIRECT --to-ports 12345\n",
             "stderr": b"",
         })(),
     )
@@ -91,13 +94,13 @@ def test_verify_installed_rejects_substring_cidr_false_positive(monkeypatch):
 
 
 def test_verify_installed_rejects_substring_port_false_positive(monkeypatch):
-    """L2: a port that is only a substring of the present --on-port must NOT pass."""
+    """L2: a port that is only a substring of the present --to-ports must NOT pass."""
     from mthydra.ru_agent import iptables
     monkeypatch.setattr(
         iptables.subprocess, "run",
         lambda cmd, **kw: type("R", (), {
             "returncode": 0,
-            "stdout": b"-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j TPROXY --on-port 123456\n",
+            "stdout": b"-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j REDIRECT --to-ports 123456\n",
             "stderr": b"",
         })(),
     )
@@ -114,8 +117,8 @@ def test_verify_installed_requires_cidr_and_port_on_same_rule(monkeypatch):
             "returncode": 0,
             # cidr present on one rule, port present on a different rule
             "stdout": (
-                b"-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j TPROXY --on-port 99999\n"
-                b"-A MTHYDRA_DCS -d 10.0.0.0/8 -p tcp -j TPROXY --on-port 12345\n"
+                b"-A MTHYDRA_DCS -d 149.154.160.0/20 -p tcp -j REDIRECT --to-ports 99999\n"
+                b"-A MTHYDRA_DCS -d 10.0.0.0/8 -p tcp -j REDIRECT --to-ports 12345\n"
             ),
             "stderr": b"",
         })(),
@@ -145,7 +148,7 @@ def test_verify_installed_v6_only(monkeypatch):
         assert cmd[0] == "ip6tables"
         return type("R", (), {
             "returncode": 0,
-            "stdout": b"-A MTHYDRA_DCS -d 2001:b28:f23d::/48 -p tcp -j TPROXY --on-port 12345\n",
+            "stdout": b"-A MTHYDRA_DCS -d 2001:b28:f23d::/48 -p tcp -j REDIRECT --to-ports 12345\n",
             "stderr": b"",
         })()
     monkeypatch.setattr(iptables.subprocess, "run", fake_run)

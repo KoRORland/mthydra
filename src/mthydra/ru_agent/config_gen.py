@@ -84,8 +84,10 @@ def render_sing_box_config(
         "log": {"level": "warn", "timestamp": True},
         "inbounds": [
             {
-                "type": "tproxy",
-                "tag": "tproxy-in",
+                # 'redirect' (not 'tproxy'): mtg's traffic is locally generated,
+                # captured via nat/REDIRECT in OUTPUT (TPROXY is PREROUTING-only).
+                "type": "redirect",
+                "tag": "redirect-in",
                 "listen": "127.0.0.1",
                 "listen_port": tproxy_port,
                 "network": "tcp",

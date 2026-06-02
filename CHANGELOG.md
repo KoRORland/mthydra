@@ -9,6 +9,17 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**Fix: RU-side traffic capture uses REDIRECT, not TPROXY (and is idempotent).**
+mtg's connections to the Telegram DCs are locally generated (OUTPUT chain), but
+the agent hooked a TPROXY-bearing chain into OUTPUT — and `xt_TPROXY` is
+PREROUTING-only, so the kernel rejected it with `Invalid argument`. The retry
+then failed on `Chain already exists` because `install` wasn't idempotent. The
+agent now captures via `nat`/`REDIRECT` in OUTPUT (valid for local traffic) into
+sing-box's `redirect` inbound (config_gen switched from `tproxy` to `redirect`),
+and `install` tears down any prior chain first. Loop-safe: only Telegram-DC
+destinations are redirected, so sing-box's own tunnel to the EU exit isn't
+recaptured. (Proven on the first RU box, 2026-06-02.)
+
 **Fix: agent read the wrong descriptor key (`exits` vs `eu_exit_set`).** The
 controller signs the exit list under `eu_exit_set` (`descriptor.payload`), but the
 agent's `config_gen` read `descriptor_payload.get("exits")` — which never exists —

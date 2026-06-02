@@ -60,7 +60,7 @@ def test_render_sing_box_config_basic(tmp_path):
     selector = next(o for o in payload["outbounds"] if o["type"] == "selector")
     assert set(selector["outbounds"]) == {"exit-fp1", "exit-fp2"}
     inbound = payload["inbounds"][0]
-    assert inbound["type"] == "tproxy"
+    assert inbound["type"] == "redirect"
     assert inbound["listen_port"] == 12345
 
 

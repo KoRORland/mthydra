@@ -1,11 +1,20 @@
-"""Install + verify + uninstall iptables/ip6tables TPROXY rules.
+"""Install + verify + uninstall iptables/ip6tables REDIRECT rules.
 
-Outbound traffic to Telegram MTProto DC subnets gets routed into sing-box's
-tproxy inbound on 127.0.0.1:<tproxy_port>. mtg's hardcoded Telegram upstream
-is captured before the kernel actually connects out.
+mtg's outbound connections to the Telegram MTProto DC subnets are locally
+generated (they traverse the OUTPUT chain), so they cannot be captured with
+TPROXY — the kernel's xt_TPROXY target is only valid in mangle/PREROUTING and
+the kernel rejects a TPROXY-bearing chain hooked from OUTPUT with EINVAL. We use
+nat/REDIRECT instead, which is valid in OUTPUT and rewrites the destination to
+sing-box's local redirect inbound (127.0.0.1:<port>). sing-box recovers the
+original destination via SO_ORIGINAL_DST and tunnels it to the EU exit.
+
+Loop-safe by construction: only Telegram-DC destinations are redirected;
+sing-box's own tunnel to the EU exit is not a Telegram DC, so it is never
+recaptured.
 """
 from __future__ import annotations
 
+import contextlib
 import subprocess
 
 
@@ -14,6 +23,7 @@ class IptablesError(RuntimeError):
 
 
 _CHAIN = "MTHYDRA_DCS"
+_TABLE = "nat"
 
 
 def _run(cmd: list[str]) -> str:
@@ -29,29 +39,31 @@ def _run(cmd: list[str]) -> str:
 def install(
     *, dc_cidrs_v4: list[str], dc_cidrs_v6: list[str], tproxy_port: int,
 ) -> None:
-    """Install the mangle-table chain and per-CIDR TPROXY rules."""
+    """Install the nat-table chain and per-CIDR REDIRECT rules.
+
+    Idempotent: any prior install is torn down first, so a retry never trips
+    over a half-created chain ("Chain already exists")."""
+    uninstall()
     for tool, cidrs in (("iptables", dc_cidrs_v4), ("ip6tables", dc_cidrs_v6)):
         if not cidrs:
             continue
-        # Create the chain (or flush if it exists).
-        _run([tool, "-t", "mangle", "-N", _CHAIN])
-        _run([tool, "-t", "mangle", "-F", _CHAIN])
+        _run([tool, "-t", _TABLE, "-N", _CHAIN])
         for cidr in cidrs:
             _run([
-                tool, "-t", "mangle", "-A", _CHAIN,
+                tool, "-t", _TABLE, "-A", _CHAIN,
                 "-d", cidr, "-p", "tcp",
-                "-j", "TPROXY", "--on-port", str(tproxy_port),
+                "-j", "REDIRECT", "--to-ports", str(tproxy_port),
             ])
-        # Hook the chain into OUTPUT (locally-originated traffic).
-        _run([tool, "-t", "mangle", "-A", "OUTPUT", "-j", _CHAIN])
+        # Hook the chain into OUTPUT (locally-originated traffic, e.g. mtg).
+        _run([tool, "-t", _TABLE, "-A", "OUTPUT", "-p", "tcp", "-j", _CHAIN])
 
 
 def _rule_present(out: str, cidr: str, port: int) -> bool:
     """True iff some rule line routes exactly `cidr` to exactly `port`.
 
     Token-exact, not substring: `-d 10.0.0.0/8` must not satisfy a query for
-    `10.0.0.0/16` (or vice-versa), and `--on-port 123456` must not satisfy a
-    query for port 12345. The destination CIDR and the on-port must also be on
+    `10.0.0.0/16` (or vice-versa), and `--to-ports 123456` must not satisfy a
+    query for port 12345. The destination CIDR and the to-ports must also be on
     the *same* rule line.
     """
     port_s = str(port)
@@ -62,7 +74,7 @@ def _rule_present(out: str, cidr: str, port: int) -> bool:
             for i in range(len(toks))
         )
         has_port = any(
-            toks[i] == "--on-port" and i + 1 < len(toks) and toks[i + 1] == port_s
+            toks[i] == "--to-ports" and i + 1 < len(toks) and toks[i + 1] == port_s
             for i in range(len(toks))
         )
         if has_dst and has_port:
@@ -78,7 +90,7 @@ def verify_installed(
         if not cidrs:
             continue
         try:
-            out = _run([tool, "-t", "mangle", "-S", _CHAIN])
+            out = _run([tool, "-t", _TABLE, "-S", _CHAIN])
         except IptablesError:
             return False
         for cidr in cidrs:
@@ -90,15 +102,10 @@ def verify_installed(
 def uninstall() -> None:
     """Remove the chain. Idempotent."""
     for tool in ("iptables", "ip6tables"):
-        try:
-            _run([tool, "-t", "mangle", "-D", "OUTPUT", "-j", _CHAIN])
-        except IptablesError:
-            pass
-        try:
-            _run([tool, "-t", "mangle", "-F", _CHAIN])
-        except IptablesError:
-            pass
-        try:
-            _run([tool, "-t", "mangle", "-X", _CHAIN])
-        except IptablesError:
-            pass
+        for cmd in (
+            [tool, "-t", _TABLE, "-D", "OUTPUT", "-p", "tcp", "-j", _CHAIN],
+            [tool, "-t", _TABLE, "-F", _CHAIN],
+            [tool, "-t", _TABLE, "-X", _CHAIN],
+        ):
+            with contextlib.suppress(IptablesError):
+                _run(cmd)
