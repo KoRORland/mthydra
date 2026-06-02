@@ -335,6 +335,45 @@ def test_cmd_ru_bringup_happy_path(monkeypatch, tmp_path):
     assert box_state["v"] == "live"
 
 
+def test_resolve_agent_republishes_when_source_changed(monkeypatch):
+    """After an upgrade the installed agent source changes. _resolve_agent must
+    detect the packaged sha != published sha and republish — otherwise ru-bringup
+    redeploys a stale/broken tarball (e.g. the missing-mthydra.descriptor one)."""
+    from mthydra.ops import agent_ops
+    monkeypatch.setattr(agent_ops, "package_agent", lambda d: (b"tar", "newsha"))
+    stale = agent_ops.AgentManifest(
+        url="https://old", sha256="oldsha",
+        published_at="2026-06-01T00:00:00Z", expires_at="2099-01-01T00:00:00Z")
+    monkeypatch.setattr(agent_ops, "read_manifest", lambda *a, **k: stale)
+    published = {}
+    def fake_publish(cfg, tar, sha, db, ttl_days=7):
+        published["sha"] = sha
+        return agent_ops.AgentManifest(url="https://new", sha256=sha,
+                                       published_at="x", expires_at="y")
+    monkeypatch.setattr(agent_ops, "publish_agent", fake_publish)
+    args = argparse.Namespace(agent_source_url=None, agent_source_sha256=None,
+                              config=None)
+    url, sha = ru_bringup._resolve_agent(args, cfg=object())
+    assert (url, sha) == ("https://new", "newsha")
+    assert published["sha"] == "newsha"
+
+
+def test_resolve_agent_reuses_when_source_unchanged(monkeypatch):
+    from mthydra.ops import agent_ops
+    monkeypatch.setattr(agent_ops, "package_agent", lambda d: (b"tar", "samesha"))
+    fresh = agent_ops.AgentManifest(
+        url="https://keep", sha256="samesha",
+        published_at="2026-06-01T00:00:00Z", expires_at="2099-01-01T00:00:00Z")
+    monkeypatch.setattr(agent_ops, "read_manifest", lambda *a, **k: fresh)
+    def boom(*a, **k):
+        raise AssertionError("must not republish when source is unchanged + fresh")
+    monkeypatch.setattr(agent_ops, "publish_agent", boom)
+    args = argparse.Namespace(agent_source_url=None, agent_source_sha256=None,
+                              config=None)
+    url, sha = ru_bringup._resolve_agent(args, cfg=object())
+    assert (url, sha) == ("https://keep", "samesha")
+
+
 def test_resolve_descriptor_url_explicit_wins(monkeypatch):
     """An explicit --descriptor-refresh-url is used verbatim, no publish."""
     def boom(*a, **k):

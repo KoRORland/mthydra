@@ -305,33 +305,44 @@ def _prompt_public_ip() -> str | None:
     return ans or None
 
 
+_AGENT_SOURCE_DIR = "/opt/mthydra/src/src"
+
+
 def _resolve_agent(args, cfg=None) -> tuple[str, str]:
     """Return (url, sha256). If args.agent_source_url+sha given, use them.
-    Otherwise read /var/lib/mthydra/agent.json; auto-publish if missing or
-    expiry within 24h. Caller passes cfg (or None to load on demand)."""
+    Otherwise package the installed source and read /var/lib/mthydra/agent.json;
+    (re)publish if the manifest is missing, the packaged sha differs (source
+    changed, e.g. after an upgrade), or it expires within 24h. Caller passes cfg
+    (or None to load on demand)."""
     if args.agent_source_url and args.agent_source_sha256:
         return args.agent_source_url, args.agent_source_sha256
 
-    from . import agent_ops
     from datetime import UTC, datetime, timedelta
+
+    from . import agent_ops
+    # Package the installed source up front: lets us detect drift vs. what's
+    # published AND reuse the bytes if we publish. Cheap (small in-memory tar).
+    tar_bytes, sha = agent_ops.package_agent(_AGENT_SOURCE_DIR)
     manifest = agent_ops.read_manifest()
     need_publish = manifest is None
     if manifest is not None:
-        try:
-            exp = datetime.strptime(manifest.expires_at, "%Y-%m-%dT%H:%M:%SZ"
-                                    ).replace(tzinfo=UTC)
-        except ValueError:
-            need_publish = True
+        if manifest.sha256 != sha:
+            need_publish = True   # installed source changed since last publish
         else:
-            if exp - datetime.now(UTC) < timedelta(hours=24):
+            try:
+                exp = datetime.strptime(manifest.expires_at, "%Y-%m-%dT%H:%M:%SZ"
+                                        ).replace(tzinfo=UTC)
+            except ValueError:
                 need_publish = True
+            else:
+                if exp - datetime.now(UTC) < timedelta(hours=24):
+                    need_publish = True
     if need_publish:
         if cfg is None:
             from mthydra.controller.config import load_config
-            cfg = load_config(Path(args.config or "/etc/mthydra/controller.toml"))
-        db_path = args.db_path
-        tar_bytes, sha = agent_ops.package_agent("/opt/mthydra/src/src")
-        manifest = agent_ops.publish_agent(cfg, tar_bytes, sha, db_path, ttl_days=7)
+            cfg = load_config(Path(args.config or _DEFAULT_CONFIG))
+        manifest = agent_ops.publish_agent(cfg, tar_bytes, sha, _DEFAULT_DB,
+                                           ttl_days=7)
     return manifest.url, manifest.sha256
 
 
