@@ -234,6 +234,16 @@ def provision_box(
     }, separators=(",", ":"))
     try:
         conn.execute("BEGIN")
+        # A terminated box has no claim on an sni (ru_boxes.sni is UNIQUE). A
+        # reclaimed never-live orphan returns its cover domain to the pool but
+        # stays in the table holding that domain in sni; without this, reusing
+        # the reclaimed domain dies with 'UNIQUE constraint failed: ru_boxes.sni'.
+        # Release any terminated box's claim on the picked domain first.
+        conn.execute(
+            "UPDATE ru_boxes SET sni = 'released:' || box_id "
+            "WHERE sni = ? AND state = 'terminated'",
+            (picked.domain,),
+        )
         # ru_boxes insert (state='provisioning')
         conn.execute(
             "INSERT INTO ru_boxes "

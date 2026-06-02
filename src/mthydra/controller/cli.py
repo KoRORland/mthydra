@@ -2979,7 +2979,7 @@ def _cmd_provision_seed(args) -> int:
             print(f"provision-seed: {e}", file=sys.stderr)
             return 3
         except Exception as e:
-            print(f"provision-seed: B2 URL minting failed: {e}", file=sys.stderr)
+            print(f"provision-seed: failed: {e}", file=sys.stderr)
             return 5
 
         if args.format == "json":

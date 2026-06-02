@@ -202,6 +202,41 @@ def test_provision_box_no_cover_message_explains_in_use(conn):
     assert "Add another" in msg or "cover-add" in msg
 
 
+def test_provision_box_reuses_domain_after_reclaim(conn):
+    """Regression (2026-06-02, MVP bring-up): reclaiming a never-live box returns
+    its cover domain to candidate_verified, but the terminated box still occupied
+    ru_boxes.sni (UNIQUE). Re-provisioning that domain then died with
+    'UNIQUE constraint failed: ru_boxes.sni'. A terminated box has no claim on an
+    sni — provision_box must release it so the reclaimed domain is truly reusable."""
+    from mthydra.controller.provisioning.reclaim import reclaim_box
+    _seed_authority(conn)
+    _seed_descriptor(conn)
+    _seed_image(conn)
+    _seed_cover(conn, "example.cover")
+    seed1 = provision_box(
+        conn=conn, b2_destination=_b2_mock(), provider="hetzner", region="fsn1",
+        image_signed_url_ttl_seconds=3600, now=NOW, **_V2_KWARGS,
+    )
+    reclaim_box(conn, seed1.box_id, now="2026-05-22T00:00:00Z")
+    # Domain is back in the pool; the terminated box is still in the table.
+    from mthydra.controller.state import cover_pool
+    assert [c.domain for c in
+            cover_pool.list_by_state(conn, "candidate_verified")] == ["example.cover"]
+
+    seed2 = provision_box(
+        conn=conn, b2_destination=_b2_mock(), provider="hetzner", region="fsn1",
+        image_signed_url_ttl_seconds=3600, now="2026-05-23T00:00:00Z", **_V2_KWARGS,
+    )
+    assert seed2.sni == "example.cover"
+    assert seed2.box_id != seed1.box_id
+    # Exactly one box holds the live sni now (the new one); the terminated box
+    # released its claim.
+    n = conn.execute(
+        "SELECT COUNT(*) FROM ru_boxes WHERE sni='example.cover'"
+    ).fetchone()[0]
+    assert n == 1
+
+
 def test_provision_box_refuses_no_descriptor(conn):
     _seed_authority(conn)
     _seed_image(conn)

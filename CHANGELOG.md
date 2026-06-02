@@ -9,6 +9,16 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**Fix: a reclaimed cover domain is now actually reusable.** `ru-box-reclaim`
+returns a never-live box's cover domain to `candidate_verified`, but the
+terminated box still occupied `ru_boxes.sni` (a `UNIQUE` column), so
+re-provisioning that domain died with
+`UNIQUE constraint failed: ru_boxes.sni`. A terminated box has no claim on an
+SNI — `provision-seed` now releases any terminated box's claim on the chosen
+domain before inserting the new box. No migration needed; the next
+`provision-seed` self-heals an existing stuck domain. Also: the catch-all in
+`provision-seed` no longer mislabels every error as "B2 URL minting failed".
+
 **`mthydra-ops upgrade` now defaults to `main`.** Previously, with no `--ref`,
 upgrade resolved the *latest GitHub release tag* — but the project doesn't tag
 per fix (fixes land on `main`), so plain `mthydra-ops upgrade` never picked up
