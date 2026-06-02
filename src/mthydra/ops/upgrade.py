@@ -65,11 +65,22 @@ def _call_resolve_latest_tag(*, upstream_repo: str, github_api_url: str) -> str:
 
 def _resolve_target_ref(*, ref: str | None, upstream_repo: str,
                         github_api_url: str) -> str:
-    """Explicit --ref wins; else default to the latest GitHub release tag."""
-    if ref:
-        return ref
-    return _call_resolve_latest_tag(
-        upstream_repo=upstream_repo, github_api_url=github_api_url)
+    """Resolve the git ref to upgrade to.
+
+    - No --ref → 'main'. Per AGENTS.md, fixes and features land on main and are
+      picked up via `mthydra-ops upgrade`; the project does not cut a release tag
+      per fix, so defaulting to the latest tag would strand operators on stale
+      code. Tracking main is safe here: upgrade takes a pre-upgrade backup, runs
+      preflight health, gates schema migration, and auto-rolls-back on failure.
+    - `--ref latest` → opt in to the newest GitHub release tag.
+    - `--ref <branch|tag|sha>` → that exact ref.
+    """
+    if ref is None:
+        return "main"
+    if ref == "latest":
+        return _call_resolve_latest_tag(
+            upstream_repo=upstream_repo, github_api_url=github_api_url)
+    return ref
 
 
 def _parse_schema_version_constant(schema_py: Path) -> int:

@@ -49,11 +49,27 @@ def test_resolve_target_ref_explicit_wins(monkeypatch):
     ) == "v0.0.5"
 
 
-def test_resolve_target_ref_falls_back_to_latest(monkeypatch):
+def test_resolve_target_ref_defaults_to_main(monkeypatch):
+    """No --ref must track main — AGENTS.md: fixes land on main and are picked
+    up via `mthydra-ops upgrade`. It must NOT call GitHub for a release tag (the
+    project does not tag per fix, so the latest tag is stale)."""
+    monkeypatch.setattr(
+        upgrade, "_call_resolve_latest_tag",
+        lambda **kw: (_ for _ in ()).throw(
+            AssertionError("must not resolve a release tag by default")))
+    assert upgrade._resolve_target_ref(
+        ref=None,
+        upstream_repo="KoRORland/mthydra",
+        github_api_url="https://api.github.com",
+    ) == "main"
+
+
+def test_resolve_target_ref_latest_keyword_resolves_tag(monkeypatch):
+    """`--ref latest` opts in to the newest GitHub release tag."""
     monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
                         lambda **kw: "v0.1.0")
     assert upgrade._resolve_target_ref(
-        ref=None,
+        ref="latest",
         upstream_repo="KoRORland/mthydra",
         github_api_url="https://api.github.com",
     ) == "v0.1.0"

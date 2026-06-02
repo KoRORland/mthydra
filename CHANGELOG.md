@@ -9,6 +9,16 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**`mthydra-ops upgrade` now defaults to `main`.** Previously, with no `--ref`,
+upgrade resolved the *latest GitHub release tag* — but the project doesn't tag
+per fix (fixes land on `main`), so plain `mthydra-ops upgrade` never picked up
+new code and silently no-op'd on "already at target ref". This contradicted the
+documented contract (AGENTS.md: "fixes … are picked up via `mthydra-ops
+upgrade`"). Now: no `--ref` → `main`; `--ref latest` → newest release tag;
+`--ref <branch|tag|sha>` → that ref. Tracking main is safe — upgrade still takes
+a pre-upgrade backup, runs preflight health, gates schema migration, and
+auto-rolls-back on failure.
+
 **`mthydra-ops ru-bringup` now auto-reclaims on a failed mint.** `provision-seed`
 commits the box row and consumes a cover domain before the cloud-init bundle is
 written. If that post-commit step crashes (the bug class that stranded box

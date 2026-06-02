@@ -1201,7 +1201,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="upgrade controller in place: backup → checkout → pip → restart → verify",
     )
     upg.add_argument("--ref", default=None,
-                     help="target git ref (branch/tag/SHA); default = latest GitHub release tag")
+                     help="target git ref (branch/tag/SHA); default = 'main'. "
+                          "Use '--ref latest' for the newest GitHub release tag")
     upg.add_argument("--no-auto-rollback", action="store_true",
                      help="do NOT auto-revert to prior SHA on verify failure")
     upg.add_argument("--allow-schema-migration", action="store_true",
@@ -1215,7 +1216,7 @@ def build_parser() -> argparse.ArgumentParser:
     upg.add_argument("--db-path", default=_DEFAULT_DB)
     upg.add_argument("--config", default=_DEFAULT_CONFIG)
     upg.add_argument("--upstream-repo", default="KoRORland/mthydra",
-                     help="GitHub repo (owner/name) used when --ref is omitted")
+                     help="GitHub repo (owner/name) used to resolve '--ref latest'")
     upg.add_argument("--github-api-url", default="https://api.github.com")
     upg.add_argument("--verify-timeout", type=int, default=120,
                      help="seconds to wait for service to become active after restart")
