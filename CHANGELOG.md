@@ -9,6 +9,16 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**`mthydra-ops ru-bringup` now auto-reclaims on a failed mint.** `provision-seed`
+commits the box row and consumes a cover domain before the cloud-init bundle is
+written. If that post-commit step crashes (the bug class that stranded box
+`c1a72a8d` holding `www.cloudflare.com`), `ru-bringup` now auto-runs
+`ru-box-reclaim` on the just-minted box and re-raises the original error — so a
+failed bring-up leaves no orphan and no consumed cover domain. Reclaim only fires
+in the window before any VM exists; once you have the bundle, deferred/unreachable
+boxes stay resumable as before. A reclaim that itself fails prints a manual-fix
+hint and never masks the original error.
+
 **New: `mthydra-controller ru-box-reclaim <box_id>`.** Cleans up a box stuck
 in `provisioning` that never went live — the residue left behind when
 provisioning crashes *after* `provision-seed` commits (it writes the `ru_boxes`

@@ -125,13 +125,39 @@ def mint_seed(provider: str, region: str, *, canary: bool,
         raise RuntimeError(
             "provision-seed succeeded but emitted no 'box_id=' line "
             "(controller version mismatch?)")
-    if cloud_init_out is None:
-        cloud_init_out = f"/tmp/ru-cloud-init-{box_id}.yaml"
-    out = Path(cloud_init_out)
-    out.write_text(res.stdout or "")
-    with contextlib.suppress(OSError):  # best-effort; tmpfs / non-owner cases
-        out.chmod(0o600)
+    # provision-seed has now COMMITTED the ru_boxes row + flipped the cover
+    # domain candidate_verified -> in_use. From here until we return a usable
+    # bundle, no VM exists, so any failure must auto-reclaim the box (return its
+    # cover domain to candidate_verified) — otherwise it's stranded as an orphan
+    # (the c1a72a8d class: a Path(None) crash here left a box holding
+    # www.cloudflare.com). Reclaim is safe precisely because nothing booted yet.
+    try:
+        if cloud_init_out is None:
+            cloud_init_out = f"/tmp/ru-cloud-init-{box_id}.yaml"
+        out = Path(cloud_init_out)
+        out.write_text(res.stdout or "")
+        with contextlib.suppress(OSError):  # best-effort; tmpfs / non-owner cases
+            out.chmod(0o600)
+    except BaseException:
+        _reclaim_orphan(box_id, db_path=db_path)
+        raise
     return box_id, cloud_init_out
+
+
+def _reclaim_orphan(box_id: str, *, db_path: str = _DEFAULT_DB) -> None:
+    """Best-effort auto-reclaim of a box minted by provision-seed when a later
+    bring-up step fails before any VM exists. Never masks the original error: a
+    reclaim failure is reported to stderr but swallowed."""
+    _err(f"mint failed after provision-seed committed; auto-reclaiming {box_id}")
+    try:
+        _run_controller(
+            "ru-box-reclaim", box_id,
+            "--reason", "ru-bringup auto-rollback (mint failed before VM existed)",
+            "--db-path", db_path,
+        )
+    except Exception as e:  # noqa: BLE001 — best-effort cleanup
+        _err(f"auto-reclaim of {box_id} failed: {e}; "
+             f"run `mthydra-controller ru-box-reclaim {box_id}` manually")
 
 
 def mark_live(box_id: str, public_ip: str,

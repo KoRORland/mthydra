@@ -115,6 +115,48 @@ def test_mint_seed_defaults_cloud_init_path_when_omitted(monkeypatch):
     Path(path).unlink(missing_ok=True)
 
 
+def test_mint_seed_reclaims_box_when_post_commit_step_fails(monkeypatch, tmp_path):
+    """provision-seed commits the box + cover-domain consumption before mint_seed
+    finishes. If a later step crashes (the c1a72a8d class: Path(None) after
+    commit), mint_seed must auto-reclaim the just-minted box so the operator is
+    not left with an orphan holding a cover domain — then re-raise the original
+    error."""
+    fake_capture, _ = _fake_run_factory(
+        stdout_map={"provision-seed": "#cloud-config\n"},
+        stderr_map={"provision-seed": "provision-seed: created box_id=b-orphan\n"})
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_capture, raising=False)
+    reclaim_run, calls = _fake_run_factory()
+    monkeypatch.setattr(ru_bringup, "_run_controller", reclaim_run, raising=False)
+    # Force the post-commit cloud-init write to fail (parent dir missing).
+    bad = tmp_path / "nope" / "x.yaml"
+    with pytest.raises(OSError):
+        ru_bringup.mint_seed(
+            "selectel", "ru-msk-1", canary=False,
+            agent_source_url="u", agent_source_sha256="d",
+            descriptor_refresh_url="r", cloud_init_out=str(bad))
+    reclaim_calls = [c for c in calls if c and c[0] == "ru-box-reclaim"]
+    assert reclaim_calls, "expected ru-box-reclaim to be invoked on post-commit failure"
+    assert "b-orphan" in reclaim_calls[0]
+
+
+def test_mint_seed_does_not_reclaim_on_success(monkeypatch, tmp_path):
+    """A clean mint must never reclaim — the box is a legitimate pending provision."""
+    fake_capture, _ = _fake_run_factory(
+        stdout_map={"provision-seed": "#cloud-config\n"},
+        stderr_map={"provision-seed": "provision-seed: created box_id=b-ok\n"})
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_capture, raising=False)
+    other_run, calls = _fake_run_factory()
+    monkeypatch.setattr(ru_bringup, "_run_controller", other_run, raising=False)
+    box_id, _path = ru_bringup.mint_seed(
+        "selectel", "ru-msk-1", canary=False,
+        agent_source_url="u", agent_source_sha256="d",
+        descriptor_refresh_url="r", cloud_init_out=str(tmp_path / "x.yaml"))
+    assert box_id == "b-ok"
+    assert [c for c in calls if c and c[0] == "ru-box-reclaim"] == []
+
+
 def test_mark_live_invokes_controller(monkeypatch):
     fake_run, calls = _fake_run_factory()
     monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
