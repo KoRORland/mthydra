@@ -466,67 +466,27 @@ The `verified_count` field should be `1`.
 
 # Part 7 — First RU box (15 min)
 
-Spec P put most of the busywork on the EU controller itself. The flow is now: one command to register the mtg image, one command to publish the ru-agent tarball, one command to bring up the box. The operator's only RU-side touchpoint is pasting the cloud-init bundle into the TimeWeb console and reporting the public IP.
+Spec P put all the controller-side busywork inside `ru-bringup`. It is **one command** — it ensures the mtg image is promoted, publishes the ru-agent tarball, publishes + presigns the descriptor-refresh URL, then mints the box. Your only RU-side touchpoint is pasting the cloud-init bundle into the TimeWeb console and reporting the public IP.
 
-### 7.1 Register and promote the mtg image (one command)
+### 7.1 Bring up the RU box (one command)
 
 On the EU host as the `mthydra` user:
 ```bash
-mthydra-ops image-prepare --yes
+mthydra-ops ru-bringup --provider timeweb --region ru-msk-1
 ```
 
-This resolves the latest `9seconds/mtg` release on GitHub, picks `linux-amd64`, downloads + sha-verifies the tarball, uploads it to your S3 bucket, generates a minimal placeholder profile, registers the candidate row, and promotes the image. After this:
-```bash
-mthydra-controller image-current
-```
-shows a promoted image (`iv-v2.2.8` or whatever the current upstream release is).
+That's it — no image-prepare, no agent-publish, no descriptor-publish-now, no presigned URL to copy. The wizard:
+1. **Image** — ensures a promoted mtg image exists; if none, runs `image-prepare` automatically (resolves the latest `9seconds/mtg` release, downloads + sha-verifies, uploads to S3, promotes). Already promoted → skipped.
+2. **Agent** — reads `/var/lib/mthydra/agent.json`; (re)publishes the `mthydra/ru_agent` + `mthydra/descriptor` tarball to S3 if missing or expiring within 24h.
+3. **Descriptor** — publishes the latest signed descriptor to `s3://<bucket>/descriptors/current` and presigns it (you never paste the URL).
+4. **Mint** — claims a cover domain + image + onward credential, requests a 24h image-download URL, writes a cloud-init bundle to `/tmp/ru-cloud-init-<box>.yaml` (mode 0600), and prompts: `Public IP when VM is up (Ctrl-C to defer):`.
 
-If you want a specific release instead of "latest", pass `--release v2.2.8 --arch linux-amd64`. If you want to inspect the result before promoting, drop `--yes` and the wizard prompts `[y/N]` after build.
+Overrides, if you ever need them:
+- Pin a specific image first with `mthydra-ops image-prepare --release v2.2.8 --arch linux-amd64 --yes`.
+- Supply your own descriptor URL with `--descriptor-refresh-url '<url>'` (single-quote it — presigned URLs contain `&`).
+- The individual commands (`image-prepare`, `agent-publish`, `descriptor-publish-now`) still exist for manual/cron use; `ru-bringup` just calls the same logic so you don't have to.
 
-### 7.2 Publish the ru-agent tarball (one command)
-
-```bash
-mthydra-ops agent-publish
-```
-
-This tars `mthydra/ru_agent` from your installed source, uploads it to your S3 bucket under `agent/mthydra-ru-agent-<sha12>.tar.gz` (content-addressed — re-publishing the same code is a no-op), presigns the URL for 7 days, and writes `/var/lib/mthydra/agent.json`. The bring-up wizard reads that file automatically — you never copy the URL anywhere.
-
-### 7.3 Publish + presign the descriptor-refresh URL (one command)
-
-The RU box polls the controller's signed descriptor (rotated every hour by the controller). The descriptor must be uploaded to S3 and a presigned URL must be generated. On the EU host as the `mthydra` user:
-
-```bash
-mthydra-controller descriptor-publish-now \
-    --db-path /var/lib/mthydra/state.sqlite \
-    --config /etc/mthydra/controller.toml
-```
-
-This:
-- Reads the latest signed descriptor from the DB (run `descriptor-sign-now` first if there isn't one — the install does this automatically as the `first-descriptor` phase).
-- Encodes it in the wire format the RU agent expects (length-prefixed payload + Ed25519 signature).
-- Uploads to `s3://<bucket>/descriptors/current` under Object Lock GOVERNANCE.
-- Presigns the GET URL with a 30-day TTL (override with `--ttl-seconds`).
-- Prints `URL` + expiry to stdout.
-
-Save the URL. Call it `DESCRIPTOR_REFRESH_URL`. You'll re-run `descriptor-publish-now` every ~25 days to refresh the presigned URL (no laptop aws-cli needed — the controller has the credentials).
-
-> **Older quickstart said `aws s3 presign s3://bucket/descriptors/current ...` on your laptop.** That step pointed at a key that didn't exist (the controller never uploaded the descriptor anywhere). RU boxes would have 404'd on every refresh. Use `descriptor-publish-now` instead — it does both halves (upload + presign).
-
-### 7.4 Bring up the RU box (one command)
-
-```bash
-mthydra-ops ru-bringup \
-    --provider timeweb --region ru-msk-1 \
-    --descriptor-refresh-url "<DESCRIPTOR_REFRESH_URL>"
-```
-
-The wizard:
-1. Reads `/var/lib/mthydra/agent.json` for the agent URL + sha (re-publishes automatically if it's missing or expiring within 24h).
-2. Mints a provision-seed (atomically claims a cover domain + image + onward credential) → outputs a `box_id`.
-3. Writes a cloud-init bundle to `/tmp/ru-cloud-init-<box>.yaml` (mode 0600).
-4. Prints "Paste the cloud-init … come back with the public IP" and prompts: `Public IP when VM is up (Ctrl-C to defer):`.
-
-### 7.5 Boot the TimeWeb VM with that cloud-init
+### 7.2 Boot the TimeWeb VM with that cloud-init
 
 1. `cat /tmp/ru-cloud-init-*.yaml` — copy the entire content to your clipboard.
 2. TimeWeb dashboard → **Cloud** → **Create server**:
@@ -538,7 +498,7 @@ The wizard:
 3. Create. Wait ~2 minutes for boot + agent download + start.
 4. Copy the assigned **public IPv4**.
 
-### 7.6 Give the wizard the IP
+### 7.3 Give the wizard the IP
 
 Paste the IPv4 into the wizard prompt + Enter. The wizard:
 - Connects to `<IP>:443` and attempts a TLS handshake.
@@ -547,7 +507,7 @@ Paste the IPv4 into the wizard prompt + Enter. The wizard:
 
 If the wizard times out, open the TimeWeb web console for the VM and run `journalctl -u cloud-final -n 80 --no-pager` to see what cloud-init did. Most often the VM has no outbound internet (check TimeWeb firewall) or the agent presigned URL expired (`mthydra-ops agent-publish` again to refresh).
 
-### 7.7 Wire your vantage for automatic probes (one command)
+### 7.4 Wire your vantage for automatic probes (one command)
 
 The spec-P probe runner SSHes into each registered vantage every 30 minutes and runs `tls_fall_through` / `cover_domain_consistency` / `surface_scan` for every live box. To get a vantage onto that loop, you need (a) a probe SSH key on the EU host, (b) a `probe` user with that key on the vantage, (c) `openssl` + `ncat` on the vantage, (d) the vantage's host key pinned in known_hosts, (e) the SSH config registered with the controller. **One command does all five:**
 

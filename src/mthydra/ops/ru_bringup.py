@@ -229,6 +229,64 @@ def box_info(box_id: str, *, db_path: str = _DEFAULT_DB) -> dict | None:
     return None
 
 
+def _extract_url(text: str) -> str | None:
+    """Return the last http(s) URL line in `text` (descriptor-publish-now prints
+    a status line then the presigned URL on its own line)."""
+    for line in reversed(text.splitlines()):
+        s = line.strip()
+        if s.startswith(("http://", "https://")):
+            return s
+    return None
+
+
+def _ensure_image(args) -> None:
+    """Ensure a promoted mtg image exists (quickstart §7.1). If none, run
+    image-prepare automatically so bring-up is a single command."""
+    res = _run_controller("image-current", "--json",
+                          "--db-path", _DEFAULT_DB, capture=True)
+    try:
+        payload = json.loads(res.stdout or "null")
+    except json.JSONDecodeError:
+        payload = None
+    if payload:
+        _say(f"image: {payload.get('image_version', '?')} already promoted")
+        return
+    _say("image: none promoted — running image-prepare (auto)")
+    from types import SimpleNamespace
+
+    from . import image_ops
+    prep = SimpleNamespace(
+        release="latest", arch=None, profile_json="auto",
+        upstream_repo="9seconds/mtg", github_api_url="https://api.github.com",
+        db_path=_DEFAULT_DB, config=args.config or _DEFAULT_CONFIG,
+        yes=True, non_interactive=True, verbose=False, quiet=False, dry_run=False,
+    )
+    rc = image_ops.cmd_image_prepare(prep)
+    if rc != 0:
+        raise RuntimeError(f"auto image-prepare failed (exit {rc})")
+
+
+def _resolve_descriptor_url(args) -> str:
+    """Return the descriptor-refresh URL (quickstart §7.3). Explicit
+    --descriptor-refresh-url wins; otherwise publish the latest signed descriptor
+    and use the presigned URL it prints — the operator never pastes a URL."""
+    if args.descriptor_refresh_url:
+        return args.descriptor_refresh_url
+    _say("descriptor: publishing latest signed descriptor (auto)")
+    res = _run_controller(
+        "descriptor-publish-now",
+        "--db-path", _DEFAULT_DB,
+        "--config", args.config or _DEFAULT_CONFIG,
+        capture=True,
+    )
+    url = _extract_url(res.stdout or "")
+    if not url:
+        raise RuntimeError(
+            "descriptor-publish-now emitted no URL; "
+            "pass --descriptor-refresh-url explicitly")
+    return url
+
+
 @dataclass(frozen=True)
 class CanaryTarget:
     provider: str
@@ -287,22 +345,27 @@ def cmd_ru_bringup(args) -> int:
             flag for flag, val in (
                 ("--provider", args.provider),
                 ("--region", args.region),
-                ("--descriptor-refresh-url", args.descriptor_refresh_url),
             ) if not val
         ]
         if missing:
             _err(f"a fresh mint requires {', '.join(missing)} "
                  f"(only --box-id + --public-ip are needed to resume)")
             return 2
+        # One command, not four (quickstart §7.1-7.4): ensure the image is
+        # promoted, the agent is published, and the descriptor is published —
+        # all auto — so the operator never runs image-prepare / agent-publish /
+        # descriptor-publish-now by hand or pastes a presigned URL.
+        _ensure_image(args)
         _say(f"mint: provision-seed for {args.provider}/{args.region}"
              + (" (canary)" if args.canary else ""))
         agent_url, agent_sha = _resolve_agent(args)
         _say(f"agent: {agent_url[:60]}…  sha={agent_sha[:12]}…")
+        descriptor_url = _resolve_descriptor_url(args)
         box_id, cloud_init_path = mint_seed(
             args.provider, args.region, canary=args.canary,
             agent_source_url=agent_url,
             agent_source_sha256=agent_sha,
-            descriptor_refresh_url=args.descriptor_refresh_url,
+            descriptor_refresh_url=descriptor_url,
             cloud_init_out=args.cloud_init_out,
         )
         _say(f"minted box_id={box_id}; cloud-init at {cloud_init_path}")

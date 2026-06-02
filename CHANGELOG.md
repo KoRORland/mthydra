@@ -9,6 +9,15 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**`mthydra-ops ru-bringup` is now one command (was four).** Quickstart §7.1–7.4
+collapse into `mthydra-ops ru-bringup --provider <p> --region <r>`. The wizard now
+auto-handles every controller-side prerequisite: ensures a promoted mtg image
+(runs `image-prepare` only if none exists), publishes the agent tarball (already
+did), and **publishes + presigns the descriptor-refresh URL itself** — so
+`--descriptor-refresh-url` is optional and you never hand-copy a presigned URL
+(the `&` in those URLs was a repeated shell-quoting footgun). All three
+underlying commands still exist for manual/cron use. Quickstart Part 7 rewritten.
+
 **`ru-bringup` now mints a 24h image-download URL (was 1h).** The mtg binary URL
 baked into the seed is fetched by the agent at VM boot; the 1h default meant that
 if you took longer than an hour to paste cloud-init, create the VM, and boot it,

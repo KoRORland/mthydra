@@ -328,15 +328,60 @@ def test_cmd_ru_bringup_happy_path(monkeypatch, tmp_path):
                         fake_run, raising=False)
     monkeypatch.setattr(ru_bringup, "wait_for_reachable",
                         lambda *a, **kw: True)
+    monkeypatch.setattr(ru_bringup, "_ensure_image", lambda args: None)
 
     rc = ru_bringup.cmd_ru_bringup(_bringup_args(tmp_path))
     assert rc == 0
     assert box_state["v"] == "live"
 
 
-def test_cmd_ru_bringup_mint_mode_requires_provider(monkeypatch, tmp_path):
-    """Mint mode (no --box-id) needs --provider/--region/--descriptor-refresh-url.
-    Missing → clean error, exit 2, no provision-seed attempted (no traceback)."""
+def test_resolve_descriptor_url_explicit_wins(monkeypatch):
+    """An explicit --descriptor-refresh-url is used verbatim, no publish."""
+    def boom(*a, **k):
+        raise AssertionError("must not publish when a URL is given")
+    monkeypatch.setattr(ru_bringup, "_run_controller", boom, raising=False)
+    args = argparse.Namespace(descriptor_refresh_url="https://given/url", config=None)
+    assert ru_bringup._resolve_descriptor_url(args) == "https://given/url"
+
+
+def test_resolve_descriptor_url_auto_publishes_when_absent(monkeypatch):
+    """No --descriptor-refresh-url → run descriptor-publish-now and parse the URL
+    from its stdout, so the operator never hand-copies a presigned URL."""
+    fake_run, calls = _fake_run_factory(
+        stdout_map={"descriptor-publish-now":
+                    "descriptor-publish-now: published generation 9 (blob 300 bytes)\n"
+                    "https://s3.example/descriptors/current?sig=abc&Expires=1\n"})
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    args = argparse.Namespace(descriptor_refresh_url=None, config=None)
+    url = ru_bringup._resolve_descriptor_url(args)
+    assert url == "https://s3.example/descriptors/current?sig=abc&Expires=1"
+    assert "descriptor-publish-now" in [c[0] for c in calls]
+
+
+def test_ensure_image_skips_when_promoted(monkeypatch):
+    fake_run, calls = _fake_run_factory(
+        stdout_map={"image-current": json.dumps({"image_version": "iv-x"})})
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    ru_bringup._ensure_image(argparse.Namespace(config=None))
+    assert "image-current" in [c[0] for c in calls]
+
+
+def test_ensure_image_runs_prepare_when_none(monkeypatch):
+    fake_run, _ = _fake_run_factory(stdout_map={"image-current": "null"})
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    prepared = {}
+    def fake_prepare(args):
+        prepared["ran"] = True
+        return 0
+    import mthydra.ops.image_ops as image_ops
+    monkeypatch.setattr(image_ops, "cmd_image_prepare", fake_prepare)
+    ru_bringup._ensure_image(argparse.Namespace(config=None))
+    assert prepared.get("ran") is True
+
+
+def test_cmd_ru_bringup_mint_mode_requires_provider_and_region(monkeypatch, tmp_path):
+    """Mint mode (no --box-id) needs only --provider/--region now (agent +
+    descriptor + image auto-resolve). Missing → clean error, exit 2, no mint."""
     calls = []
     def fake_run(*args, **kw):
         calls.append(args[0])
@@ -344,11 +389,44 @@ def test_cmd_ru_bringup_mint_mode_requires_provider(monkeypatch, tmp_path):
     monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
     monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
                         fake_run, raising=False)
-    args = _bringup_args(tmp_path, box_id=None, provider=None, region=None,
-                         descriptor_refresh_url=None)
+    args = _bringup_args(tmp_path, box_id=None, provider=None, region=None)
     rc = ru_bringup.cmd_ru_bringup(args)
     assert rc == 2
     assert "provision-seed" not in calls
+
+
+def test_cmd_ru_bringup_mint_auto_resolves_descriptor(monkeypatch, tmp_path):
+    """A mint with provider+region but NO --descriptor-refresh-url succeeds: the
+    descriptor URL is auto-published. No presigned URL pasted by the operator."""
+    box_state = {"v": "provisioning"}
+    def fake_run(*args, check=True, capture=False, env=None):
+        sub = args[0]
+        if sub == "image-current":
+            return subprocess.CompletedProcess(
+                args, 0, json.dumps({"image_version": "iv-x"}), "")
+        if sub == "descriptor-publish-now":
+            return subprocess.CompletedProcess(
+                args, 0, "published\nhttps://auto/descriptor?sig=z\n", "")
+        if sub == "provision-seed":
+            return subprocess.CompletedProcess(
+                args, 0, "#cloud-config\n", "provision-seed: created box_id=b-a\n")
+        if sub == "ru-box-list":
+            return subprocess.CompletedProcess(args, 0, json.dumps(
+                [{"box_id": "b-a", "state": box_state["v"], "sni": "c.example"}]), "")
+        if sub == "ru-box-mark-live":
+            box_state["v"] = "live"
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(ru_bringup, "_run_controller", fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
+                        fake_run, raising=False)
+    monkeypatch.setattr(ru_bringup, "_resolve_agent",
+                        lambda args, cfg=None: ("https://agent/url", "deadbeef"))
+    monkeypatch.setattr(ru_bringup, "wait_for_reachable", lambda *a, **kw: True)
+    args = _bringup_args(tmp_path, descriptor_refresh_url=None)
+    rc = ru_bringup.cmd_ru_bringup(args)
+    assert rc == 0
+    assert box_state["v"] == "live"
 
 
 def test_cmd_ru_bringup_resume_skips_mint(monkeypatch, tmp_path):
@@ -385,6 +463,7 @@ def test_cmd_ru_bringup_aborts_on_unreachable(monkeypatch, tmp_path):
                         fake_run, raising=False)
     monkeypatch.setattr(ru_bringup, "wait_for_reachable",
                         lambda *a, **kw: False)
+    monkeypatch.setattr(ru_bringup, "_ensure_image", lambda args: None)
 
     rc = ru_bringup.cmd_ru_bringup(_bringup_args(tmp_path))
     assert rc != 0   # unreachable → non-zero exit
@@ -541,6 +620,7 @@ def test_cmd_ru_bringup_auto_fetches_agent_from_manifest(monkeypatch, tmp_path):
     monkeypatch.setattr(ru_bringup, "_run_controller_capture_both",
                         fake_run, raising=False)
     monkeypatch.setattr(ru_bringup, "wait_for_reachable", lambda *a, **kw: True)
+    monkeypatch.setattr(ru_bringup, "_ensure_image", lambda args: None)
 
     args = argparse.Namespace(
         provider="timeweb", region="ru-msk-1", canary=False,
