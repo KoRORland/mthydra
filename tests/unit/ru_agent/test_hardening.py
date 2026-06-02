@@ -186,6 +186,40 @@ def test_path_on_tmpfs_false_when_not_tmpfs(tmp_path, monkeypatch):
     assert hardening._path_on_tmpfs("/var/log") is False
 
 
+def test_path_on_tmpfs_true_when_under_tmpfs_mount(tmp_path, monkeypatch):
+    """A directory under a tmpfs mount (not its own mountpoint) is tmpfs-backed.
+    Proven on the first RU box (2026-06-02): /run/mthydra is a dir under the
+    /run tmpfs (df confirmed), so it is in RAM — the check must accept it."""
+    from mthydra.ru_agent import hardening
+    fake_mounts = tmp_path / "mounts"
+    fake_mounts.write_text(
+        "/dev/sda1 / ext4 rw 0 0\n"
+        "tmpfs /run tmpfs rw,nosuid,nodev 0 0\n"
+    )
+    real_open = open
+
+    def fake_open(path, *a, **kw):
+        if path == "/proc/mounts":
+            return real_open(fake_mounts, *a, **kw)
+        return real_open(path, *a, **kw)
+    monkeypatch.setattr("builtins.open", fake_open)
+    assert hardening._path_on_tmpfs("/run/mthydra") is True
+    # A path under the ext4 root is NOT tmpfs-backed.
+    assert hardening._path_on_tmpfs("/var/lib/mthydra") is False
+
+
+def test_apply_best_effort_sets_core_pattern(tmp_path, monkeypatch):
+    """apport overwrites core_pattern at boot after cloud-init; the agent (root)
+    re-asserts |/bin/false at startup. Proven cause on the first RU box."""
+    from mthydra.ru_agent import hardening
+    fake = tmp_path / "core_pattern"
+    fake.write_text("|/usr/share/apport/apport -p%p -- %E")
+    monkeypatch.setattr(hardening, "_CORE_PATTERN_PATH", str(fake))
+    hardening.apply_best_effort()
+    assert fake.read_text().strip() == "|/bin/false"
+    assert hardening._core_pattern_disabled() is True
+
+
 def test_path_on_tmpfs_false_when_proc_mounts_missing(monkeypatch):
     from mthydra.ru_agent import hardening
     real_open = open

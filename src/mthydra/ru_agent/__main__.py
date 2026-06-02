@@ -73,7 +73,9 @@ def _startup():
     """Run the startup sequence once. Returns the loaded seed on success;
     raises _StartupError on any step failure (caller retries — never powers off
     the box). Hardening → seed → mtg binary → configs → iptables."""
-    # 1. Hardening verification.
+    # 1. Apply what the agent can enforce itself (core_pattern, overwritten by
+    # apport at boot), then verify all hardening invariants.
+    hardening.apply_best_effort()
     try:
         hardening.verify_all()
     except hardening.HardeningError as e:

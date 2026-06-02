@@ -2,6 +2,7 @@
 /var/log + /run/mthydra on tmpfs. Refuses to continue on any failure."""
 from __future__ import annotations
 
+import contextlib
 import subprocess
 from pathlib import Path
 
@@ -18,7 +19,7 @@ def _swap_disabled() -> bool:
     """True iff /proc/swaps has only the header line (no active swap area)."""
     try:
         with open(_PROC_SWAPS_PATH) as f:
-            lines = [l for l in f.read().splitlines() if l.strip()]
+            lines = [ln for ln in f.read().splitlines() if ln.strip()]
     except FileNotFoundError:
         return True  # No /proc/swaps means no swap subsystem.
     return len(lines) <= 1  # header only
@@ -49,16 +50,40 @@ def _core_pattern_disabled() -> bool:
 
 
 def _path_on_tmpfs(path: str) -> bool:
-    """True iff `path` is a mountpoint of type tmpfs."""
+    """True iff `path` is backed by a tmpfs filesystem — i.e. the mount that
+    contains it is tmpfs. Both a dedicated tmpfs mount (e.g. tmpfs on /var/log)
+    and a directory under a tmpfs mount (e.g. /run/mthydra under the /run tmpfs)
+    qualify; the property being enforced is "in RAM, not on persistent disk".
+    Resolves the longest matching mountpoint prefix and checks its fstype."""
+    best_mp = ""
+    best_fs: str | None = None
     try:
         with open("/proc/mounts") as f:
             for line in f:
                 parts = line.split()
-                if len(parts) >= 3 and parts[1] == path and parts[2] == "tmpfs":
-                    return True
+                if len(parts) < 3:
+                    continue
+                mp, fs = parts[1], parts[2]
+                contained = path == mp or mp == "/" or path.startswith(
+                    mp.rstrip("/") + "/")
+                if contained and len(mp) >= len(best_mp):
+                    best_mp, best_fs = mp, fs
     except FileNotFoundError:
         return False
-    return False
+    return best_fs == "tmpfs"
+
+
+def apply_best_effort() -> None:
+    """Apply the hardening the agent can enforce itself at runtime (it runs as
+    root, after boot). Currently: re-assert kernel.core_pattern=|/bin/false.
+
+    apport (and similar crash handlers) set core_pattern imperatively when their
+    service starts at boot — *after* cloud-init's bootcmd — so the value cloud-init
+    set is overwritten by the time the agent runs. Re-asserting it here is
+    reliable because nothing re-applies it again post-boot. Best-effort: any
+    failure is surfaced by the subsequent verify_all()."""
+    with contextlib.suppress(OSError):
+        Path(_CORE_PATTERN_PATH).write_text("|/bin/false")
 
 
 def verify_all() -> None:

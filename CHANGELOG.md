@@ -9,6 +9,17 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**RU agent hardening: applies core_pattern + accepts tmpfs-backed paths.** Two
+proven bring-up blockers (first RU box, 2026-06-02, diagnosed from the box):
+- `kernel.core_pattern` — apport's service overwrites it at boot *after*
+  cloud-init's `bootcmd` (the live value was apport's pattern; nothing in
+  `sysctl.d`). The agent now re-asserts `|/bin/false` itself at startup
+  (`hardening.apply_best_effort()`) — it's root and runs after apport.
+- `/run/mthydra is not on tmpfs` — it's a directory under the `/run` tmpfs
+  (`df` confirmed `/run` is tmpfs with no separate `/run/mthydra` mount), i.e.
+  already in RAM, but the check demanded a dedicated mountpoint. `_path_on_tmpfs`
+  now accepts any path *backed by* tmpfs (longest-matching mount fstype).
+
 **RU agent no longer powers off the box on a startup hiccup.** The agent is
 fail-closed: any startup step (hardening, seed, mtg download, iptables) called
 `shutdown -h now`. But the mtg download commonly fails transiently at boot — the
