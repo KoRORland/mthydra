@@ -431,6 +431,14 @@ def build_parser() -> argparse.ArgumentParser:
     rbt.add_argument("--reason", required=True)
     rbt.add_argument("--db-path", default=DEFAULT_DB)
 
+    rbr = sub.add_parser(
+        "ru-box-reclaim",
+        help="reclaim a never-live provisioning box: terminate it and return "
+             "its cover domain to candidate_verified (does NOT burn the SNI)")
+    rbr.add_argument("box_id")
+    rbr.add_argument("--reason", default="stale_provisioning")
+    rbr.add_argument("--db-path", default=DEFAULT_DB)
+
     ps = sub.add_parser("provision-seed",
                          help="atomic provisioning: claim cover domain + image + credential, emit seed")
     ps.add_argument("--provider", required=True)
@@ -1110,6 +1118,8 @@ def run(argv: list[str]) -> int:
         return _cmd_ru_box_mark_live(args)
     if args.cmd == "ru-box-terminate":
         return _cmd_ru_box_terminate(args)
+    if args.cmd == "ru-box-reclaim":
+        return _cmd_ru_box_reclaim(args)
 
     if args.cmd == "data-exit-status":
         return _cmd_data_exit_status(args)
@@ -3143,6 +3153,29 @@ def _cmd_ru_box_terminate(args) -> int:
                     compromise_msg = f"; shard {shard_id} retired (empty)"
 
         print(f"ru-box-terminate: {args.box_id} -> terminated; sni {sni!r} burned{compromise_msg}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_ru_box_reclaim(args) -> int:
+    from mthydra.controller.provisioning.reclaim import ReclaimError, reclaim_box
+    from mthydra.controller.state.db import connect
+
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "ru-box-reclaim")
+        if rc is not None:
+            return rc
+        try:
+            domain = reclaim_box(conn, args.box_id, now=_now(), reason=args.reason)
+        except ReclaimError as e:
+            print(f"ru-box-reclaim: {e}", file=sys.stderr)
+            return 2
+        print(
+            f"ru-box-reclaim: {args.box_id} -> terminated; "
+            f"cover domain {domain!r} reclaimed (candidate_verified, not burned)"
+        )
         return 0
     finally:
         conn.close()

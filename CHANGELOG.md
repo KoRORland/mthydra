@@ -9,6 +9,17 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**New: `mthydra-controller ru-box-reclaim <box_id>`.** Cleans up a box stuck
+in `provisioning` that never went live — the residue left behind when
+provisioning crashes *after* `provision-seed` commits (it writes the `ru_boxes`
+row and flips the cover domain `candidate_verified → in_use` before the VM
+exists). Reclaim terminates the box and returns its cover domain to
+`candidate_verified` so it can be **reused** — it does **not** burn the SNI.
+This is the difference from `ru-box-terminate`, which burns the SNI (correct
+only for a box that actually went live and exposed it). Reclaim refuses `live`
+boxes for that reason. Operational failures (unknown box, wrong state) print a
+clean error and exit 2 — no traceback.
+
 **MVP bootstrap fix.** `mthydra-ops image-prepare --yes` (quickstart §7.1)
 failed on a fresh install for two compounding reasons:
 

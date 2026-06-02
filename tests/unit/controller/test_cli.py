@@ -372,6 +372,61 @@ def test_cover_reverify_now_runs_and_reports(tmp_path, monkeypatch, capsys):
     assert "PASS ok.example" in out
 
 
+def _seed_orphan_box(conn, box_id="orphan-box-1", domain="www.cloudflare.com"):
+    """Construct the orphan state reclaim operates on: a never-live provisioning
+    box holding an in_use cover domain (what provision_box leaves behind when its
+    caller crashes after commit). Uses real repos, no mocks."""
+    from mthydra.controller.state import cover_pool, ru_boxes
+    now = "2026-06-01T00:00:00Z"
+    cover_pool.add_candidate(conn, domain, added_at=now)
+    cover_pool.attest_verified(conn, domain, from_vantage="ru-vps-01", at=now)
+    ru_boxes.insert_box(
+        conn, box_id, "hetzner", "fsn1", None, domain, "abc123", now,
+    )
+    cover_pool.assign_to_box(conn, domain, box_id=box_id, at=now)
+    return box_id
+
+
+def test_ru_box_reclaim_returns_cover_without_burning(tmp_path, capsys):
+    """ru-box-reclaim cleans up a never-live provisioning orphan and returns its
+    cover domain to candidate_verified (NOT burned), so it can be reused."""
+    from mthydra.controller.state import cover_pool
+    db, toml = _init_db(tmp_path)
+    conn = connect(db)
+    box_id = _seed_orphan_box(conn)
+    conn.close()
+
+    rc = run(["ru-box-reclaim", box_id, "--db-path", str(db),
+              "--reason", "orphan cleanup"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "www.cloudflare.com" in out
+    assert "reclaimed" in out
+
+    conn = connect(db)
+    try:
+        verified = cover_pool.list_by_state(conn, "candidate_verified")
+        assert [c.domain for c in verified] == ["www.cloudflare.com"]
+        assert conn.execute("SELECT COUNT(*) FROM burned_domains").fetchone()[0] == 0
+        state = conn.execute(
+            "SELECT state FROM ru_boxes WHERE box_id=?", (box_id,)
+        ).fetchone()[0]
+        assert state == "terminated"
+    finally:
+        conn.close()
+
+
+def test_ru_box_reclaim_unknown_box_no_traceback(tmp_path, capsys):
+    """Missing box is an expected operational failure: clean stderr, exit 2."""
+    db, toml = _init_db(tmp_path)
+    rc = run(["ru-box-reclaim", "no-such-box", "--db-path", str(db),
+              "--reason", "x"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "not found" in err
+    assert "Traceback" not in err
+
+
 def test_schema_migrate_on_already_current_db_is_noop(tmp_path, capsys):
     """R-D7: schema-migrate on a DB already at SCHEMA_VERSION must exit 0
     and report the no-op clearly."""
