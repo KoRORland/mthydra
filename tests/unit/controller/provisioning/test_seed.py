@@ -361,3 +361,28 @@ def test_cloud_init_contains_hardening_bootcmds(conn):
     assert "runcmd:" in out
     assert "agent" in out  # generic mention of agent install
     assert "sing-box.app/install.sh" in out  # RU-side Reality client installed
+
+
+def test_provision_binds_default_shard(conn):
+    _seed_authority(conn); _seed_descriptor(conn); _seed_image(conn)
+    _seed_cover(conn, "ds.cover")
+    provision_box(conn=conn, b2_destination=_b2_mock(),
+                  provider="hetzner", region="fsn1",
+                  image_signed_url_ttl_seconds=3600, now=NOW, **_V2_KWARGS)
+    sid = conn.execute("SELECT shard_id FROM ru_boxes").fetchone()[0]
+    assert sid == "default_shard"
+
+
+def test_provision_honors_explicit_shard(conn):
+    _seed_authority(conn); _seed_descriptor(conn); _seed_image(conn)
+    _seed_cover(conn, "es.cover")
+    conn.execute("INSERT OR IGNORE INTO shards (shard_id, members_json, "
+                 "target_size, last_reshuffled_at, created_at) "
+                 "VALUES ('s-hi','[]',2,'t','t')")
+    conn.commit()
+    provision_box(conn=conn, b2_destination=_b2_mock(),
+                  provider="hetzner", region="fsn1",
+                  image_signed_url_ttl_seconds=3600, now=NOW,
+                  shard_id="s-hi", **_V2_KWARGS)
+    sid = conn.execute("SELECT shard_id FROM ru_boxes").fetchone()[0]
+    assert sid == "s-hi"

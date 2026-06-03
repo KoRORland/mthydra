@@ -149,7 +149,10 @@ def provision_box(
     telegram_dcs_v6: tuple[str, ...],
     actor: str = "operator",
     is_canary: bool = False,
+    shard_id: str | None = None,
 ) -> SeedBundle:
+    shard_id = shard_id or "default_shard"
+
     # 1. Authority must be real Ed25519 (not placeholder).
     try:
         auth = authority_repo.current_authority(conn)
@@ -242,6 +245,14 @@ def provision_box(
     }, separators=(",", ":"))
     try:
         conn.execute("BEGIN")
+        # Shard guard — verified inside the transaction so we hold a read lock.
+        if conn.execute(
+            "SELECT 1 FROM shards WHERE shard_id=? AND retired_at IS NULL",
+            (shard_id,),
+        ).fetchone() is None:
+            raise ProvisionError(
+                f"shard {shard_id!r} does not exist or is retired; create it first"
+            )
         # A terminated box has no claim on an sni (ru_boxes.sni is UNIQUE). A
         # reclaimed never-live orphan returns its cover domain to the pool but
         # stays in the table holding that domain in sni; without this, reusing
@@ -256,10 +267,10 @@ def provision_box(
         conn.execute(
             "INSERT INTO ru_boxes "
             "(box_id, provider, region, public_ip, sni, state, image_version, "
-            "created_at, is_canary) "
-            "VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?, ?)",
+            "created_at, is_canary, shard_id) "
+            "VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?, ?, ?)",
             (box_id, provider, region, None, picked.domain, image.image_version,
-             now, 1 if is_canary else 0),
+             now, 1 if is_canary else 0, shard_id),
         )
         # Write reality_uuid (Spec E: per-box Reality UUID, embedded in seed).
         conn.execute(
