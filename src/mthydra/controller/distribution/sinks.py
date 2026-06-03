@@ -27,9 +27,11 @@ class TelegramDistributionSink:
         self,
         bot_token: str,
         http_post: Callable[[str, dict], tuple[int, str]] | None = None,
+        http_get: Callable[[str, dict], tuple[int, str]] | None = None,
     ) -> None:
         self._bot_token = bot_token
         self._http_post = http_post or self._default_http_post
+        self._http_get = http_get or self._default_http_get
 
     @staticmethod
     def _default_http_post(url: str, body: dict) -> tuple[int, str]:
@@ -49,6 +51,56 @@ class TelegramDistributionSink:
             return int(e.code), e.read().decode("utf-8", errors="replace")
         except Exception as e:
             return 0, str(e)
+
+    @staticmethod
+    def _default_http_get(url: str, params: dict) -> tuple[int, str]:
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        full = url + ("?" + urllib.parse.urlencode(params) if params else "")
+        try:
+            with urllib.request.urlopen(full, timeout=35) as resp:
+                return int(resp.status), resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            return int(e.code), e.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            return 0, str(e)
+
+    def get_me(self) -> str | None:
+        url = f"https://api.telegram.org/bot{self._bot_token}/getMe"
+        status, text = self._http_get(url, {})
+        if not (200 <= status < 300):
+            return None
+        data = json.loads(text)
+        if not data.get("ok"):
+            return None
+        return data["result"].get("username")
+
+    def get_updates(self, *, offset: int) -> list[dict]:
+        """Return normalised message updates: {update_id, chat_id, text}.
+
+        Only plain `message` updates are returned (edited/callbacks ignored).
+        """
+        url = f"https://api.telegram.org/bot{self._bot_token}/getUpdates"
+        status, text = self._http_get(url, {"offset": offset, "timeout": 0})
+        if not (200 <= status < 300):
+            return []
+        data = json.loads(text)
+        if not data.get("ok"):
+            return []
+        out: list[dict] = []
+        for u in data.get("result", []):
+            msg = u.get("message")
+            if not msg:
+                continue
+            chat = msg.get("chat", {})
+            out.append({
+                "update_id": u["update_id"],
+                "chat_id": str(chat.get("id")),
+                "text": msg.get("text", ""),
+            })
+        return out
 
     def __call__(self, *, chat_id: str, message: str) -> SinkResult:
         url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
