@@ -621,11 +621,19 @@ def _check_35_no_cross_shard_user(conn: sqlite3.Connection) -> None:
 
 
 def _check_36_no_empty_active_shard(conn: sqlite3.Connection) -> None:
-    """Every active shard has a non-empty members_json list."""
+    """Every active shard has a non-empty members_json list.
+
+    Exempts the well-known 'default_shard': it is the bootstrap landing zone
+    that boxes bind to at provisioning (spec O O-D5), so it legitimately holds
+    boxes before any user has been onboarded into it. All other active shards
+    must still have at least one member.
+    """
     rows = conn.execute(
         "SELECT shard_id, members_json FROM shards WHERE retired_at IS NULL"
     ).fetchall()
     for sid, mj in rows:
+        if sid == "default_shard":
+            continue
         try:
             members = json.loads(mj)
         except json.JSONDecodeError as e:

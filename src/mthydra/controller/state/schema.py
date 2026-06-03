@@ -793,18 +793,13 @@ def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _seed_default_shard(conn: sqlite3.Connection) -> None:
-    """Seed the always-present 'default_shard' (empty membership). Idempotent."""
-    conn.execute(
-        "INSERT OR IGNORE INTO shards "
-        "(shard_id, members_json, target_size, last_reshuffled_at, created_at) "
-        "VALUES ('default_shard', '[]', 2, ?, ?)",
-        (_now(), _now()),
-    )
-
-
 def migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
-    """Idempotent v15 → v16: pending_enrollments + bot_offsets + default_shard."""
+    """Idempotent v15 → v16: pending_enrollments + bot_offsets tables.
+
+    Note: 'default_shard' is NOT seeded here — it is created lazily on the
+    first shard-less provision (spec O O-D5, revised) and exempted from
+    invariant check 36, so a box-less DB stays free of empty active shards.
+    """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS pending_enrollments ("
         "user_id TEXT PRIMARY KEY REFERENCES users(user_id), "
@@ -820,7 +815,6 @@ def migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
         "bot_purpose TEXT PRIMARY KEY, last_offset INTEGER NOT NULL, "
         "updated_at TEXT NOT NULL)"
     )
-    _seed_default_shard(conn)
     conn.execute(
         "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
         (16, _now()),
@@ -1066,7 +1060,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
         n = conn.execute("SELECT COUNT(*) FROM node_state").fetchone()[0]
         if n == 0:
             conn.execute("INSERT INTO node_state (rowid, role) VALUES (1, 'active')")
-        _seed_default_shard(conn)
     else:
         current = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
         if current < 2:

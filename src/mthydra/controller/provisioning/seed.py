@@ -245,14 +245,28 @@ def provision_box(
     }, separators=(",", ":"))
     try:
         conn.execute("BEGIN")
-        # Shard guard — verified inside the transaction so we hold a read lock.
-        if conn.execute(
-            "SELECT 1 FROM shards WHERE shard_id=? AND retired_at IS NULL",
-            (shard_id,),
-        ).fetchone() is None:
-            raise ProvisionError(
-                f"shard {shard_id!r} does not exist or is retired; create it first"
-            )
+        # Shard binding (spec O O-D5). The well-known 'default_shard' is created
+        # on demand here — it is the bootstrap landing zone for boxes before any
+        # user is onboarded, and is exempt from the empty-active-shard invariant
+        # (check 36). An explicitly requested shard must already exist + be active.
+        existing_shard = conn.execute(
+            "SELECT retired_at FROM shards WHERE shard_id=?", (shard_id,),
+        ).fetchone()
+        if existing_shard is None:
+            if shard_id == "default_shard":
+                conn.execute(
+                    "INSERT INTO shards (shard_id, members_json, target_size, "
+                    "last_reshuffled_at, created_at) "
+                    "VALUES ('default_shard', '[]', 2, ?, ?)",
+                    (now, now),
+                )
+            else:
+                raise ProvisionError(
+                    f"shard {shard_id!r} does not exist; create it first or omit "
+                    f"--shard to use the default"
+                )
+        elif existing_shard[0] is not None:
+            raise ProvisionError(f"shard {shard_id!r} is retired; pick another")
         # A terminated box has no claim on an sni (ru_boxes.sni is UNIQUE). A
         # reclaimed never-live orphan returns its cover domain to the pool but
         # stays in the table holding that domain in sni; without this, reusing
