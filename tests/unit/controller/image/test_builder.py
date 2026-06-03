@@ -82,9 +82,12 @@ def test_build_image_extracts_binary_from_tarball(conn, tmp_path):
     Regression: the first RU box got a gzip blob at /run/mthydra/mtg.
     Discovered 2026-06-02 (`file` reported gzip data, not ELF)."""
     import io
+    import struct
     import tarfile
 
-    elf_bytes = b"\x7fELF" + b"fake-mtg-binary" * 100
+    # Valid ELF header, little-endian, e_machine=0x3E (amd64) to match the asset.
+    elf_bytes = (b"\x7fELF\x02\x01\x01" + b"\x00" * 9
+                 + struct.pack("<HH", 2, 0x3E) + b"fake-mtg-binary" * 100)
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         info = tarfile.TarInfo("mtg-2.2.8-linux-amd64/mtg")
@@ -210,8 +213,11 @@ def test_build_image_resolves_project_specific_checksum_filename(conn, tmp_path)
 
     Discovered 2026-06-01 on a real mthydra-ops image-prepare run."""
     import io
+    import struct
     import tarfile
-    elf_bytes = b"\x7fELF" + b"arm64-mtg-binary-bytes" * 100
+    # Valid ELF header, e_machine=0xB7 (arm64) to match the linux-arm64 asset.
+    elf_bytes = (b"\x7fELF\x02\x01\x01" + b"\x00" * 9
+                 + struct.pack("<HH", 2, 0xB7) + b"arm64-mtg-binary-bytes" * 100)
     _buf = io.BytesIO()
     with tarfile.open(fileobj=_buf, mode="w:gz") as _tf:
         _info = tarfile.TarInfo("mtg-2.2.8-linux-arm64/mtg")
@@ -392,3 +398,51 @@ def test_default_http_get_omits_accept_header(monkeypatch):
     builder_mod._default_http_get("https://api.github.com/repos/x/y/releases/tags/v1")
     # No Accept header at all — let GitHub use its default content negotiation.
     assert "Accept" not in captured["headers"]
+
+
+def test_extract_runnable_rejects_non_elf():
+    import io
+    import tarfile
+
+    from mthydra.controller.image.builder import BuildError, _extract_runnable
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        data = b"not an elf"
+        info = tarfile.TarInfo("mtg-x/mtg")
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+    with pytest.raises(BuildError, match="not an ELF"):
+        _extract_runnable(buf.getvalue(), "mtg-2.2.8-linux-amd64.tar.gz", member="mtg")
+
+
+def test_extract_runnable_rejects_wrong_arch():
+    import io
+    import struct
+    import tarfile
+
+    from mthydra.controller.image.builder import BuildError, _extract_runnable
+    # ELF, little-endian, e_machine = 0xB7 (aarch64) but asset says amd64.
+    elf = b"\x7fELF" + b"\x02\x01\x01" + b"\x00" * 9 + struct.pack("<HH", 2, 0xB7) + b"\x00" * 40
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo("mtg-x/mtg")
+        info.size = len(elf)
+        tf.addfile(info, io.BytesIO(elf))
+    with pytest.raises(BuildError, match="arch"):
+        _extract_runnable(buf.getvalue(), "mtg-2.2.8-linux-amd64.tar.gz", member="mtg")
+
+
+def test_extract_runnable_accepts_matching_amd64():
+    import io
+    import struct
+    import tarfile
+
+    from mthydra.controller.image.builder import _extract_runnable
+    elf = b"\x7fELF" + b"\x02\x01\x01" + b"\x00" * 9 + struct.pack("<HH", 2, 0x3E) + b"\x00" * 40
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo("mtg-x/mtg")
+        info.size = len(elf)
+        tf.addfile(info, io.BytesIO(elf))
+    out = _extract_runnable(buf.getvalue(), "mtg-2.2.8-linux-amd64.tar.gz", member="mtg")
+    assert out == elf

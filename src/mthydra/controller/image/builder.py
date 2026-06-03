@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import sqlite3
+import struct
 import tarfile
 import urllib.request
 from collections.abc import Callable
@@ -27,6 +28,32 @@ class BuildError(RuntimeError):
 _CHECKSUM_ASSET_CANDIDATES = ("SHA256SUMS", "checksums.txt")
 
 
+# ELF e_machine values for the arch tokens used in upstream asset names.
+_ELF_E_MACHINE = {"amd64": 0x3E, "arm64": 0xB7, "armv7": 0x28,
+                  "armv6": 0x28, "386": 0x03}
+
+
+def _verify_elf(binary: bytes, asset_filename: str) -> None:
+    """Assert `binary` is an ELF whose architecture matches the arch token in
+    `asset_filename` (e.g. 'linux-amd64'). Raises BuildError otherwise. Catches a
+    gzip blob (not extracted) or a wrong-arch artifact at build time, before it
+    ever ships to a box. Unknown arch token → ELF-magic check only."""
+    if binary[:4] != b"\x7fELF":
+        raise BuildError(
+            f"extracted binary from {asset_filename!r} is not an ELF "
+            f"(magic {binary[:4]!r}) — wrong asset or failed extraction?")
+    if len(binary) < 20:
+        raise BuildError(f"{asset_filename!r} ELF too short to read e_machine")
+    endian = "<" if binary[5] == 1 else ">"
+    (e_machine,) = struct.unpack(endian + "H", binary[18:20])
+    stem = asset_filename.replace(".tar.gz", "").replace(".tgz", "").replace(".gz", "")
+    token = next((p for p in stem.split("-") if p in _ELF_E_MACHINE), None)
+    if token is not None and e_machine != _ELF_E_MACHINE[token]:
+        raise BuildError(
+            f"arch mismatch for {asset_filename!r}: ELF e_machine={e_machine:#x} "
+            f"!= expected {token} ({_ELF_E_MACHINE[token]:#x})")
+
+
 def _extract_runnable(asset_bytes: bytes, asset_filename: str, *, member: str) -> bytes:
     """Return the runnable binary from a release asset.
 
@@ -34,7 +61,8 @@ def _extract_runnable(asset_bytes: bytes, asset_filename: str, *, member: str) -
     the RU agent execs the binary directly, so we must hand it the ELF, not the
     archive. Handles `.tar.gz`/`.tgz` (extract the named member), bare `.gz`
     (decompress), and raw binaries (returned unchanged). Detection is by
-    filename, with a gzip-magic fallback."""
+    filename, with a gzip-magic fallback. Extracted binaries are ELF/arch-checked
+    (the real mtg path); a raw passthrough asset is returned unverified."""
     is_gzip = asset_bytes[:2] == b"\x1f\x8b"
     if asset_filename.endswith((".tar.gz", ".tgz")) or (
         is_gzip and asset_filename.endswith(".tar")
@@ -45,7 +73,9 @@ def _extract_runnable(asset_bytes: bytes, asset_filename: str, *, member: str) -
                     if m.isfile() and m.name.rsplit("/", 1)[-1] == member:
                         f = tf.extractfile(m)
                         if f is not None:
-                            return f.read()
+                            binary = f.read()
+                            _verify_elf(binary, asset_filename)
+                            return binary
         except tarfile.TarError as e:
             raise BuildError(f"could not read archive {asset_filename!r}: {e}") from e
         raise BuildError(
@@ -53,9 +83,11 @@ def _extract_runnable(asset_bytes: bytes, asset_filename: str, *, member: str) -
         )
     if asset_filename.endswith(".gz") or is_gzip:
         try:
-            return gzip.decompress(asset_bytes)
+            binary = gzip.decompress(asset_bytes)
         except OSError as e:
             raise BuildError(f"could not gunzip {asset_filename!r}: {e}") from e
+        _verify_elf(binary, asset_filename)
+        return binary
     return asset_bytes
 
 
