@@ -226,3 +226,10 @@ Rewrite quickstart Part 8:
 3. **Token hand-off channel:** the deep-link must reach the user out-of-band; if
    sent over a compromised channel, an attacker could enroll first. Single-use +
    short expiry + operator awareness limit the window; documented in the runbook.
+4. **`default_shard` name is half-configurable (known coupling).** `user-onboard`
+   resolves the shard via `cfg.shard_manager.default_shard_id`, but the box-side
+   lazy-create (`provision_box`) and the check-36 exemption (`invariants.py`)
+   hardcode the literal `"default_shard"`. They agree only while the config keeps
+   its default. **Do not change `default_shard_id` from `"default_shard"`** until
+   the box-side + invariant are plumbed to read the config too. Tracked as a
+   follow-up; harmless at the current single-operator profile.
