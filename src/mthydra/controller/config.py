@@ -114,6 +114,7 @@ class ShardManagerConfig:
     max_size: int
     reshuffle_interval_days: int
     reshuffle_sweep_interval_seconds: int
+    default_shard_id: str = "default_shard"
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,8 @@ class DistributionConfig:
     heartbeat_breach_threshold: int
     telegram: DistributionTelegramConfig | None
     email: DistributionEmailConfig | None
+    enrollment_token_ttl_hours: int = 24
+    enroll_poll_interval_seconds: int = 30
 
 
 @dataclass(frozen=True)
@@ -325,6 +328,7 @@ def _load_shard_manager(data: dict) -> ShardManagerConfig:
             "shard_manager.reshuffle_sweep_interval",
             sec.get("reshuffle_sweep_interval", 3600),
         ),
+        default_shard_id=str(sec.get("default_shard_id", "default_shard")),
     )
 
 
@@ -367,6 +371,14 @@ def _load_distribution(data: dict) -> DistributionConfig:
         ),
         telegram=_tg(),
         email=_em(),
+        enrollment_token_ttl_hours=_require_positive(
+            "distribution.enrollment_token_ttl_hours",
+            sec.get("enrollment_token_ttl_hours", 24),
+        ),
+        enroll_poll_interval_seconds=_parse_interval_seconds(
+            "distribution.enroll_poll_interval",
+            sec.get("enroll_poll_interval", 30),
+        ),
     )
 
 

@@ -691,3 +691,13 @@ def test_load_image_config_defaults(tmp_path):
     assert cfg.image.upstream_check_interval_seconds == 168 * 3600
     assert cfg.image.github_api_url == "https://api.github.com"
     assert cfg.image.build_tmp_dir == "/var/lib/mthydra/tmp"
+
+
+def test_default_shard_id_and_enrollment_config_defaults(tmp_path):
+    from mthydra.controller.config import load_config
+    base = tmp_path / "c.toml"
+    base.write_text(_minimal_toml())
+    cfg = load_config(str(base))
+    assert cfg.shard_manager.default_shard_id == "default_shard"
+    assert cfg.distribution.enrollment_token_ttl_hours == 24
+    assert cfg.distribution.enroll_poll_interval_seconds > 0
