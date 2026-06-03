@@ -69,11 +69,17 @@ class TelegramAlertSink:
 
     def __call__(self, payload: AlertPayload) -> SinkResult:
         url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
-        text = f"*{payload.subject}*\n\n{payload.body}"
+        # HTML parse mode (not legacy "Markdown"): operator-facing bodies are
+        # full of snake_case identifiers (eu_heartbeat_stale,
+        # cover_pool_rotation_frozen) whose underscores Markdown would render
+        # as italics. HTML only treats &, <, > specially, which we escape, so
+        # everything else appears verbatim.
+        from html import escape
+        text = f"<b>{escape(payload.subject)}</b>\n\n{escape(payload.body)}"
         body = {
             "chat_id": self._chat_id,
             "text": text,
-            "parse_mode": "Markdown",
+            "parse_mode": "HTML",
         }
         try:
             status, response_text = self._http_post(url, body)

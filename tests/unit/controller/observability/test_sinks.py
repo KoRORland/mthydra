@@ -38,6 +38,38 @@ def test_telegram_success():
     assert "b1 needs termination" in calls[0][1]["text"]
 
 
+def test_telegram_uses_html_so_underscores_render_literally():
+    # Legacy "Markdown" parse_mode rendered identifiers like
+    # eu_heartbeat_stale / cover_pool_rotation_frozen as italics (the
+    # underscores are delimiters). Use HTML mode + escaping so they appear
+    # verbatim to the operator.
+    calls: list[tuple[str, dict]] = []
+
+    def fake_post(url, body):
+        calls.append((url, body))
+        return 200, '{"ok":true}'
+
+    payload = AlertPayload(
+        severity="crit", kind="eu_heartbeat_stale", target="eu_exit_1",
+        dedupe_key="eu_heartbeat_stale::eu_exit_1",
+        subject="EU controller heartbeat is stale",
+        body="node eu_exit_1 <active> & unseen",
+    )
+    sink = TelegramAlertSink(bot_token="t", chat_id="c", http_post=fake_post)
+    res = sink(payload)
+    assert res.success
+    body = calls[0][1]
+    assert body["parse_mode"] == "HTML"
+    text = body["text"]
+    # Subject is bold via HTML tag.
+    assert "<b>EU controller heartbeat is stale</b>" in text
+    # Underscores survive verbatim (would have italicised under Markdown).
+    assert "eu_exit_1" in text
+    # HTML-significant chars in content are escaped, not interpreted as tags.
+    assert "&lt;active&gt;" in text
+    assert "&amp;" in text
+
+
 def test_telegram_4xx_failure():
     def fake_post(url, body):
         return 400, '{"ok":false,"description":"bad request"}'
