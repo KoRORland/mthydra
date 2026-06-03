@@ -456,6 +456,8 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--descriptor-refresh-url", required=True)
     ps.add_argument("--canary", action="store_true", dest="is_canary",
                      help="mark the resulting ru_box as is_canary=1 (spec D2 soak)")
+    ps.add_argument("--shard", dest="shard_id", default=None,
+                    help="shard to bind this box to (default: default_shard, auto-created)")
 
     des = sub.add_parser("data-exit-status",
                           help="show sing-box wheel status for an EU node")
@@ -1964,6 +1966,19 @@ def _cmd_serve(args) -> int:
         mode=mode,
     )
 
+    # ---- enrollment poller (deep-link onboarding, spec O) ----
+    from mthydra.controller.distribution.enroll_poller import EnrollmentPoller
+    from mthydra.controller.distribution.sinks import TelegramDistributionSink
+    enroll_poller = None
+    if cfg.distribution.telegram is not None:
+        enroll_poller = EnrollmentPoller(
+            db_path=args.db_path,
+            receive_client=TelegramDistributionSink(cfg.distribution.telegram.bot_token),
+            poll_interval_seconds=cfg.distribution.enroll_poll_interval_seconds,
+            on_enrolled=lambda uid: dist_publisher.run_once(),
+            mode=mode,
+        )
+
     if mode != "offline":
         orch.arm()
         rotator.arm()
@@ -1979,6 +1994,8 @@ def _cmd_serve(args) -> int:
         obs_heartbeat.arm()
         dist_publisher.arm()
         dist_user_heartbeat.arm()
+        if enroll_poller is not None:
+            enroll_poller.arm()
         if cfg.probe.runner_enabled:
             probe_runner.start()
         print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat armed", flush=True)
@@ -2004,6 +2021,8 @@ def _cmd_serve(args) -> int:
         obs_heartbeat.disarm()
         dist_publisher.disarm()
         dist_user_heartbeat.disarm()
+        if enroll_poller is not None:
+            enroll_poller.disarm()
         probe_runner.shutdown(wait=False)
         print("serve: stopped", flush=True)
     return 0
@@ -2995,6 +3014,7 @@ def _cmd_provision_seed(args) -> int:
                 telegram_dcs_v4=cfg.data_exit.telegram_dcs_v4,
                 telegram_dcs_v6=cfg.data_exit.telegram_dcs_v6,
                 is_canary=args.is_canary,
+                shard_id=args.shard_id,
             )
         except ProvisionError as e:
             print(f"provision-seed: {e}", file=sys.stderr)
