@@ -19,6 +19,13 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from mthydra.controller.observability.alert_text import (
+    human_age,
+    kind_title,
+    render_details,
+    severity_word,
+)
+from mthydra.controller.observability.remediation import remediation_for
 from mthydra.controller.observability.severity import (
     severity_for_obligation_staleness,
 )
@@ -213,45 +220,53 @@ class AlertSweep:
 _OFFLINE_SINK = DryRunSink(label="offline")
 
 
-def _fmt_details(raw: str | None) -> str:
-    """Pretty-print a JSON details string into indented lines. Falls back
-    to the raw value if it's not valid JSON or is None."""
-    if raw is None:
-        return "  (none)"
-    try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return f"  {raw}"
-    if isinstance(data, dict):
-        return "\n".join(f"  {k}: {v}" for k, v in data.items())
-    return f"  {raw}"
+def _subject(severity: str, kind: str, target: str | None) -> str:
+    s = f"{severity_word(severity)}: {kind_title(kind)}"
+    if target:
+        s += f" — {target}"
+    return s
+
+
+def _action(obligation_id: str) -> str:
+    """The operator's 'What to do' line for an alert. Falls back to a generic
+    pointer rather than leaving the line blank or crashing on unknown ids."""
+    return remediation_for(obligation_id) or (
+        "no specific action recorded — look this up in the runbook."
+    )
 
 
 def _build_decisions(
     snap: Snapshot, staleness_alert_seconds: int,
 ) -> list[tuple[str, str, str, str | None, str, str]]:
     """Translate a Snapshot into a flat list of (severity, dedupe_key, kind,
-    target, subject, body) tuples ready for dispatch."""
+    target, subject, body) tuples ready for dispatch.
+
+    Subjects + bodies are plain language with a "What to do" line (spec J §6
+    presentation). The machine identifiers (dedupe_key, kind) are unchanged so
+    routing, dedupe, and acks keep working.
+    """
     out: list[tuple[str, str, str, str | None, str, str]] = []
 
     for a in snap.anti_obligations:
-        subject = f"[{a.severity}] {a.kind}" + (f" :: {a.target}" if a.target else "")
-        details_fmt = _fmt_details(a.details)
-        body = (
-            f"obligation_id: {a.obligation_id}\n"
-            f"last_proven_at: {a.last_proven_at}\n"
-            f"details:\n{details_fmt}"
-        )
+        subject = _subject(a.severity, a.kind, a.target)
+        lines = [f"Flagged since {a.last_proven_at}."]
+        details = render_details(a.details)
+        if details:
+            lines.append("Details:\n" + details)
+        lines.append("\nWhat to do:\n  " + _action(a.obligation_id))
+        body = "\n".join(lines)
         out.append((a.severity, a.obligation_id, a.kind, a.target, subject, body))
 
     for o in snap.obligations_overdue:
         if o.severity == "info":
             continue
-        subject = f"[{o.severity}] obligation overdue: {o.obligation_id}"
+        subject = _subject(o.severity, "obligation_overdue", o.obligation_id)
         body = (
-            f"last_proven_at: {o.last_proven_at}\n"
-            f"next_due_at: {o.next_due_at}\n"
-            f"overdue_seconds: {o.overdue_seconds}"
+            f"The scheduled task '{o.obligation_id}' is overdue.\n"
+            f"Last completed: {o.last_proven_at}.\n"
+            f"Was due by: {o.next_due_at}.\n"
+            f"Overdue by: {human_age(o.overdue_seconds)}.\n"
+            f"\nWhat to do:\n  {_action(o.obligation_id)}"
         )
         out.append((o.severity, f"obligation_overdue::{o.obligation_id}",
                      "obligation_overdue", o.obligation_id, subject, body))
@@ -259,12 +274,15 @@ def _build_decisions(
     for n in snap.eu_nodes:
         if n.severity == "info":
             continue
-        subject = f"[{n.severity}] eu_node heartbeat stale: {n.node_id}"
+        subject = _subject(n.severity, "eu_heartbeat_stale", n.node_id)
+        last_seen = n.last_heartbeat_at or "never"
+        de_state = n.data_exit_state or "not reported"
         body = (
-            f"role: {n.role}\n"
-            f"last_heartbeat_at: {n.last_heartbeat_at}\n"
-            f"heartbeat_age_seconds: {n.heartbeat_age_seconds}\n"
-            f"data_exit_state: {n.data_exit_state}"
+            f"EU node {n.node_id} (role: {n.role}) hasn't been seen recently.\n"
+            f"Last heartbeat: {last_seen}.\n"
+            f"Heartbeat age: {human_age(n.heartbeat_age_seconds)}.\n"
+            f"Data-exit state: {de_state}.\n"
+            f"\nWhat to do:\n  {_action('eu_heartbeat_stale')}"
         )
         out.append((n.severity, f"eu_heartbeat_stale::{n.node_id}",
                      "eu_heartbeat_stale", n.node_id, subject, body))

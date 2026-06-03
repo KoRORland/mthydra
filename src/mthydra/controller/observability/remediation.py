@@ -120,6 +120,78 @@ _REMEDIATIONS: dict[str, str] = {
     "descriptor_signing_key_rotation": (
         "annual rotation: mthydra-controller signing-key-rotate (runbook §11.7)"
     ),
+    # ----------------------------------------------------------------------
+    # Anti-obligation alert kinds (dispatched by the alerter, keyed by kind /
+    # the obligation_id prefix before '::'). These are the lines an operator
+    # sees in a Telegram/email alert body under "What to do".
+    # ----------------------------------------------------------------------
+    "eu_heartbeat_stale": (
+        "a standby EU node hasn't published a heartbeat to S3. Check the "
+        "standby host is up and running: mthydra-controller serve --role standby"
+    ),
+    "cover_pool_rotation_frozen": (
+        "no verified spare cover domain to rotate to, so rotation is paused. "
+        "Add + verify another: mthydra-controller cover-add <domain>, then "
+        "cover-attest-verified <domain> --vantage <ru-vps-id>. Rotation resumes "
+        "automatically on the next sweep once enough candidates are verified."
+    ),
+    "cover_pool_rotation_pending": (
+        "a cover domain is past its rotation age. It rotates automatically once "
+        "a verified spare exists; otherwise verify another candidate first "
+        "(see the 'rotation is paused' alert)."
+    ),
+    "probe_kill_pending": (
+        "a probe scored this RU box for hard-kill. Inspect: "
+        "mthydra-controller ru-box-list; then terminate: "
+        "mthydra-controller ru-box-terminate <box-id>"
+    ),
+    "probe_evaluate_blocked": (
+        "probe evaluation can't proceed (no reachable vantage or missing "
+        "baseline). Check vantages: mthydra-controller vantage-list"
+    ),
+    "probe_coverage_pending": (
+        "no probe has covered this box recently. Confirm at least one vantage "
+        "is reachable: mthydra-controller vantage-list"
+    ),
+    "probe_vantage_unreachable": (
+        "the vantage VPS isn't reachable over SSH. Confirm the host is up; "
+        "re-point SSH if it moved: mthydra-controller vantage-set-ssh <vantage> ..."
+    ),
+    "cover_pool_reverify_drift_pending": (
+        "a verified cover domain failed its liveness re-check. Re-test it; if "
+        "it's genuinely dead, rotate it out: mthydra-controller cover-rotate <domain>"
+    ),
+    "shard_overdue_pending": (
+        "a shard is past its reshuffle window. The shard wheel reshuffles "
+        "automatically; if it persists the controller may be wedged — check "
+        "journalctl for the shard_reshuffle_sweep_ran heartbeat"
+    ),
+    "shard_unassigned_pending": (
+        "a shard has no assigned RU box. Assign one: "
+        "mthydra-controller shard-assign-box <shard> <box-id>"
+    ),
+    "dist_user_unregistered": (
+        "a distribution user has no descriptor yet. Confirm publishing is "
+        "healthy: mthydra-controller dist-status"
+    ),
+    "dist_user_heartbeat_breach": (
+        "a distribution user hasn't checked in within their window (spec K). "
+        "Confirm publishing: mthydra-controller dist-status / dist-publish-now"
+    ),
+    "image_rollback_pending": (
+        "this RU box is still running an image that was rolled back. Re-apply "
+        "the rollback / rebuild via the image pipeline (mthydra-controller "
+        "image-rollback ...; runbook)"
+    ),
+    "backup_integrity_failed": (
+        "the weekly backup integrity smoke failed for this generation. Force a "
+        "fresh backup + recheck: mthydra-controller backup-now"
+    ),
+    "obs_dead_mans_switch_breach": (
+        "the heartbeat email hasn't gone out in N attempts. The alert details "
+        "carry the SMTP smoke verdict — usually fixed by rotating the email app "
+        "password (quickstart §2.4); the next tick clears it."
+    ),
 }
 
 
