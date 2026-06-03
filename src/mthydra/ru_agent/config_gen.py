@@ -10,11 +10,15 @@ class ConfigError(RuntimeError):
 
 
 def _derive_mtg_secret(seed) -> str:
-    """Deterministic 16-byte secret derived from reality_uuid.
-    mtg's Fake-TLS secret format: lowercase hex of 16 bytes.
+    """mtg FakeTLS secret: `ee` + 16-byte secret (hex) + cover-domain (hex).
+
+    mtg requires the FakeTLS (`ee`-prefixed) secret form: a type byte `0xee`,
+    16 secret bytes, then the cover SNI bytes — all hex. A bare 16-byte hex
+    digest is rejected ("incorrect first byte of secret"). The 16 secret bytes
+    are derived deterministically from the box's reality_uuid.
     """
-    h = hashlib.sha256(seed.reality_uuid.encode()).digest()[:16]
-    return h.hex()
+    secret16 = hashlib.sha256(seed.reality_uuid.encode()).digest()[:16]
+    return "ee" + secret16.hex() + seed.sni.encode("utf-8").hex()
 
 
 def render_mtg_config(seed, *, sing_box_socks_port: int) -> bytes:
@@ -90,8 +94,9 @@ def render_sing_box_config(
                 "tag": "redirect-in",
                 "listen": "127.0.0.1",
                 "listen_port": tproxy_port,
-                "network": "tcp",
-                "sniff": False,
+                # sing-box 1.13 'redirect' inbound has no 'network'/'sniff'
+                # fields (sniff moved to route actions); listing them is a
+                # hard parse error.
             }
         ],
         "outbounds": [

@@ -22,6 +22,16 @@ def test_render_mtg_config_basic(tmp_path):
     text = out.decode()
     assert "cover.example" in text
     assert "secret" in text.lower()
+    # mtg FakeTLS secret must be ee-prefixed + carry the cover domain hex,
+    # else mtg rejects it ("incorrect first byte of secret"). Caught by the
+    # agent-boot harness, 2026-06-03.
+    import re
+    m = re.search(r'secret = "([0-9a-f]+)"', text)
+    assert m, text
+    secret = m.group(1)
+    assert secret.startswith("ee")
+    assert secret.endswith(b"cover.example".hex())
+    assert len(secret) == 2 + 32 + len(b"cover.example".hex())
 
 
 def test_render_sing_box_config_basic(tmp_path):
@@ -62,6 +72,10 @@ def test_render_sing_box_config_basic(tmp_path):
     inbound = payload["inbounds"][0]
     assert inbound["type"] == "redirect"
     assert inbound["listen_port"] == 12345
+    # sing-box 1.13 'redirect' inbound rejects 'network'/'sniff' (hard parse
+    # error). Caught by the agent-boot harness, 2026-06-03.
+    assert "network" not in inbound
+    assert "sniff" not in inbound
 
 
 def test_render_sing_box_config_empty_exits_raises(tmp_path):
