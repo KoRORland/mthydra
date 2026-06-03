@@ -1022,9 +1022,10 @@ def build_parser() -> argparse.ArgumentParser:
     # default=None → image_ops auto-detects from host platform.machine().
     # Operator can pin explicitly: --arch linux-amd64 / linux-arm64 / etc.
     ip.add_argument("--arch", default=None,
-                    help="upstream asset arch suffix (default: auto-detect "
-                         "from host platform — linux-amd64 / linux-arm64 / "
-                         "linux-armv7 / linux-armv6 / linux-386)")
+                    help="RU-box arch suffix for the mtg asset (default: "
+                         "linux-amd64 — the RU box, not this controller). "
+                         "Override for arm64/etc RU hosts: linux-arm64 / "
+                         "linux-armv7 / linux-armv6 / linux-386")
     ip.add_argument("--profile-json", default="auto",
                     help="'auto' = generate a minimal placeholder; otherwise a path")
     ip.add_argument("--yes", action="store_true",

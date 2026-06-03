@@ -152,12 +152,14 @@ def cmd_image_prepare(args) -> int:
             return 2
         _say(f"latest = {tag}")
 
-    # If --arch wasn't passed (None from new default), auto-detect from
-    # the host so an operator on a non-amd64 EC2 (e.g. arm64 t4g.small)
-    # doesn't have to know the magic asset-name dialect.
-    arch = args.arch or detect_host_arch()
+    # If --arch wasn't passed, default to the RU-box arch, NOT the controller's.
+    # The image runs on the RU box (commonly amd64 at RU hosters), not on this
+    # builder — detecting the controller's arch built an arm64 mtg that died with
+    # ENOEXEC on an amd64 RU box. Override with --arch for arm64/etc RU boxes.
+    arch = args.arch or "linux-amd64"
     if args.arch is None:
-        _say(f"arch (auto-detected from host) = {arch}")
+        _say(f"arch (RU-box default) = {arch}; pass --arch if your RU hoster "
+             f"is not amd64")
 
     # Upstream tags are 'v2.2.8' but the release asset filenames use the
     # version *without* the v prefix: 'mtg-2.2.8-linux-amd64.tar.gz'. Strip

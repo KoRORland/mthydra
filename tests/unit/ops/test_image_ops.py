@@ -206,22 +206,25 @@ def test_detect_host_arch_mapping():
         platform.machine = real
 
 
-def test_cmd_image_prepare_auto_detects_arch_when_not_passed(monkeypatch, tmp_path):
-    """When --arch is not on the CLI (default=None), the wizard uses
-    detect_host_arch(). Fixes the 'wrong default arch on arm64 EC2' trap."""
+def test_cmd_image_prepare_defaults_arch_to_amd64_for_ru_box(monkeypatch, tmp_path):
+    """When --arch is not on the CLI, default to the RU-box arch (amd64), NOT the
+    controller's. The image runs on the RU box (commonly amd64), not the builder;
+    detecting the controller's arch built an arm64 mtg that failed with ENOEXEC on
+    an amd64 RU box (first RU box, 2026-06-02). Even on an arm64 controller the
+    default must be amd64."""
     monkeypatch.setattr(image_ops, "resolve_latest_tag",
                         lambda **kw: "v2.2.8")
+    # Controller is arm64, but the default image must still target amd64.
     monkeypatch.setattr(image_ops, "detect_host_arch",
                         lambda: "linux-arm64")
     calls = []
     monkeypatch.setattr(image_ops, "_run_controller",
                         _fake_run_with_build_output(calls), raising=False)
-    # Pass arch=None to simulate "operator didn't specify".
     rc = image_ops.cmd_image_prepare(_prepare_args(tmp_path, arch=None))
     assert rc == 0
     ib = next(a for a in calls if a[0] == "image-build")
     asset_idx = ib.index("--asset")
-    assert ib[asset_idx + 1] == "mtg-2.2.8-linux-arm64.tar.gz"
+    assert ib[asset_idx + 1] == "mtg-2.2.8-linux-amd64.tar.gz"
 
 
 def test_cmd_image_prepare_honors_explicit_arch_override(monkeypatch, tmp_path):

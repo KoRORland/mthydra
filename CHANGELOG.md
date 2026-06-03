@@ -9,6 +9,14 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**Fix: image-prepare defaults to the RU-box arch (amd64), not the controller's.**
+The mtg image runs on the RU box, but `image-prepare` defaulted `--arch` to the
+*controller's* arch via host auto-detect. On the common setup (cheap arm64 EU
+controller + amd64 RU boxes) that built an arm64 mtg that died with
+`Exec format error` (ENOEXEC) on the amd64 RU box. The default is now
+`linux-amd64`; override `--arch` for arm64/etc RU hosts. The `--arch` help now
+says it's the RU box's arch.
+
 **Fix: image-build extracts the mtg ELF from the release tarball.** mtg ships as
 `mtg-<ver>-<arch>.tar.gz`; build_image verified the tarball against the upstream
 checksum (correct) but then stored the **tarball** as the image. The RU agent
