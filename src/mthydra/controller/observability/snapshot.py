@@ -205,11 +205,19 @@ def collect_snapshot(
         age: int | None = None
         if last_hb is not None:
             age = max(0, now_s - _parse_iso(last_hb))
-        sev = severity_for_eu_heartbeat(
-            role=role,
-            age_seconds=age if age is not None else 10 ** 9,
-            staleness_alert_seconds=staleness_alert_seconds,
-        )
+        if role == "active" and last_hb is None:
+            # No component ever publishes the active node's own heartbeat —
+            # the poller only stamps standby rows. A NULL heartbeat here is
+            # the normal single-node state ("never observed"), not a stale
+            # heartbeat. The active node's liveness is covered by the
+            # dead-man's-switch heartbeat email, so don't page on it.
+            sev = "info"
+        else:
+            sev = severity_for_eu_heartbeat(
+                role=role,
+                age_seconds=age if age is not None else 10 ** 9,
+                staleness_alert_seconds=staleness_alert_seconds,
+            )
         eu_views.append(EuNodeView(
             node_id=node_id, role=role,
             last_heartbeat_at=last_hb,

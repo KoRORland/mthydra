@@ -131,7 +131,12 @@ def test_eu_node_stale_standby_is_warn(conn):
     assert snap.eu_nodes[0].severity == "warn"
 
 
-def test_eu_node_null_heartbeat_treated_as_stale(conn):
+def test_eu_node_active_null_heartbeat_is_info_not_paged(conn):
+    # No component ever publishes the *active* node's own heartbeat (the
+    # poller only stamps standby rows). A NULL heartbeat on the active node
+    # is the normal single-node state, not a stale heartbeat — the active
+    # node's liveness is covered by the dead-man's-switch heartbeat email.
+    # It must NOT page (info => routed to no sink).
     conn.execute(
         "INSERT INTO eu_nodes (node_id, hostname, provider, region, public_ip, "
         "role, added_at, last_heartbeat_at) "
@@ -143,7 +148,20 @@ def test_eu_node_null_heartbeat_treated_as_stale(conn):
     n = snap.eu_nodes[0]
     assert n.last_heartbeat_at is None
     assert n.heartbeat_age_seconds is None
-    assert n.severity == "crit"
+    assert n.severity == "info"
+
+
+def test_eu_node_standby_null_heartbeat_still_warn(conn):
+    # A standby that has never published is a genuine problem worth surfacing.
+    conn.execute(
+        "INSERT INTO eu_nodes (node_id, hostname, provider, region, public_ip, "
+        "role, added_at, last_heartbeat_at) "
+        "VALUES ('eu2', 'h', 'p', 'r', '1.2.3.5', 'standby', ?, NULL)",
+        (NOW,),
+    )
+    conn.commit()
+    snap = collect_snapshot(conn, now=NOW, staleness_alert_seconds=600)
+    assert snap.eu_nodes[0].severity == "warn"
 
 
 def test_fleet_counts_populated(conn):
