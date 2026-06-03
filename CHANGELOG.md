@@ -7,7 +7,14 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
-## vNext
+## v0.0.10 — 2026-06-03
+
+First end-to-end RU box: the controller and RU agent now bring up a live box that
+boots clean on amd64. This release is the accumulation of the MVP bring-up fixes
+plus a containerised agent-boot harness (`make agent-harness`) that validates the
+full agent boot locally before any cloud VM. Highlights below; the bulk are
+fixes to the RU agent boot path and the image pipeline surfaced by real boxes and
+the new harness.
 
 **Fix: image-prepare defaults to the RU-box arch (amd64), not the controller's.**
 The mtg image runs on the RU box, but `image-prepare` defaulted `--arch` to the
