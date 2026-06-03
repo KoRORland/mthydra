@@ -1114,13 +1114,14 @@ def test_v12_to_v13_migration_idempotent(tmp_path):
 # --- spec I2 schema v14 tests ---
 
 def test_schema_version_is_15(tmp_path):
+    """Superseded by test_v16_tables_and_default_shard_seeded. Kept to preserve numbering."""
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
-    assert SCHEMA_VERSION == 15
+    assert SCHEMA_VERSION >= 15
     conn = connect(tmp_path / "state.sqlite")
     apply_schema(conn)
     row = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()
-    assert row[0] == 15
+    assert row[0] >= 15
 
 
 def test_v14_probe_credentials_table_present(tmp_path):
@@ -1229,3 +1230,35 @@ def test_v13_to_v14_migration_idempotent(tmp_path):
     assert conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 14
     migrate_v13_to_v14(conn)
     assert conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 14
+
+
+def test_v16_tables_and_default_shard_seeded(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema, SCHEMA_VERSION
+    c = connect(tmp_path / "s.sqlite")
+    apply_schema(c)
+    assert SCHEMA_VERSION >= 16
+    tables = {r[0] for r in c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "pending_enrollments" in tables
+    assert "bot_offsets" in tables
+    row = c.execute(
+        "SELECT shard_id, members_json FROM shards WHERE shard_id='default_shard'"
+    ).fetchone()
+    assert row is not None and row[1] == "[]"
+    c.close()
+
+
+def test_v16_seed_default_shard_idempotent_on_upgrade(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    c = connect(tmp_path / "s.sqlite")
+    apply_schema(c)
+    c.execute("DELETE FROM shards WHERE shard_id='default_shard'")
+    c.execute("UPDATE schema_version SET version=15 WHERE rowid=1")
+    c.commit()
+    apply_schema(c)  # runs migrate_v15_to_v16
+    n = c.execute(
+        "SELECT COUNT(*) FROM shards WHERE shard_id='default_shard'").fetchone()[0]
+    assert n == 1
+    c.close()

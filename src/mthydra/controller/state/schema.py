@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -558,6 +558,27 @@ _STATEMENTS: list[str] = [
     """,
     _TRIGGER_ALERT_ACKS_NO_UPDATE,
     _TRIGGER_ALERT_ACKS_NO_DELETE,
+    # --- enrollment v16 additions: pending_enrollments + bot_offsets ---
+    """
+    CREATE TABLE IF NOT EXISTS pending_enrollments (
+      user_id      TEXT PRIMARY KEY REFERENCES users(user_id),
+      token_hash   TEXT NOT NULL,
+      created_at   TEXT NOT NULL,
+      expires_at   TEXT NOT NULL,
+      consumed_at  TEXT
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_pending_enrollments_expires
+      ON pending_enrollments(expires_at)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS bot_offsets (
+      bot_purpose  TEXT PRIMARY KEY,
+      last_offset  INTEGER NOT NULL,
+      updated_at   TEXT NOT NULL
+    )
+    """,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -768,6 +789,41 @@ def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
         (15, _now()),
+    )
+    conn.commit()
+
+
+def _seed_default_shard(conn: sqlite3.Connection) -> None:
+    """Seed the always-present 'default_shard' (empty membership). Idempotent."""
+    conn.execute(
+        "INSERT OR IGNORE INTO shards "
+        "(shard_id, members_json, target_size, last_reshuffled_at, created_at) "
+        "VALUES ('default_shard', '[]', 2, ?, ?)",
+        (_now(), _now()),
+    )
+
+
+def migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
+    """Idempotent v15 → v16: pending_enrollments + bot_offsets + default_shard."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS pending_enrollments ("
+        "user_id TEXT PRIMARY KEY REFERENCES users(user_id), "
+        "token_hash TEXT NOT NULL, created_at TEXT NOT NULL, "
+        "expires_at TEXT NOT NULL, consumed_at TEXT)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_pending_enrollments_expires "
+        "ON pending_enrollments(expires_at)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS bot_offsets ("
+        "bot_purpose TEXT PRIMARY KEY, last_offset INTEGER NOT NULL, "
+        "updated_at TEXT NOT NULL)"
+    )
+    _seed_default_shard(conn)
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (16, _now()),
     )
     conn.commit()
 
@@ -1010,6 +1066,7 @@ def apply_schema(conn: sqlite3.Connection) -> None:
         n = conn.execute("SELECT COUNT(*) FROM node_state").fetchone()[0]
         if n == 0:
             conn.execute("INSERT INTO node_state (rowid, role) VALUES (1, 'active')")
+        _seed_default_shard(conn)
     else:
         current = conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0]
         if current < 2:
@@ -1040,4 +1097,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v13_to_v14(conn)
         if current < 15:
             migrate_v14_to_v15(conn)
+        if current < 16:
+            migrate_v15_to_v16(conn)
     conn.commit()
