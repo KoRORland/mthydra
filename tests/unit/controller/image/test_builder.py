@@ -133,6 +133,51 @@ def test_build_image_extracts_binary_from_tarball(conn, tmp_path):
     assert uploaded == elf_bytes
 
 
+def test_build_image_force_rebuild_identical_content_is_idempotent(conn, tmp_path):
+    """--force bypasses the release-level skip, but rebuilding the SAME binary
+    yields the same image_version (content sha) — it must return the existing
+    row, not crash on 'UNIQUE constraint failed: ru_images.image_version'.
+    Regression discovered 2026-06-03 re-running image-prepare --force."""
+    import io
+    import struct
+    import tarfile
+
+    elf_bytes = (b"\x7fELF\x02\x01\x01" + b"\x00" * 9
+                 + struct.pack("<HH", 2, 0x3E) + b"x" * 64)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo("mtg-2.2.8-linux-amd64/mtg")
+        info.size = len(elf_bytes)
+        tf.addfile(info, io.BytesIO(elf_bytes))
+    tarball = buf.getvalue()
+    tar_sha = hashlib.sha256(tarball).hexdigest()
+    asset = "mtg-2.2.8-linux-amd64.tar.gz"
+    release_json = {"tag_name": "v2.2.8", "assets": [
+        {"name": asset, "browser_download_url": f"https://example/{asset}"},
+        {"name": "SHA256SUMS", "browser_download_url": "https://example/SHA256SUMS"}]}
+
+    def _get(url):
+        resp = MagicMock()
+        if url.endswith("/releases/tags/v2.2.8"):
+            resp.status, resp.read.return_value = 200, json.dumps(release_json).encode()
+        elif url.endswith(f"/{asset}"):
+            resp.status, resp.read.return_value = 200, tarball
+        elif url.endswith("/SHA256SUMS"):
+            resp.status, resp.read.return_value = 200, f"{tar_sha}  {asset}\n".encode()
+        else:
+            resp.status, resp.read.return_value = 404, b""
+        return resp
+
+    kw = dict(conn=conn, b2_destination=MagicMock(), upstream_repo="9seconds/mtg",
+              upstream_release="v2.2.8", asset_filename=asset,
+              github_api_url="https://api.github.com", tmp_dir=tmp_path,
+              now="2026-06-03T00:00:00Z", http_client=_get)
+    iv1 = build_image(**kw)
+    iv2 = build_image(force=True, **kw)   # must NOT raise
+    assert iv1 == iv2
+    assert len(list_images(conn)) == 1    # not duplicated
+
+
 def test_build_image_checksum_mismatch_raises(conn, tmp_path):
     asset_bytes = b"some bytes"
     checksum_text = "deadbeef" * 8 + "  mtg-linux-amd64\n"  # wrong sha

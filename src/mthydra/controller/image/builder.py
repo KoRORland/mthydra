@@ -230,6 +230,18 @@ def build_image(
     binary_bytes = _extract_runnable(binary_bytes, asset_filename, member="mtg")
     image_version = hashlib.sha256(binary_bytes).hexdigest()
 
+    # Content-addressed idempotency: if this exact binary is already registered
+    # (e.g. a prior --force rebuild produced the same ELF), return it instead of
+    # colliding on the ru_images primary key. This is distinct from the
+    # release-level skip above (which --force bypasses to allow rebuilding a
+    # release into different content).
+    already = conn.execute(
+        "SELECT image_version FROM ru_images WHERE image_version=?",
+        (image_version,),
+    ).fetchone()
+    if already is not None:
+        return already[0]
+
     # 6. Write the binary into tmp_dir.
     binary_path = tmp_dir / f"image-{image_version}.bin"
     binary_path.write_bytes(binary_bytes)
