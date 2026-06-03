@@ -1262,3 +1262,27 @@ def test_v16_seed_default_shard_idempotent_on_upgrade(tmp_path):
         "SELECT COUNT(*) FROM shards WHERE shard_id='default_shard'").fetchone()[0]
     assert n == 1
     c.close()
+
+
+def test_v15_to_v16_upgrade_creates_tables_and_seeds(tmp_path):
+    # Simulate a DB that predates v16: drop the v16 tables + default_shard and
+    # set version back to 15, then re-apply so migrate_v15_to_v16 runs its
+    # CREATE TABLE path (not just _STATEMENTS).
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    c = connect(tmp_path / "s.sqlite")
+    apply_schema(c)
+    c.execute("DROP TABLE pending_enrollments")
+    c.execute("DROP TABLE bot_offsets")
+    c.execute("DELETE FROM shards WHERE shard_id='default_shard'")
+    c.execute("UPDATE schema_version SET version=15 WHERE rowid=1")
+    c.commit()
+    apply_schema(c)  # runs migrate_v15_to_v16 with the v16 tables absent
+    tables = {r[0] for r in c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "pending_enrollments" in tables
+    assert "bot_offsets" in tables
+    assert c.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 16
+    assert c.execute(
+        "SELECT COUNT(*) FROM shards WHERE shard_id='default_shard'").fetchone()[0] == 1
+    c.close()
