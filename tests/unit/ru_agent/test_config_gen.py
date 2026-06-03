@@ -67,6 +67,12 @@ def test_render_sing_box_config_basic(tmp_path):
     vless_outbounds = [o for o in payload["outbounds"] if o["type"] == "vless"]
     assert len(vless_outbounds) == 2
     assert {o["tag"] for o in vless_outbounds} == {"exit-fp1", "exit-fp2"}
+    # sing-box's Reality client requires uTLS, else it exits "uTLS is required
+    # by reality client". Caught by the agent-boot harness, 2026-06-03.
+    for o in vless_outbounds:
+        assert o["tls"]["utls"]["enabled"] is True
+        assert o["tls"]["utls"]["fingerprint"]
+        assert o["tls"]["reality"]["enabled"] is True
     selector = next(o for o in payload["outbounds"] if o["type"] == "selector")
     assert set(selector["outbounds"]) == {"exit-fp1", "exit-fp2"}
     inbound = payload["inbounds"][0]

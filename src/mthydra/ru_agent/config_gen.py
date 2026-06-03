@@ -68,6 +68,9 @@ def render_sing_box_config(
             "tls": {
                 "enabled": True,
                 "server_name": exit["cover_sni"],
+                # sing-box's Reality *client* requires uTLS; without it sing-box
+                # exits with "uTLS is required by reality client".
+                "utls": {"enabled": True, "fingerprint": "chrome"},
                 "reality": {
                     "enabled": True,
                     "public_key": exit["reality_pubkey"],
