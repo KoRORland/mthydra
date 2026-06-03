@@ -26,9 +26,6 @@ from mthydra.controller.observability.alert_text import (
     severity_word,
 )
 from mthydra.controller.observability.remediation import remediation_for
-from mthydra.controller.observability.severity import (
-    severity_for_obligation_staleness,
-)
 from mthydra.controller.observability.sinks import AlertPayload, DryRunSink
 from mthydra.controller.observability.snapshot import (
     Snapshot,
