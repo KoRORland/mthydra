@@ -8,11 +8,15 @@ Seeds a throwaway DB with a real authority + signing key + signed descriptor
 runs the real provision_box, then rewrites image.url/sha256 to the local mtg
 file the container serves over file://.
 """
+import base64
 import json
 import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from mthydra.controller.provisioning.seed import provision_box
 from mthydra.controller.state import cover_pool, eu_exit_set
@@ -38,9 +42,15 @@ def main() -> int:
     insert_authority(conn, 1, apriv, apub, NOW)
     dpriv, dpub = generate_keypair()
     insert_signing_key(conn, 1, dpriv, dpub, NOW)
-    # One EU exit so the signed descriptor carries an exit (dummy TEST-NET endpoint).
+    # One EU exit so the signed descriptor carries an exit (dummy TEST-NET
+    # endpoint). reality_pubkey must be a real x25519 key (sing-box validates
+    # it: "invalid public_key"); base64url-no-pad, as `sing-box generate
+    # reality-keypair` emits. Production gets this from data-exit-reality-keygen.
+    _pub_raw = X25519PrivateKey.generate().public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    reality_pub = base64.urlsafe_b64encode(_pub_raw).rstrip(b"=").decode()
     eu_exit_set.add_exit(conn, "harness-fp", "192.0.2.1:443", 1, NOW,
-                         cover_sni="www.cloudflare.com", reality_pubkey="HARNESSPUB")
+                         cover_sni="www.cloudflare.com", reality_pubkey=reality_pub)
     sign_new_descriptor(conn, now_iso=NOW, valid_until_iso="2026-06-04T00:00:00Z")
     insert_candidate(conn, image_version="harnessimg", upstream_release="v0.0.0",
                      upstream_repo="9seconds/mtg", binary_url="images/x/mtg",
