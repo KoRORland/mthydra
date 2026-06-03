@@ -3,8 +3,9 @@
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -16,11 +17,13 @@ from mthydra.controller.state import user_channels as _uc
 from mthydra.controller.state.audit import log_event
 from mthydra.controller.state.db import connect
 
+log = logging.getLogger(__name__)
+
 _BOT_PURPOSE = "distribution"
 
 
 def _default_clock() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class EnrollmentPoller:
@@ -107,5 +110,8 @@ class EnrollmentPoller:
             conn.close()
         if self.on_enrolled:
             for uid in enrolled:
-                self.on_enrolled(uid)
+                try:
+                    self.on_enrolled(uid)
+                except Exception:
+                    log.exception("on_enrolled callback failed for %s", uid)
         return enrolled
