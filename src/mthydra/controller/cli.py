@@ -774,6 +774,20 @@ def build_parser() -> argparse.ArgumentParser:
     dlr.add_argument("--db-path", default=DEFAULT_DB)
     dlr.add_argument("--json", action="store_true")
 
+    # ----- user-onboard one-shot -----
+
+    uo = sub.add_parser("user-onboard",
+                        help="one-shot: create user + assign shard + enrollment link")
+    uo.add_argument("user_id")
+    uo.add_argument("--shard", dest="shard_id", default=None,
+                    help="shard to assign (default: configured default_shard_id)")
+    uo.add_argument("--email", default=None)
+    uo.add_argument("--display-name", dest="display_name", default=None)
+    uo.add_argument("--out-of-band-channel", dest="oob", default="unspecified")
+    uo.add_argument("--ttl-hours", dest="ttl_hours", type=int, default=None)
+    uo.add_argument("--db-path", default=DEFAULT_DB)
+    uo.add_argument("--config", default="/etc/mthydra/controller.toml")
+
     return p
 
 
@@ -1215,6 +1229,8 @@ def run(argv: list[str]) -> int:
         return _cmd_dist_test(args, mode)
     if args.cmd == "dist-log-recent":
         return _cmd_dist_log_recent(args)
+    if args.cmd == "user-onboard":
+        return _cmd_user_onboard(args)
 
     return 1
 
@@ -4462,6 +4478,75 @@ def _cmd_dist_log_recent(args) -> int:
         return 0
     finally:
         conn.close()
+
+
+# ----- user-onboard one-shot handler -----
+
+def _cmd_user_onboard(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.distribution import enrollment
+    from mthydra.controller.distribution.sinks import TelegramDistributionSink
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state import user_channels as _uc
+    from mthydra.controller.state.shards import create_shard
+    from mthydra.controller.state.users_shards import add_user, assign_user_to_shard
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"user-onboard: config error: {e}", file=sys.stderr)
+        return 2
+
+    shard_id = args.shard_id or cfg.shard_manager.default_shard_id
+    ttl_seconds = (args.ttl_hours or cfg.distribution.enrollment_token_ttl_hours) * 3600
+    now = _now()
+    conn = connect(args.db_path)
+    try:
+        rc = _require_active_role(conn, "user-onboard")
+        if rc is not None:
+            return rc
+        try:
+            add_user(conn, args.user_id, args.display_name, args.oob, now)
+        except sqlite3.IntegrityError:
+            pass  # user already exists — onboarding is re-runnable
+        shard_exists = conn.execute(
+            "SELECT 1 FROM shards WHERE shard_id=?", (shard_id,)
+        ).fetchone() is not None
+        if not shard_exists:
+            create_shard(conn, shard_id=shard_id, members=[],
+                         target_size=cfg.shard_manager.target_size, at=now)
+        assign_user_to_shard(conn, args.user_id, shard_id, at=now,
+                             max_size=cfg.shard_manager.max_size)
+        if args.email:
+            _uc.set_channels(conn, args.user_id, telegram_chat_id=None,
+                             email_addr=args.email, at=now)
+        else:
+            print("user-onboard: no --email; Telegram-only (allowed, less robust)",
+                  file=sys.stderr)
+        token = enrollment.mint(conn, args.user_id, ttl_seconds=ttl_seconds, now=now)
+        conn.commit()
+    except (LookupError, ValueError) as e:
+        print(f"user-onboard: {e}", file=sys.stderr)
+        return 2
+    finally:
+        conn.close()
+
+    bot_username = None
+    if cfg.distribution.telegram is not None:
+        try:
+            bot_username = TelegramDistributionSink(
+                cfg.distribution.telegram.bot_token).get_me()
+        except Exception:
+            bot_username = None
+    print(f"user-onboard: {args.user_id} -> shard {shard_id}")
+    if bot_username:
+        print("Send this link to the user (they tap it, then tap Start):")
+        print("  " + enrollment.deep_link(bot_username, token))
+    else:
+        print("Enrollment token (build the link as "
+              "https://t.me/<distbot>?start=<token>):")
+        print("  " + token)
+    return 0
 
 
 # ----- spec D2: canary + rollback subcommands -----
