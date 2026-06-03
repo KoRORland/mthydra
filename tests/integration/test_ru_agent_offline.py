@@ -15,8 +15,10 @@ import pytest
 def _build_test_seed(tmp_path):
     """Build a seed dict with real Ed25519 keys + signed credential + signed descriptor."""
     from cryptography.hazmat.primitives.asymmetric import ed25519
+
     from mthydra.descriptor.authority import (
-        generate_authority_keypair, sign_onward_credential,
+        generate_authority_keypair,
+        sign_onward_credential,
     )
 
     priv_auth, pub_auth = generate_authority_keypair()
@@ -32,7 +34,7 @@ def _build_test_seed(tmp_path):
         "schema": "mthydra.descriptor.v2", "generation": 5,
         "signed_at": "2026-05-23T00:00:00Z",
         "valid_until": "2026-05-24T00:00:00Z",
-        "exits": [
+        "eu_exit_set": [
             {"fingerprint": "fp1", "endpoint": "1.2.3.4:443",
              "weight": 1, "cover_sni": "eu1cover.example",
              "reality_pubkey": "EUPUB1"},
@@ -76,7 +78,14 @@ def _build_test_seed(tmp_path):
 def test_ru_agent_startup_renders_configs_and_installs_iptables(tmp_path, monkeypatch):
     seed_path, binary_bytes, _, _ = _build_test_seed(tmp_path)
     from mthydra.ru_agent import (
-        binary as bin_mod, config_gen, iptables, seed as seed_mod,
+        binary as bin_mod,
+    )
+    from mthydra.ru_agent import (
+        config_gen,
+        iptables,
+    )
+    from mthydra.ru_agent import (
+        seed as seed_mod,
     )
 
     # Patch HTTP fetch for the binary.
@@ -114,7 +123,7 @@ def test_ru_agent_startup_renders_configs_and_installs_iptables(tmp_path, monkey
     sb_json = config_gen.render_sing_box_config(seed, desc, tproxy_port=12345)
     assert b"cover.example" in mtg_toml
     sb_payload = json.loads(sb_json)
-    assert sb_payload["inbounds"][0]["type"] == "tproxy"
+    assert sb_payload["inbounds"][0]["type"] == "redirect"
     assert sb_payload["inbounds"][0]["listen_port"] == 12345
 
     # Step 4: install iptables.
@@ -128,7 +137,8 @@ def test_ru_agent_startup_renders_configs_and_installs_iptables(tmp_path, monkey
 def test_descriptor_refresh_triggers_config_rewrite(tmp_path, monkeypatch):
     """Simulate a new descriptor arriving over B2; agent rewrites sing-box.json."""
     seed_path, _, desc_priv, desc_pub_raw = _build_test_seed(tmp_path)
-    from mthydra.ru_agent import config_gen, descriptor_refresh, seed as seed_mod
+    from mthydra.ru_agent import config_gen, descriptor_refresh
+    from mthydra.ru_agent import seed as seed_mod
 
     seed = seed_mod.load(seed_path)
     n = struct.unpack(">H", seed.initial_descriptor[:2])[0]
@@ -138,7 +148,7 @@ def test_descriptor_refresh_triggers_config_rewrite(tmp_path, monkeypatch):
     new_payload = {
         **initial_desc,
         "generation": 6,
-        "exits": initial_desc["exits"] + [
+        "eu_exit_set": initial_desc["eu_exit_set"] + [
             {"fingerprint": "fp2", "endpoint": "9.9.9.9:443",
              "weight": 1, "cover_sni": "eu2cover.example",
              "reality_pubkey": "EUPUB2"},
