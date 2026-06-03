@@ -7,12 +7,14 @@ orphaned B2 object (visible via head_image), never a phantom catalog row.
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
+import io
 import json
 import sqlite3
+import tarfile
 import urllib.request
 from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
 
 from mthydra.controller.state.ru_images import insert_candidate
@@ -23,6 +25,38 @@ class BuildError(RuntimeError):
 
 
 _CHECKSUM_ASSET_CANDIDATES = ("SHA256SUMS", "checksums.txt")
+
+
+def _extract_runnable(asset_bytes: bytes, asset_filename: str, *, member: str) -> bytes:
+    """Return the runnable binary from a release asset.
+
+    mtg ships as `mtg-<ver>-<arch>.tar.gz` containing `mtg-<ver>-<arch>/mtg`;
+    the RU agent execs the binary directly, so we must hand it the ELF, not the
+    archive. Handles `.tar.gz`/`.tgz` (extract the named member), bare `.gz`
+    (decompress), and raw binaries (returned unchanged). Detection is by
+    filename, with a gzip-magic fallback."""
+    is_gzip = asset_bytes[:2] == b"\x1f\x8b"
+    if asset_filename.endswith((".tar.gz", ".tgz")) or (
+        is_gzip and asset_filename.endswith(".tar")
+    ):
+        try:
+            with tarfile.open(fileobj=io.BytesIO(asset_bytes), mode="r:*") as tf:
+                for m in tf.getmembers():
+                    if m.isfile() and m.name.rsplit("/", 1)[-1] == member:
+                        f = tf.extractfile(m)
+                        if f is not None:
+                            return f.read()
+        except tarfile.TarError as e:
+            raise BuildError(f"could not read archive {asset_filename!r}: {e}") from e
+        raise BuildError(
+            f"archive {asset_filename!r} contains no {member!r} file"
+        )
+    if asset_filename.endswith(".gz") or is_gzip:
+        try:
+            return gzip.decompress(asset_bytes)
+        except OSError as e:
+            raise BuildError(f"could not gunzip {asset_filename!r}: {e}") from e
+    return asset_bytes
 
 
 def _default_http_get(url: str):
@@ -61,21 +95,27 @@ def build_image(
     now: str,
     actor: str = "operator",
     http_client: Callable | None = None,
+    force: bool = False,
 ) -> str:
     """Download upstream binary, verify sha256, upload to B2, insert ru_images.
 
     Returns the new image_version (hex sha256). Raises BuildError on any
     failure path; never partially writes (B2 upload precedes DB insert).
+
+    force=True bypasses the same-release idempotency shortcut — needed to
+    rebuild when an earlier build registered a bad artifact for this release.
     """
     # S-2: idempotent — skip download + insert if this release already exists.
-    existing = conn.execute(
-        "SELECT image_version FROM ru_images "
-        "WHERE upstream_release=? AND upstream_repo=? "
-        "LIMIT 1",
-        (upstream_release, upstream_repo),
-    ).fetchone()
-    if existing is not None:
-        return existing[0]
+    # --force bypasses this to rebuild a release whose prior artifact was bad.
+    if not force:
+        existing = conn.execute(
+            "SELECT image_version FROM ru_images "
+            "WHERE upstream_release=? AND upstream_repo=? "
+            "LIMIT 1",
+            (upstream_release, upstream_repo),
+        ).fetchone()
+        if existing is not None:
+            return existing[0]
 
     get = http_client or _default_http_get
     tmp_dir = Path(tmp_dir)
@@ -139,7 +179,8 @@ def build_image(
         raise BuildError(f"asset download failed: {e}") from e
 
     # 5. Verify sha256.
-    expected_sha = _parse_checksum_for(asset_filename, checksum_bytes.decode("utf-8", errors="replace"))
+    expected_sha = _parse_checksum_for(
+        asset_filename, checksum_bytes.decode("utf-8", errors="replace"))
     if expected_sha is None:
         raise BuildError(
             f"checksum file does not contain a line for {asset_filename!r}"
@@ -150,7 +191,12 @@ def build_image(
             f"sha256 mismatch for {asset_filename!r}: "
             f"upstream={expected_sha} actual={actual_sha}"
         )
-    image_version = actual_sha
+    # The upstream asset is verified — but mtg ships as a .tar.gz, and the RU
+    # agent execs the binary directly. Extract the actual ELF so the image is a
+    # runnable binary, not the archive. image_version is the sha of what the
+    # agent runs.
+    binary_bytes = _extract_runnable(binary_bytes, asset_filename, member="mtg")
+    image_version = hashlib.sha256(binary_bytes).hexdigest()
 
     # 6. Write the binary into tmp_dir.
     binary_path = tmp_dir / f"image-{image_version}.bin"

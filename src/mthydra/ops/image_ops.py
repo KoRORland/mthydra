@@ -182,13 +182,15 @@ def cmd_image_prepare(args) -> int:
     # image_version — the sha256 of the actual binary, NOT the upstream tag.
     # image-promote needs THAT sha (it's the primary key in ru_images);
     # passing `iv-{tag}` as we used to fails with "image_profiles row missing".
+    build_argv = [
+        "image-build", "--release", tag, "--asset", asset,
+        "--profile-json", profile_path,
+        "--db-path", args.db_path, "--config", args.config,
+    ]
+    if getattr(args, "force", False):
+        build_argv.append("--force")
     try:
-        res = _run_controller(
-            "image-build", "--release", tag, "--asset", asset,
-            "--profile-json", profile_path,
-            "--db-path", args.db_path, "--config", args.config,
-            check=True, capture=True,
-        )
+        res = _run_controller(*build_argv, check=True, capture=True)
     except subprocess.CalledProcessError as e:
         # capture=True swallows the child's output streams into the
         # exception; surface them so "see above" actually points at

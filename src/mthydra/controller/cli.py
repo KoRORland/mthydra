@@ -373,6 +373,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="who pinned the profile (default 'operator')")
     ib.add_argument("--db-path", default=DEFAULT_DB)
     ib.add_argument("--config", default="/etc/mthydra/controller.toml")
+    ib.add_argument("--force", action="store_true",
+                    help="rebuild even if this release already has an image "
+                         "(replaces a prior bad artifact)")
 
     il = sub.add_parser("image-list", help="list ru_images catalog")
     il.add_argument("--state", choices=["candidate", "promoted", "retired"], default=None)
@@ -2721,6 +2724,7 @@ def _cmd_image_build(args) -> int:
                 github_api_url=cfg.image.github_api_url,
                 tmp_dir=Path(cfg.image.build_tmp_dir),
                 now=_now(),
+                force=getattr(args, "force", False),
             )
         except BuildError as e:
             msg = str(e).lower()

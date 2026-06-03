@@ -9,6 +9,16 @@ what (if anything) the operator must do when upgrading.
 
 ## vNext
 
+**Fix: image-build extracts the mtg ELF from the release tarball.** mtg ships as
+`mtg-<ver>-<arch>.tar.gz`; build_image verified the tarball against the upstream
+checksum (correct) but then stored the **tarball** as the image. The RU agent
+execs the image directly, so the box got a gzip blob at `/run/mthydra/mtg` that
+can't run (`file` reported gzip data, not ELF — first RU box, 2026-06-02). It now
+extracts the `mtg` member after verifying the archive and registers the ELF
+(image_version = sha of the binary). New `--force` on `image-build` /
+`mthydra-ops image-prepare` rebuilds a release whose prior artifact was bad
+(the same-release idempotency shortcut otherwise returns the old image).
+
 **Fix: RU-side traffic capture uses REDIRECT, not TPROXY (and is idempotent).**
 mtg's connections to the Telegram DCs are locally generated (OUTPUT chain), but
 the agent hooked a TPROXY-bearing chain into OUTPUT — and `xt_TPROXY` is

@@ -75,6 +75,61 @@ def test_build_image_happy_path(conn, tmp_path):
     assert n.binary_sha256 == sha
 
 
+def test_build_image_extracts_binary_from_tarball(conn, tmp_path):
+    """mtg ships as mtg-<ver>-<arch>.tar.gz containing .../mtg. build_image must
+    verify the tarball against the upstream checksum, then extract the ELF and
+    register THAT (the agent execs the binary directly — a tarball can't run).
+    Regression: the first RU box got a gzip blob at /run/mthydra/mtg.
+    Discovered 2026-06-02 (`file` reported gzip data, not ELF)."""
+    import io
+    import tarfile
+
+    elf_bytes = b"\x7fELF" + b"fake-mtg-binary" * 100
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo("mtg-2.2.8-linux-amd64/mtg")
+        info.size = len(elf_bytes)
+        tf.addfile(info, io.BytesIO(elf_bytes))
+    tarball = buf.getvalue()
+    tar_sha = hashlib.sha256(tarball).hexdigest()
+    elf_sha = hashlib.sha256(elf_bytes).hexdigest()
+    asset = "mtg-2.2.8-linux-amd64.tar.gz"
+    release_json = {
+        "tag_name": "v2.2.8",
+        "assets": [
+            {"name": asset, "browser_download_url": f"https://example/{asset}"},
+            {"name": "SHA256SUMS", "browser_download_url": "https://example/SHA256SUMS"},
+        ],
+    }
+
+    def _get(url):
+        resp = MagicMock()
+        if url.endswith("/releases/tags/v2.2.8"):
+            resp.status, resp.read.return_value = 200, json.dumps(release_json).encode()
+        elif url.endswith(f"/{asset}"):
+            resp.status, resp.read.return_value = 200, tarball
+        elif url.endswith("/SHA256SUMS"):
+            resp.status = 200
+            resp.read.return_value = f"{tar_sha}  {asset}\n".encode()
+        else:
+            resp.status, resp.read.return_value = 404, b""
+        return resp
+
+    b2 = MagicMock()
+    image_version = build_image(
+        conn=conn, b2_destination=b2,
+        upstream_repo="9seconds/mtg", upstream_release="v2.2.8",
+        asset_filename=asset, github_api_url="https://api.github.com",
+        tmp_dir=tmp_path, now="2026-06-02T00:00:00Z", http_client=_get,
+    )
+    # image_version is the sha of the EXTRACTED ELF, not the tarball.
+    assert image_version == elf_sha
+    assert image_version != tar_sha
+    # and the bytes uploaded are the ELF, not the archive.
+    uploaded = b2.put_image.call_args.kwargs["binary_path"].read_bytes()
+    assert uploaded == elf_bytes
+
+
 def test_build_image_checksum_mismatch_raises(conn, tmp_path):
     asset_bytes = b"some bytes"
     checksum_text = "deadbeef" * 8 + "  mtg-linux-amd64\n"  # wrong sha
@@ -154,8 +209,17 @@ def test_build_image_resolves_project_specific_checksum_filename(conn, tmp_path)
     fallback substring match picks it up by 'checksum' in the filename.
 
     Discovered 2026-06-01 on a real mthydra-ops image-prepare run."""
-    asset_bytes = b"arm64-mtg-binary-bytes" * 100
-    sha = hashlib.sha256(asset_bytes).hexdigest()
+    import io
+    import tarfile
+    elf_bytes = b"\x7fELF" + b"arm64-mtg-binary-bytes" * 100
+    _buf = io.BytesIO()
+    with tarfile.open(fileobj=_buf, mode="w:gz") as _tf:
+        _info = tarfile.TarInfo("mtg-2.2.8-linux-arm64/mtg")
+        _info.size = len(elf_bytes)
+        _tf.addfile(_info, io.BytesIO(elf_bytes))
+    asset_bytes = _buf.getvalue()             # real tarball (extracted at build)
+    sha = hashlib.sha256(asset_bytes).hexdigest()        # tarball sha (checksum)
+    elf_sha = hashlib.sha256(elf_bytes).hexdigest()      # what image_version becomes
     asset_name = "mtg-2.2.8-linux-arm64.tar.gz"
     checksum_text = f"{sha}  {asset_name}\n"
     release_json = {
@@ -193,7 +257,7 @@ def test_build_image_resolves_project_specific_checksum_filename(conn, tmp_path)
         now="2026-06-01T00:00:00Z",
         http_client=_get,
     )
-    assert iv == sha
+    assert iv == elf_sha
 
 
 def test_build_image_checksum_file_missing(conn, tmp_path):

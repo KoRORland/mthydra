@@ -1029,6 +1029,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="'auto' = generate a minimal placeholder; otherwise a path")
     ip.add_argument("--yes", action="store_true",
                     help="auto-promote after build (skip the [y/N] prompt)")
+    ip.add_argument("--force", action="store_true",
+                    help="rebuild even if this release already has an image "
+                         "(replaces a prior bad artifact)")
     ip.add_argument("--non-interactive", action="store_true")
     ip.add_argument("--db-path", default=_DEFAULT_DB)
     ip.add_argument("--config", default=_DEFAULT_CONFIG)
