@@ -505,6 +505,8 @@ Paste the IPv4 into the wizard prompt + Enter. The wizard:
 - On success: marks the box live.
 - Prints `done: box b-... live @ <IP>; CANARY — next: §3.4 soak ...` (the "soak" note now means "the probe runner will pick this box up automatically on its next tick" — no manual `probe-record` needed).
 
+> **Shard placement:** the box auto-binds to `default_shard` at provisioning. Pass `provision-seed --shard <id>` to place it in a dedicated shard instead.
+
 If the wizard times out, open the TimeWeb web console for the VM and run `journalctl -u cloud-final -n 80 --no-pager` to see what cloud-init did. Most often the VM has no outbound internet (check TimeWeb firewall) or the agent presigned URL expired (`mthydra-ops agent-publish` again to refresh).
 
 ### 7.4 Wire your vantage for automatic probes (one command)
@@ -542,30 +544,17 @@ You're going to add yourself first as a smoke test, then your real circle member
 
 ### 8.1 Add yourself as a test user
 
-Open a DM with your **distribution** bot (from 2.3) in Telegram, send "hi". Then open `https://api.telegram.org/bot<DIST_BOT_TOKEN>/getUpdates` in a browser, find your chat ID. Save as `MY_CHAT_ID`.
+On the EU host as the `mthydra` user:
 
-On the EU host as mthydra user:
 ```bash
-mthydra-controller user-add me \
-    --out-of-band-channel "phone:+1234567890" \
+mthydra-controller user-onboard me \
     --display-name "Me (test)" \
-    --db-path /var/lib/mthydra/state.sqlite
-
-mthydra-controller user-channels-set me \
-    --telegram <MY_CHAT_ID> \
     --email youremail@gmail.com \
-    --db-path /var/lib/mthydra/state.sqlite
-
-mthydra-controller shard-create s-test --members me \
-    --db-path /var/lib/mthydra/state.sqlite \
-    --config /etc/mthydra/controller.toml
-
-mthydra-controller dist-test --user-id me \
     --db-path /var/lib/mthydra/state.sqlite \
     --config /etc/mthydra/controller.toml
 ```
 
-You should now have **one test message in Telegram** (via the distribution bot, with a `tg://proxy?...` link) **and one in email**. Tap the Telegram link on your phone — Telegram opens a "Connect Proxy" dialog with the RU box's IP filled in. Tap **Connect**. Telegram is now routing through your RU box.
+Copy the printed `https://t.me/<bot>?start=…` link, open it on your phone, tap **Start**. Within ~30 seconds the controller captures your Telegram chat and sends your first proxy delta to Telegram + email.
 
 Verify it's working: turn off WiFi (force mobile data), open Telegram, send yourself a message. If it sends quickly, your proxy works.
 
@@ -577,28 +566,19 @@ For each person in your trusted circle:
    - They have Telegram on a phone they actually use.
    - They have an email they read daily (not Yandex / not Mail.ru).
    - They understand: "if Telegram stops working for you, contact me on [Signal/etc] and I'll switch you."
-2. Have them open a DM with your distribution bot and send "hi". Get their chat ID via `getUpdates` (you'll see a new chat entry).
-3. Tell them to enable **Telegram Passcode Lock** (Settings → Privacy and Security → Passcode Lock) AND **Two-Step Verification** with a recovery email. Important — these protect them if their phone is grabbed at a border check.
-4. Run:
+2. Tell them to enable **Telegram Passcode Lock** (Settings → Privacy and Security → Passcode Lock) AND **Two-Step Verification** with a recovery email. Important — these protect them if their phone is grabbed at a border check.
+3. Run:
    ```bash
-   mthydra-controller user-add <their-name> \
-       --out-of-band-channel "signal:<their phone>" \
+   mthydra-controller user-onboard <their-name> \
        --display-name "Their Name" \
-       --db-path /var/lib/mthydra/state.sqlite
-
-   mthydra-controller user-channels-set <their-name> \
-       --telegram <THEIR_CHAT_ID> \
        --email theiremail@gmail.com \
-       --db-path /var/lib/mthydra/state.sqlite
-
-   mthydra-controller shard-assign-box <their-name> --auto \
-       --db-path /var/lib/mthydra/state.sqlite
-
-   mthydra-controller dist-test --user-id <their-name> \
+       --out-of-band-channel "signal:<their phone>" \
        --db-path /var/lib/mthydra/state.sqlite \
        --config /etc/mthydra/controller.toml
+   # add --shard s-hi-risk to isolate a higher-risk contact in their own shard
    ```
-5. Ask them out-of-band (NOT in Telegram) whether the test message arrived in both channels. If yes — they're set up.
+   Send them the printed link out-of-band (Signal/in person). They tap it, tap **Start** — that's their whole job.
+4. Ask them out-of-band (NOT in Telegram) whether the proxy config arrived. If yes — they're set up.
 
 ---
 

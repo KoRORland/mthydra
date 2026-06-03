@@ -7,6 +7,40 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
+## Unreleased — 2026-06-03
+
+**New: `mthydra-controller user-onboard` — one-command user onboarding with
+Telegram deep-link enrollment.** Replaces the four-step
+`user-add` / `user-channels-set` / `shard-create` / `dist-test` sequence.
+The command creates the user, assigns them to a shard (uses `default_shard` if
+`--shard` is omitted; auto-creates the shard if missing), mints a one-time
+enrollment token, and prints a `https://t.me/<distbot>?start=<token>` deep-link
+(or the bare token if the bot username can't be resolved). The operator sends
+that link to the user out-of-band. The user taps it, taps **Start** — the
+controller's enrollment poller auto-captures their `chat_id` and delivers
+their first proxy delta. No `getUpdates` call, no chat-id transcription, no bot
+DM required from the user beforehand. Email is optional; Telegram-only is
+allowed (produces a warning). Re-running `user-onboard` reissues the token.
+Token TTL is controlled by `distribution.enrollment_token_ttl_hours` (default 24h).
+
+**New: `provision-seed --shard <id>`.** Boxes now auto-bind to `default_shard`
+at provisioning when `--shard` is omitted. Pass `--shard <id>` to place a box
+in a dedicated shard. `mark_live` refuses a shard-less box; `default_shard` is
+exempt from the empty-active-shard invariant (check 36).
+
+**Alert UX improvements.**
+- The active EU node's own never-published heartbeat no longer triggers a page.
+- Telegram alert messages are rendered as HTML; `snake_case` identifiers are
+  no longer unintentionally italicised by Telegram's Markdown parser.
+- Alert subjects and bodies are human-readable with per-obligation remediation
+  lines, so the operator knows the fix without consulting the runbook.
+
+**Operator action:** none required. `mthydra-ops upgrade` to pick up
+`user-onboard`. Existing users are unaffected; re-run `user-onboard` for any
+user whose `chat_id` you want to capture via the new enrollment flow.
+
+---
+
 ## v0.0.10 — 2026-06-03
 
 First end-to-end RU box: the controller and RU agent now bring up a live box that
