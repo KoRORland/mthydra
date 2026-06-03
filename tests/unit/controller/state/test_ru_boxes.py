@@ -38,6 +38,8 @@ def test_insert_starts_in_provisioning(tmp_db_path):
 def test_mark_live_transitions(tmp_db_path):
     conn = _conn(tmp_db_path)
     insert_box(conn, "box-1", "hetzner", "fsn1", None, "example.org", "abc123", "2026-05-18T00:00:00Z")
+    conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='box-1'")
+    conn.commit()
     mark_live(conn, "box-1", public_ip="1.2.3.4", at="2026-05-18T00:10:00Z")
     live = list_live(conn)
     assert [b.box_id for b in live] == ["box-1"]
@@ -47,6 +49,8 @@ def test_mark_live_transitions(tmp_db_path):
 def test_mark_terminated_removes_from_live(tmp_db_path):
     conn = _conn(tmp_db_path)
     insert_box(conn, "box-1", "hetzner", "fsn1", None, "example.org", "abc123", "2026-05-18T00:00:00Z")
+    conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='box-1'")
+    conn.commit()
     mark_live(conn, "box-1", public_ip="1.2.3.4", at="2026-05-18T00:10:00Z")
     mark_terminated(conn, "box-1", reason="job2_kill", at="2026-05-18T01:00:00Z")
     assert list_live(conn) == []
@@ -186,6 +190,42 @@ def test_clear_canary_flag_refuses_missing_box(tmp_db_path):
 
 # --- spec D2: ru_images.list_live_boxes_for_image ---
 
+def test_mark_live_refuses_box_with_null_shard(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.ru_boxes import mark_live
+    c = connect(tmp_path / "s.sqlite")
+    apply_schema(c)
+    c.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, "
+        "image_version, created_at) "
+        "VALUES ('b1', 'tw', 'ru', 'x.example', 'provisioning', 'v1', "
+        "'2026-06-03T00:00:00Z')"
+    )
+    c.commit()
+    with pytest.raises(ValueError, match="no shard"):
+        mark_live(c, "b1", public_ip="1.2.3.4", at="2026-06-03T01:00:00Z")
+    c.close()
+
+
+def test_mark_live_succeeds_with_shard(tmp_path):
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.ru_boxes import mark_live
+    c = connect(tmp_path / "s.sqlite")
+    apply_schema(c)
+    c.execute(
+        "INSERT INTO ru_boxes (box_id, provider, region, sni, state, "
+        "image_version, created_at, shard_id) "
+        "VALUES ('b1', 'tw', 'ru', 'x.example', 'provisioning', 'v1', "
+        "'2026-06-03T00:00:00Z', 'default_shard')"
+    )
+    c.commit()
+    mark_live(c, "b1", public_ip="1.2.3.4", at="2026-06-03T01:00:00Z")
+    assert c.execute("SELECT state FROM ru_boxes WHERE box_id='b1'").fetchone()[0] == "live"
+    c.close()
+
+
 def test_list_live_boxes_for_image_filters_states(tmp_db_path):
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_boxes import insert_box, mark_live, mark_terminated
@@ -199,6 +239,8 @@ def test_list_live_boxes_for_image_filters_states(tmp_db_path):
                "v1", "2026-05-25T00:00:00Z")
     insert_box(conn, "b3", "p", "r", "10.0.0.3", "sni-b3",
                "v2", "2026-05-25T00:00:00Z")
+    conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='b1'")
+    conn.commit()
     mark_live(conn, "b1", public_ip="10.0.0.1", at="2026-05-25T00:01:00Z")
     mark_terminated(conn, "b2", reason="test", at="2026-05-25T00:02:00Z")
     # default: provisioning + live for v1 -> b1 only

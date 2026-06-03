@@ -44,6 +44,16 @@ def insert_box(
 
 
 def mark_live(conn: sqlite3.Connection, box_id: str, *, public_ip: str, at: str) -> None:
+    row = conn.execute(
+        "SELECT state, shard_id FROM ru_boxes WHERE box_id=?", (box_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"box {box_id!r} is not in provisioning state")
+    if row[1] is None:
+        raise ValueError(
+            f"box {box_id!r} has no shard — assign one before going live "
+            f"(boxes bind to a shard at provisioning; see provision-seed --shard)"
+        )
     cur = conn.execute(
         "UPDATE ru_boxes SET state='live', public_ip=?, went_live_at=? "
         "WHERE box_id=? AND state='provisioning'",
