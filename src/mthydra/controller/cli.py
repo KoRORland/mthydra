@@ -6,6 +6,7 @@ Global flag --mode {production|dryrun|offline} per plan §16.2.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sqlite3
@@ -4505,10 +4506,9 @@ def _cmd_user_onboard(args) -> int:
         rc = _require_active_role(conn, "user-onboard")
         if rc is not None:
             return rc
-        try:
+        with contextlib.suppress(sqlite3.IntegrityError):
+            # user already exists — onboarding is re-runnable
             add_user(conn, args.user_id, args.display_name, args.oob, now)
-        except sqlite3.IntegrityError:
-            pass  # user already exists — onboarding is re-runnable
         shard_exists = conn.execute(
             "SELECT 1 FROM shards WHERE shard_id=?", (shard_id,)
         ).fetchone() is not None
