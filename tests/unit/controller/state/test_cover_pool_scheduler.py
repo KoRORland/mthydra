@@ -65,6 +65,11 @@ def test_reverify_sweep_proves_obligation(db):
 def _seed_box(p, box_id="box-1", sni="sni.invalid"):
     conn = connect(p)
     insert_box(conn, box_id, "aws", "eu-west-1", "10.0.0.1", sni, "img-v1", "2026-04-01T00:00:00Z")
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id=?", (box_id,))
     mark_live(conn, box_id, public_ip="10.0.0.1", at="2026-04-01T00:00:00Z")
     conn.close()

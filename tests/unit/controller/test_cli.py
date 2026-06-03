@@ -1225,6 +1225,11 @@ def test_cover_rotate_burns_in_use_domain(tmp_path, age_recipient):
     conn = connect(db)
     insert_box(conn, "box-1", "aws", "eu-west-1", "10.0.0.1", "sni.invalid",
                "img-v1", "2026-05-19T00:00:00Z")
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='box-1'")
     mark_live(conn, "box-1", public_ip="10.0.0.1", at="2026-05-19T00:00:00Z")
     add_candidate(conn, "rot.org", added_at="2026-05-19T00:00:00Z")
@@ -1278,6 +1283,11 @@ def test_cover_due_lists_overdue_and_stale(tmp_path, age_recipient, capsys):
     conn = connect(db)
     old = "2026-04-01T00:00:00Z"
     insert_box(conn, "box-1", "aws", "eu-west-1", "10.0.0.1", "sni.invalid", "img-v1", old)
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='box-1'")
     mark_live(conn, "box-1", public_ip="10.0.0.1", at=old)
     add_candidate(conn, "old.org", added_at=old)
@@ -1771,6 +1781,11 @@ def test_image_promote_clears_upstream_release_obligation(tmp_path, age_recipien
     attest_active(conn, "vb", at="2026-05-21T00:00:00Z")
     insert_box(conn, "b-canary", "p", "r", "10.0.0.1", "sni-canary",
                "iv1", "2026-05-21T00:00:00Z", is_canary=True)
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='b-canary'")
     mark_live(conn, "b-canary", public_ip="10.0.0.1",
               at="2026-05-21T00:01:00Z")
@@ -3574,6 +3589,11 @@ def _seed_canary_cohort_for_image(conn, image_version):
     attest_active(conn, "vb", at="2026-05-25T00:00:00Z")
     insert_box(conn, "b-canary", "p", "r", "10.0.0.1", "sni-canary",
                image_version, "2026-05-25T00:00:00Z", is_canary=True)
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='b-canary'")
     mark_live(conn, "b-canary", public_ip="10.0.0.1",
               at="2026-05-25T00:01:00Z")
@@ -3684,6 +3704,11 @@ def test_image_rollback_happy_path(tmp_path, age_recipient, capsys):
                "2026-05-25T01:02:00Z")
     insert_box(conn, "b2", "p", "r", "10.0.0.2", "sni-b2", "iv1",
                "2026-05-25T01:02:00Z")
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id IN ('b1','b2')")
     mark_live(conn, "b1", public_ip="10.0.0.1", at="2026-05-25T01:03:00Z")
     mark_live(conn, "b2", public_ip="10.0.0.2", at="2026-05-25T01:03:00Z")

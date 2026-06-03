@@ -29,6 +29,11 @@ def conn(tmp_db_path):
 
 def _seed_live_box(c, box_id: str = "box-1", sni: str = "box-sni.invalid") -> None:
     insert_box(c, box_id, "aws", "eu-west-1", "10.0.0.1", sni, "img-v1", NOW)
+    c.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     c.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id=?", (box_id,))
     mark_live(c, box_id, public_ip="10.0.0.1", at=NOW)
 

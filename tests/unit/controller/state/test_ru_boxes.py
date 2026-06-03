@@ -38,6 +38,11 @@ def test_insert_starts_in_provisioning(tmp_db_path):
 def test_mark_live_transitions(tmp_db_path):
     conn = _conn(tmp_db_path)
     insert_box(conn, "box-1", "hetzner", "fsn1", None, "example.org", "abc123", "2026-05-18T00:00:00Z")
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='box-1'")
     conn.commit()
     mark_live(conn, "box-1", public_ip="1.2.3.4", at="2026-05-18T00:10:00Z")
@@ -49,6 +54,11 @@ def test_mark_live_transitions(tmp_db_path):
 def test_mark_terminated_removes_from_live(tmp_db_path):
     conn = _conn(tmp_db_path)
     insert_box(conn, "box-1", "hetzner", "fsn1", None, "example.org", "abc123", "2026-05-18T00:00:00Z")
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='box-1'")
     conn.commit()
     mark_live(conn, "box-1", public_ip="1.2.3.4", at="2026-05-18T00:10:00Z")
@@ -215,6 +225,11 @@ def test_mark_live_succeeds_with_shard(tmp_path):
     c = connect(tmp_path / "s.sqlite")
     apply_schema(c)
     c.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
+    c.execute(
         "INSERT INTO ru_boxes (box_id, provider, region, sni, state, "
         "image_version, created_at, shard_id) "
         "VALUES ('b1', 'tw', 'ru', 'x.example', 'provisioning', 'v1', "
@@ -239,6 +254,11 @@ def test_list_live_boxes_for_image_filters_states(tmp_db_path):
                "v1", "2026-05-25T00:00:00Z")
     insert_box(conn, "b3", "p", "r", "10.0.0.3", "sni-b3",
                "v2", "2026-05-25T00:00:00Z")
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='b1'")
     conn.commit()
     mark_live(conn, "b1", public_ip="10.0.0.1", at="2026-05-25T00:01:00Z")

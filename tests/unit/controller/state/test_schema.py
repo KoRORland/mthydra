@@ -1232,7 +1232,7 @@ def test_v13_to_v14_migration_idempotent(tmp_path):
     assert conn.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 14
 
 
-def test_v16_tables_and_default_shard_seeded(tmp_path):
+def test_v16_tables_created_no_default_shard_seeded(tmp_path):
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema, SCHEMA_VERSION
     c = connect(tmp_path / "s.sqlite")
@@ -1242,47 +1242,32 @@ def test_v16_tables_and_default_shard_seeded(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "pending_enrollments" in tables
     assert "bot_offsets" in tables
-    row = c.execute(
-        "SELECT shard_id, members_json FROM shards WHERE shard_id='default_shard'"
-    ).fetchone()
-    assert row is not None and row[1] == "[]"
+    # default_shard is created lazily at provision time, NOT seeded at bootstrap.
+    assert c.execute(
+        "SELECT COUNT(*) FROM shards WHERE shard_id='default_shard'"
+    ).fetchone()[0] == 0
     c.close()
 
 
-def test_v16_seed_default_shard_idempotent_on_upgrade(tmp_path):
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
-    c = connect(tmp_path / "s.sqlite")
-    apply_schema(c)
-    c.execute("DELETE FROM shards WHERE shard_id='default_shard'")
-    c.execute("UPDATE schema_version SET version=15 WHERE rowid=1")
-    c.commit()
-    apply_schema(c)  # runs migrate_v15_to_v16
-    n = c.execute(
-        "SELECT COUNT(*) FROM shards WHERE shard_id='default_shard'").fetchone()[0]
-    assert n == 1
-    c.close()
-
-
-def test_v15_to_v16_upgrade_creates_tables_and_seeds(tmp_path):
-    # Simulate a DB that predates v16: drop the v16 tables + default_shard and
-    # set version back to 15, then re-apply so migrate_v15_to_v16 runs its
-    # CREATE TABLE path (not just _STATEMENTS).
+def test_v15_to_v16_upgrade_creates_tables(tmp_path):
+    # Simulate a pre-v16 DB: drop the v16 tables and set version back to 15,
+    # then re-apply so migrate_v15_to_v16 runs its CREATE TABLE path.
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
     c = connect(tmp_path / "s.sqlite")
     apply_schema(c)
     c.execute("DROP TABLE pending_enrollments")
     c.execute("DROP TABLE bot_offsets")
-    c.execute("DELETE FROM shards WHERE shard_id='default_shard'")
     c.execute("UPDATE schema_version SET version=15 WHERE rowid=1")
     c.commit()
-    apply_schema(c)  # runs migrate_v15_to_v16 with the v16 tables absent
+    apply_schema(c)  # runs migrate_v15_to_v16 with the tables absent
     tables = {r[0] for r in c.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "pending_enrollments" in tables
     assert "bot_offsets" in tables
     assert c.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 16
+    # No default_shard is seeded by the migration.
     assert c.execute(
-        "SELECT COUNT(*) FROM shards WHERE shard_id='default_shard'").fetchone()[0] == 1
+        "SELECT COUNT(*) FROM shards WHERE shard_id='default_shard'"
+    ).fetchone()[0] == 0
     c.close()

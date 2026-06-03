@@ -118,6 +118,11 @@ def test_wheel_tick_rewrites_after_credential_revoke(tmp_path):
     _seed_authority(conn)
     _seed_active_eu_node(conn)
     insert_box(conn, "b1", "p", "r", None, "sni1", "v1", "2026-05-23T00:00:00Z")
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='b1'")
     set_reality_uuid(conn, "b1", "uuid-b1")
     cred_id = issue_credential(conn, "b1", b"...", "2026-05-23T00:00:00Z", 1)
@@ -222,6 +227,11 @@ def test_wheel_tick_sighup_failure_after_first_render_reraises(tmp_path):
     _seed_authority(conn)
     _seed_active_eu_node(conn)
     insert_box(conn, "b1", "p", "r", None, "sni1", "v1", "2026-05-23T00:00:00Z")
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='b1'")
     set_reality_uuid(conn, "b1", "uuid-b1")
     cred_id = issue_credential(conn, "b1", b"...", "2026-05-23T00:00:00Z", 1)

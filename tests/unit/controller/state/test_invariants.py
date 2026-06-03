@@ -364,6 +364,11 @@ def test_check_27_rejects_live_box_without_credential(tmp_db_path):
     from mthydra.controller.state.ru_boxes import insert_box, mark_live
     insert_box(conn, "boxX", "aws", "eu-1", "10.0.0.1", "sni-x.invalid",
                "img-v1", NOW)
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='boxX'")
     mark_live(conn, "boxX", public_ip="10.0.0.1", at=NOW)
     conn.commit()
@@ -419,6 +424,11 @@ def test_check_30_rejects_live_box_without_reality_uuid(tmp_db_path):
     from mthydra.controller.state.ru_boxes import insert_box, mark_live
     insert_box(conn, "boxX", "aws", "eu-1", "10.0.0.1", "sni-x.invalid",
                "img-v1", NOW)
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='boxX'")
     mark_live(conn, "boxX", public_ip="10.0.0.1", at=NOW)
     issue_credential(conn, "boxX", b"\x00" * 10, NOW, authority_generation=1)

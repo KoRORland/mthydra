@@ -48,6 +48,11 @@ def _seed_prior_promotion(conn):
 def _seed_canary(conn, box_id, image_version, *, state="live", canary=True):
     insert_box(conn, box_id, "p", "r", f"10.0.0.{ord(box_id[-1]) & 0xff}",
                f"sni-{box_id}", image_version, NOW, is_canary=canary)
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
     conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id=?", (box_id,))
     if state == "live":
         mark_live(conn, box_id, public_ip=f"10.0.0.{ord(box_id[-1]) & 0xff}", at=NOW)
