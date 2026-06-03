@@ -1,6 +1,7 @@
 """Download + verify the mtg binary from a signed B2 URL."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import tempfile
@@ -28,8 +29,12 @@ def download_and_verify(
     try:
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if getattr(resp, "status", 200) >= 400:
-                raise BinaryError(f"HTTP {resp.status} for {url}")
+            # file:// (and some) responses expose .status = None, not an int —
+            # treat a status-less response as OK rather than crashing on
+            # `None >= 400`. HTTP responses still carry a real status.
+            status = getattr(resp, "status", None)
+            if status is not None and status >= 400:
+                raise BinaryError(f"HTTP {status} for {url}")
             content = resp.read()
     except urllib.error.HTTPError as e:
         raise BinaryError(f"HTTP {e.code} for {url}: {e.reason}") from e
@@ -67,8 +72,6 @@ def download_and_verify(
         finally:
             os.close(dir_fd)
     except Exception:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp_path)
-        except FileNotFoundError:
-            pass
         raise

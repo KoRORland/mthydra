@@ -24,6 +24,29 @@ def test_download_and_verify_writes_chmod_executable(tmp_path, monkeypatch):
     assert out.stat().st_mode & 0o111  # executable bit set
 
 
+def test_download_accepts_status_none_response(tmp_path, monkeypatch):
+    """file:// (and some other) urllib responses expose .status = None, not an
+    int. download_and_verify must treat a status-less response as OK, not crash
+    on `None >= 400`. Caught by the agent-boot harness (file:// image url),
+    2026-06-03."""
+    from mthydra.ru_agent import binary
+    payload = b"elf-bytes" * 50
+    sha = hashlib.sha256(payload).hexdigest()
+
+    def fake_urlopen(req, timeout=None):
+        class _R:
+            status = None  # urllib file:// response
+            def read(self_inner): return payload
+            def __enter__(self_inner): return self_inner
+            def __exit__(self_inner, *a): pass
+        return _R()
+    monkeypatch.setattr(binary.urllib.request, "urlopen", fake_urlopen)
+
+    out = tmp_path / "mtg"
+    binary.download_and_verify(url="file:///x/mtg", expected_sha256=sha, out_path=out)
+    assert out.read_bytes() == payload
+
+
 def test_download_rejects_sha_mismatch(tmp_path, monkeypatch):
     from mthydra.ru_agent import binary
 
