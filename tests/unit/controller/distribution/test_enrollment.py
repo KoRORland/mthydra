@@ -55,3 +55,19 @@ def test_reissue_replaces_prior(conn):
 def test_deep_link_format():
     assert enrollment.deep_link("myfam_bot", "ABC") == \
         "https://t.me/myfam_bot?start=ABC"
+
+
+def test_match_at_exact_expiry_is_rejected(conn):
+    # expires_at is exclusive (expires_at > now), so presenting at the exact
+    # expiry instant is rejected.
+    tok = enrollment.mint(conn, "granny", ttl_seconds=3600,
+                          now="2026-06-03T10:00:00Z")
+    assert enrollment.match(conn, tok, now="2026-06-03T11:00:00Z") is None
+
+
+def test_match_rejects_already_consumed_even_if_unexpired(conn):
+    tok = enrollment.mint(conn, "granny", ttl_seconds=3600,
+                          now="2026-06-03T10:00:00Z")
+    assert enrollment.match(conn, tok, now="2026-06-03T10:10:00Z") == "granny"
+    # Still well within TTL, but already consumed -> rejected.
+    assert enrollment.match(conn, tok, now="2026-06-03T10:20:00Z") is None

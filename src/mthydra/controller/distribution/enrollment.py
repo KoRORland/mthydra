@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 from mthydra.controller.state import audit
 
@@ -18,16 +19,15 @@ def _hash(token: str) -> str:
 
 
 def _add_seconds_iso(iso: str, seconds: int) -> str:
-    from datetime import datetime, timedelta, timezone
     t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     return (t + timedelta(seconds=seconds)).astimezone(
-        timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def mint(conn: sqlite3.Connection, user_id: str, *, ttl_seconds: int,
          now: str) -> str:
     """Mint (or reissue) a token for user_id. Returns the plaintext token once."""
-    token = secrets.token_urlsafe(9)  # ~72 bits entropy
+    token = secrets.token_urlsafe(16)  # 128 bits entropy; fits Telegram's 64-char start payload
     expires_at = _add_seconds_iso(now, ttl_seconds)
     conn.execute(
         "INSERT INTO pending_enrollments "
@@ -40,6 +40,7 @@ def mint(conn: sqlite3.Connection, user_id: str, *, ttl_seconds: int,
     )
     audit.log_event(conn, ts=now, actor="operator", action="enrollment_mint",
                     target=user_id, details_json=None)
+    conn.commit()
     return token
 
 
@@ -64,6 +65,7 @@ def match(conn: sqlite3.Connection, token: str, *, now: str) -> str | None:
     audit.log_event(conn, ts=now, actor="enroll_poller",
                     action="enrollment_consumed", target=user_id,
                     details_json=None)
+    # audit.log_event already committed; explicit commit keeps the contract clear
     conn.commit()
     return user_id
 
