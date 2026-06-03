@@ -62,6 +62,7 @@ def test_render_with_live_boxes(tmp_path):
     apply_schema(conn)
     _seed_authority(conn)
     insert_box(conn, "b1", "p", "r", None, "sni1", "v1", "2026-05-23T00:00:00Z")
+    conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='b1'")
     set_reality_uuid(conn, "b1", "9a8b-uuid-1")
     issue_credential(conn, "b1", b"...", "2026-05-23T00:00:00Z", 1)
     mark_live(conn, "b1", public_ip="1.2.3.4", at="2026-05-23T00:01:00Z")
@@ -106,6 +107,7 @@ def test_render_excludes_revoked_and_terminated(tmp_path):
         bid = f"b{i+1}"
         insert_box(conn, bid, "p", "r", None, f"sni{i+1}", "v1",
                    "2026-05-23T00:00:00Z")
+        conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id=?", (bid,))
         set_reality_uuid(conn, bid, f"uuid-{bid}")
         cred_id = issue_credential(conn, bid, b"...", "2026-05-23T00:00:00Z", 1)
         if state_action == "live":

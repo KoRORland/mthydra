@@ -48,6 +48,7 @@ def _seed_prior_promotion(conn):
 def _seed_canary(conn, box_id, image_version, *, state="live", canary=True):
     insert_box(conn, box_id, "p", "r", f"10.0.0.{ord(box_id[-1]) & 0xff}",
                f"sni-{box_id}", image_version, NOW, is_canary=canary)
+    conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id=?", (box_id,))
     if state == "live":
         mark_live(conn, box_id, public_ip=f"10.0.0.{ord(box_id[-1]) & 0xff}", at=NOW)
     elif state == "terminated":

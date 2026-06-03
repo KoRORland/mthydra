@@ -19,6 +19,7 @@ def test_summary_reports_expected_counts(tmp_db_path):
     add_candidate(conn, "a.org", added_at="2026-05-18T00:00:00Z")
     attest_verified(conn, "a.org", from_vantage="v", at="2026-05-18T01:00:00Z")
     insert_box(conn, "b1", "h", "fsn1", None, "a.org", "img1", "2026-05-18T00:00:00Z")
+    conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='b1'")
     assign_to_box(conn, "a.org", box_id="b1", at="2026-05-18T01:00:00Z")
     mark_live(conn, "b1", public_ip="1.2.3.4", at="2026-05-18T02:00:00Z")
 
