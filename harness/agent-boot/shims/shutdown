@@ -1,0 +1,5 @@
+#!/bin/sh
+# Harness shim: a power-off attempt is a harness FAILURE, not a silent no-op.
+echo "HARNESS-FAIL: agent invoked shutdown: $*" >&2
+touch /run/mthydra/.shutdown-called 2>/dev/null || touch /tmp/.shutdown-called
+exit 0

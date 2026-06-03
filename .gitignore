@@ -22,3 +22,6 @@ htmlcov/
 controller.toml
 controller.env
 backup-monitor.env
+
+# agent-boot harness: cached mtg download
+harness/agent-boot/.cache/

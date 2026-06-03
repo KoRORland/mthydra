@@ -1,12 +1,16 @@
-.PHONY: test test-monitor cov lint smoke smoke-descriptor smoke-install smoke-ru-cycle smoke-eu-automation help
+.PHONY: test test-monitor cov lint smoke smoke-descriptor smoke-install smoke-ru-cycle smoke-eu-automation agent-harness help
 
 help:
 	@echo "Targets:"
-	@echo "  test         Run controller test suite (tests/)"
-	@echo "  test-monitor Run backup-monitor test suite (mthydra-backup-monitor/tests/)"
-	@echo "  cov          Run controller tests with coverage report"
-	@echo "  lint         Run ruff lint + format check on both packages"
-	@echo "  smoke        Print the manual smoke-test procedure (no automation)"
+	@echo "  test          Run controller test suite (tests/)"
+	@echo "  test-monitor  Run backup-monitor test suite (mthydra-backup-monitor/tests/)"
+	@echo "  cov           Run controller tests with coverage report"
+	@echo "  lint          Run ruff lint + format check on both packages"
+	@echo "  agent-harness Run the full RU-agent boot in an amd64 container (Docker; amd64 host)"
+	@echo "  smoke         Print the manual smoke-test procedure (no automation)"
+
+agent-harness:
+	bash harness/agent-boot/run.sh
 
 test:
 	pytest tests/

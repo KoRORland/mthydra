@@ -1,0 +1,5 @@
+#!/bin/sh
+# Harness shim: simulate volatile journald so hardening._journald_volatile() passes.
+# Real boxes get Storage=volatile from cloud-init; a plain container has no
+# systemd-journald, so we report the volatile path it would look for.
+echo "File path: /run/log/journal/deadbeef/system.journal (in-memory volatile)"
