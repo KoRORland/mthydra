@@ -24,15 +24,16 @@ def _args(tmp_path, **over):
 
 
 def _fake_run_factory(history):
-    def _fake(argv, capture_output=True, text=True, timeout=None, input=None):
+    def _fake(argv, capture_output=True, text=True, timeout=None, input=None, **kwargs):
         history.append({"argv": argv, "input": input})
         if argv[0] == "ssh-keygen":
-            # Side-effect: write the .pub file so _ensure_probe_key's caller
-            # can read it.
+            # Side-effect: write both private and .pub files so ensure_probe_key
+            # can read them back (it reads private to compare against DB row).
             for i, tok in enumerate(argv):
                 if tok == "-f" and i + 1 < len(argv):
+                    Path(argv[i + 1]).write_text("PRIV\n")
                     Path(argv[i + 1] + ".pub").write_text(
-                        "ssh-ed25519 AAAAFAKEKEY mthydra-probe-runner@x\n")
+                        "ssh-ed25519 AAAAFAKEKEY mthydra-probe-runner\n")
                     break
             return subprocess.CompletedProcess(argv, 0, "", "")
         if argv[0] == "ssh-keyscan":
@@ -75,16 +76,22 @@ def test_cmd_vantage_setup_refuses_missing_root_key(tmp_path):
     assert rc == 2
 
 
-def test_ensure_probe_key_is_idempotent(tmp_path, monkeypatch):
-    """Re-running with an existing key does NOT call ssh-keygen again."""
-    ssh_dir = tmp_path / "ssh"
-    ssh_dir.mkdir()
-    (ssh_dir / "ru-msk-1.key").write_text("existing private key")
+def test_cmd_vantage_setup_registers_shared_key(tmp_path, monkeypatch):
+    """vantage-setup resolves the shared probe key from the DB and registers
+    that path (not a per-vantage <id>.key)."""
+    (tmp_path / "root.pem").write_text("-----BEGIN PRIVATE KEY-----\nfake\n")
     history: list[dict] = []
     monkeypatch.setattr(vantage_setup.subprocess, "run",
                         _fake_run_factory(history))
-    vantage_setup._ensure_probe_key(ssh_dir, "ru-msk-1")
-    assert all(h["argv"][0] != "ssh-keygen" for h in history)
+
+    rc = vantage_setup.cmd_vantage_setup(_args(tmp_path))
+    assert rc == 0
+    controller_calls = [h for h in history if "mthydra-controller" in h["argv"][0]]
+    assert len(controller_calls) == 1
+    argv = controller_calls[0]["argv"]
+    assert "vantage-set-ssh" in argv
+    kp = argv[argv.index("--key-path") + 1]
+    assert kp.endswith("probe.key")
 
 
 def test_ssh_provision_carries_pubkey_in_script(tmp_path, monkeypatch):

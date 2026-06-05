@@ -17,9 +17,14 @@ state already matches).
 """
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+
+from mthydra.controller.probe_runner.key import ensure_probe_key
+from mthydra.controller.state.db import connect
+from mthydra.controller.state.schema import apply_schema
 
 
 class VantageSetupError(RuntimeError):
@@ -51,22 +56,6 @@ def _ensure_ssh_dir(ssh_dir: Path) -> None:
     except PermissionError:
         # We may be running as mthydra against a dir owned by root; best-effort.
         pass
-
-
-def _ensure_probe_key(ssh_dir: Path, vantage_id: str) -> Path:
-    """Generate an ed25519 keypair at <ssh-dir>/<vantage-id>.key if missing.
-    Returns the private key path."""
-    key_path = ssh_dir / f"{vantage_id}.key"
-    if key_path.exists():
-        _say(f"key already exists: {key_path}")
-        return key_path
-    _say(f"generating ed25519 key at {key_path}")
-    _run([
-        "ssh-keygen", "-t", "ed25519", "-N", "",
-        "-f", str(key_path),
-        "-C", f"mthydra-probe-runner@{vantage_id}",
-    ])
-    return key_path
 
 
 def _ssh_provision_vantage(
@@ -170,9 +159,11 @@ def cmd_vantage_setup(args) -> int:
         return 2
     try:
         _ensure_ssh_dir(ssh_dir)
-        key_path = _ensure_probe_key(ssh_dir, args.vantage_id)
-        pubkey_path = Path(str(key_path) + ".pub")
-        probe_pubkey = pubkey_path.read_text().strip()
+        # apply_schema here because vantage-setup may run before the controller
+        # process has ever started (fresh host); the call is idempotent.
+        with connect(args.db_path) as conn:
+            apply_schema(conn)
+            key_path, probe_pubkey = ensure_probe_key(conn, ssh_dir)
         _ssh_provision_vantage(
             vantage_host=args.vantage_host,
             vantage_port=args.vantage_port,
@@ -191,6 +182,11 @@ def cmd_vantage_setup(args) -> int:
         )
     except VantageSetupError as e:
         _err(str(e))
+        return 3
+    except (sqlite3.Error, subprocess.SubprocessError, OSError) as e:
+        # DB open/migrate or key generation failed — surface cleanly instead of
+        # a raw traceback, same exit code as a provisioning failure.
+        _err(f"setup failed: {e}")
         return 3
     _say(f"vantage {args.vantage_id} ready for probes")
     return 0
