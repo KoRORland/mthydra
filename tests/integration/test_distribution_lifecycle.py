@@ -10,15 +10,24 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
-
 from mthydra.controller.distribution.publisher import DistributionPublisher
 from mthydra.controller.distribution.sinks import DryRunDistributionSink
 
-
 NOW = "2026-05-25T12:00:00Z"
 LATER = "2026-05-25T13:00:00Z"
+
+
+def conn_hash(db, user_id):
+    """Latest delivered subset_hash for a user, read from the audit log
+    (the user message is now a rendered link, not JSON)."""
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    try:
+        return conn.execute(
+            "SELECT subset_hash FROM distribution_log WHERE user_id=? "
+            "ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()[0]
+    finally:
+        conn.close()
 
 
 def _bootstrap_with_user_and_box(tmp_path, age_recipient):
@@ -67,6 +76,10 @@ def _bootstrap_with_user_and_box(tmp_path, age_recipient):
                "v1", NOW)
     assign_box_to_shard(conn, box_id="b1", shard_id="s1", at=NOW)
     mark_live(conn, "b1", public_ip="10.0.0.1", at=NOW)
+    # Production sets reality_uuid at provision-seed; the test bypasses that with
+    # insert_box, so set it here — without it the box can't form a proxy link and
+    # is (correctly) skipped from the user's delta (spec K2-D7).
+    conn.execute("UPDATE ru_boxes SET reality_uuid='reality-b1' WHERE box_id='b1'")
     issue_credential(conn, "b1", b"\x00\x01\x02", NOW, authority_generation=1)
     set_channels(conn, "u1", telegram_chat_id="12345",
                  email_addr="u1@example.org", at=NOW)
@@ -89,8 +102,16 @@ def test_distribution_lifecycle_first_publish_then_dedupe(tmp_path, age_recipien
     assert res["dispatched"] == 2
     assert len(tg.calls) == 1
     assert len(em.calls) == 1
-    # Payload contains the live box.
-    body = json.loads(tg.calls[0]["message"])
+    # The user receives a tappable proxy link for the live box (not raw JSON).
+    assert "https://t.me/proxy?server=10.0.0.1" in tg.calls[0]["message"]
+    # The machine-readable record is still stored for audit/dedupe.
+    from mthydra.controller.state.db import connect
+    conn = connect(db)
+    stored = conn.execute(
+        "SELECT payload_json FROM distribution_log WHERE user_id='u1' "
+        "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    conn.close()
+    body = json.loads(stored)
     assert body["user_id"] == "u1"
     assert [b["box_id"] for b in body["boxes"]] == ["b1"]
 
@@ -130,7 +151,7 @@ def test_distribution_lifecycle_compromise_reshuffles_then_republishes(tmp_path,
         mode="production", clock=lambda: NOW,
     )
     pub.run_once()
-    first_hash = json.loads(tg.calls[0]["message"])["subset_hash"]
+    first_hash = conn_hash(db, "u1")
 
     # Compromise terminate -> spec H reshuffles u1 to a new shard.
     rc = run(["ru-box-terminate", "b1", "--reason", "compromise",
@@ -141,9 +162,10 @@ def test_distribution_lifecycle_compromise_reshuffles_then_republishes(tmp_path,
     pub._clock = lambda: LATER
     res = pub.run_once()
     assert res["dispatched"] >= 1
-    new_payload = json.loads(tg.calls[-1]["message"])
-    assert new_payload["subset_hash"] != first_hash
-    assert new_payload["boxes"] == []
+    # New shard has no live box -> different hash, and the user gets the
+    # friendly "no proxies yet" message (empty delta) rather than a link.
+    assert conn_hash(db, "u1") != first_hash
+    assert "no prox" in tg.calls[-1]["message"].lower()
 
 
 def test_distribution_lifecycle_unassigned_user_no_publish(tmp_path, age_recipient):
