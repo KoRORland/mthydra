@@ -534,6 +534,8 @@ The wizard:
 
 Within 30 minutes (or restart `mthydra-controller` to force the next tick), `mthydra-controller probe-due --json` should show recent probes for your box. From this point forward, `probe_coverage_pending` will stay green automatically.
 
+> **Re-running is safe.** If a vantage is already set up, `vantage-setup` detects that the probe key already logs in and short-circuits to a no-op (re-pins the host key + re-registers) — it does **not** retry a root login. That matters because after step 4 root is gone: a re-run with `--root-key`/`--password` *can't* re-enter as root, and shouldn't need to.
+
 > **Failover is automatic.** Because the probe key lives in the state DB, it rides the encrypted backup. If you promote a warm standby, it restores the DB, rematerializes the identical key on startup, and resumes probing every vantage with no re-provisioning — the standby's key is already authorized everywhere.
 
 > **Older quickstart had 7 manual commands across two hosts** for this step. The wizard collapses them. Run with `--ssh-dir <path>` if you keep the probe key somewhere other than `/var/lib/mthydra/ssh/`.

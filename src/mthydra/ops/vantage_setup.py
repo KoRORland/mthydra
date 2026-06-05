@@ -133,15 +133,16 @@ echo OK
         )
 
 
-def _verify_probe_login(*, vantage_host: str, vantage_port: int,
-                        key_path: Path, timeout: int = 30) -> None:
-    """Open a FRESH connection as probe with the shared key and confirm it
-    works. Must pass BEFORE hardening — a bad key here would otherwise lock us
-    out (spec T2-D6)."""
-    _say("verifying probe-key login before hardening")
-    # accept-new (TOFU) is deliberate: this is a one-time setup check and the
-    # authoritative host-key pinning happens just after, in _ssh_keyscan ->
-    # the dedicated known_hosts the runner uses. The operator supplied the IP.
+def _probe_login_ok(*, vantage_host: str, vantage_port: int,
+                    key_path: Path, timeout: int = 20) -> bool:
+    """True iff we can log in as probe with the shared key. Used both for the
+    pre-hardening verification and for the idempotent re-run short-circuit
+    (a vantage that already accepts the probe key needs no root provisioning —
+    and after lockdown root access is gone, so a root re-entry would fail).
+
+    accept-new (TOFU) is deliberate: a one-time setup check; the authoritative
+    host-key pinning happens in _ssh_keyscan -> the dedicated known_hosts the
+    runner uses. The operator supplied the IP."""
     argv = [
         "ssh", "-i", str(key_path), "-p", str(vantage_port),
         "-o", "StrictHostKeyChecking=accept-new",
@@ -149,10 +150,19 @@ def _verify_probe_login(*, vantage_host: str, vantage_port: int,
         f"probe@{vantage_host}", "echo", "VERIFY-OK",
     ]
     res = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    if res.returncode != 0 or "VERIFY-OK" not in res.stdout:
+    return res.returncode == 0 and "VERIFY-OK" in res.stdout
+
+
+def _verify_probe_login(*, vantage_host: str, vantage_port: int,
+                        key_path: Path, timeout: int = 30) -> None:
+    """Confirm probe-key login works BEFORE hardening — a bad key here would
+    otherwise lock us out (spec T2-D6)."""
+    _say("verifying probe-key login before hardening")
+    if not _probe_login_ok(vantage_host=vantage_host, vantage_port=vantage_port,
+                           key_path=key_path, timeout=timeout):
         raise VantageSetupError(
-            f"probe login verification failed (rc={res.returncode}); NOT "
-            f"hardening. {res.stderr.strip() or res.stdout.strip()}")
+            "probe login verification failed; NOT hardening "
+            f"(probe@{vantage_host}:{vantage_port} with {key_path})")
 
 
 def _harden_sshd(*, vantage_host: str, vantage_port: int, ssh_user: str,
@@ -260,6 +270,23 @@ def cmd_vantage_setup(args) -> int:
                  "WITHOUT --print-pubkey (uses --bootstrap-user, default root).")
             return 0
 
+        known_hosts = ssh_dir / "known_hosts"
+        # Idempotent re-run: if the shared probe key already logs in, the vantage
+        # is already provisioned (and likely hardened — after which root access
+        # is gone, so a root entry method would fail here). Skip straight to the
+        # idempotent keyscan + register; do NOT attempt a root session.
+        if _probe_login_ok(vantage_host=args.vantage_host,
+                           vantage_port=args.vantage_port, key_path=key_path):
+            _say("probe key already authorized on this vantage; skipping root "
+                 "provisioning + hardening (idempotent re-run)")
+            _ssh_keyscan(args.vantage_host, args.vantage_port, known_hosts)
+            _register_with_controller(
+                vantage_id=args.vantage_id, vantage_host=args.vantage_host,
+                vantage_port=args.vantage_port, key_path=key_path,
+                known_hosts=known_hosts, db_path=args.db_path)
+            _say(f"vantage {args.vantage_id} ready for probes")
+            return 0
+
         ssh_user, identity, extra_opts = _entry_ssh_opts(args)
         if identity == "SHARED":
             identity = str(key_path)
@@ -273,7 +300,6 @@ def cmd_vantage_setup(args) -> int:
         _harden_sshd(
             vantage_host=args.vantage_host, vantage_port=args.vantage_port,
             ssh_user=ssh_user, identity=identity, extra_opts=extra_opts)
-        known_hosts = ssh_dir / "known_hosts"
         _ssh_keyscan(args.vantage_host, args.vantage_port, known_hosts)
         _register_with_controller(
             vantage_id=args.vantage_id, vantage_host=args.vantage_host,

@@ -22,7 +22,10 @@ provider-console only). The probe keypair now lives in the state DB (table
 `controller_probe_key`, schema **v17**) instead of a per-vantage file, so it
 rides the encrypted backup: a promoted warm standby restores the DB,
 rematerializes the identical key on startup, and resumes probing every vantage
-with no manual re-provisioning.
+with no manual re-provisioning. Re-running `vantage-setup` on an
+already-set-up vantage is a safe no-op — it detects the probe key already
+works and skips the (now-impossible, post-lockdown) root login, just
+re-pinning the host key and re-registering.
 
 **Upgrade note:** schema migrates v16 → v17 automatically on first start (adds
 one table; no data migration). Existing vantages keep working; re-run

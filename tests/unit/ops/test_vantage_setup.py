@@ -26,7 +26,13 @@ def _args(tmp_path, **over):
     return argparse.Namespace(**base)
 
 
-def _fake_run_factory(history):
+def _fake_run_factory(history, probe_authorized=False):
+    """Stateful ssh fake. The probe-login check (`echo VERIFY-OK`) fails until a
+    provision round has run (mirroring a fresh vantage where the probe key is
+    not yet authorized). Set probe_authorized=True to model an already-set-up
+    vantage (the idempotent re-run short-circuit)."""
+    state = {"provisioned": probe_authorized}
+
     def _fake(argv, capture_output=True, text=True, timeout=None, input=None, **kwargs):
         history.append({"argv": argv, "input": input})
         if argv[0] == "ssh-keygen":
@@ -43,13 +49,17 @@ def _fake_run_factory(history):
             return subprocess.CompletedProcess(
                 argv, 0, "|1|hashed|x= ssh-ed25519 AAAA...\n", "")
         if argv[0] == "ssh":
-            # Verify call has 'echo VERIFY-OK' in argv; provision/harden use 'bash -s'
+            # Probe-login check / verify has 'echo VERIFY-OK'; succeeds only once
+            # the probe key is authorized (after provisioning).
             if "VERIFY-OK" in argv:
-                return subprocess.CompletedProcess(argv, 0, "VERIFY-OK\n", "")
+                if state["provisioned"]:
+                    return subprocess.CompletedProcess(argv, 0, "VERIFY-OK\n", "")
+                return subprocess.CompletedProcess(argv, 255, "", "Permission denied")
             if "bash" in argv and "-s" in argv:
-                # Provision script returns 'OK'; harden script returns 'HARDENED'
+                # Harden script carries 'HARDENED'; everything else is provision.
                 if input and "HARDENED" in input:
                     return subprocess.CompletedProcess(argv, 0, "HARDENED\n", "")
+                state["provisioned"] = True  # provisioning authorizes the key
                 return subprocess.CompletedProcess(argv, 0, "OK\n", "")
             return subprocess.CompletedProcess(argv, 0, "OK\n", "")
         if "mthydra-controller" in argv[0]:
@@ -72,12 +82,35 @@ def test_cmd_vantage_setup_happy_path(tmp_path, monkeypatch):
 
     bins = [h["argv"][0] for h in history]
     assert bins.count("ssh-keygen") == 1
-    assert bins.count("ssh") == 3  # provision + verify + harden
+    assert bins.count("ssh") == 4  # probe-check (fails) + provision + verify + harden
     assert bins.count("ssh-keyscan") == 1
     # Last call must be vantage-set-ssh through the controller binary.
     controller_calls = [h for h in history if "mthydra-controller" in h["argv"][0]]
     assert len(controller_calls) == 1
     assert "vantage-set-ssh" in controller_calls[0]["argv"]
+
+
+def test_idempotent_rerun_skips_root_when_probe_works(tmp_path, monkeypatch):
+    """If the shared probe key already logs in (e.g. re-run after the vantage
+    was already set up + hardened), skip ALL root operations — no provision, no
+    harden — and just re-keyscan + re-register. This is the regression behind
+    'root@...: Permission denied' on a re-run of an already-hardened vantage."""
+    (tmp_path / "root.pem").write_text("-----BEGIN PRIVATE KEY-----\nfake\n")
+    history: list[dict] = []
+    monkeypatch.setattr(vantage_setup.subprocess, "run",
+                        _fake_run_factory(history, probe_authorized=True))
+
+    rc = vantage_setup.cmd_vantage_setup(_args(tmp_path, password=True, root_key=None))
+    assert rc == 0
+    # Exactly one ssh: the probe-login check. No provision/harden 'bash -s'.
+    ssh_calls = [h for h in history if h["argv"][0] == "ssh"]
+    assert len(ssh_calls) == 1
+    assert "VERIFY-OK" in ssh_calls[0]["argv"]
+    assert not any("bash" in h["argv"] and "-s" in h["argv"] for h in ssh_calls)
+    # Still keyscans + registers (idempotent).
+    assert any(h["argv"][0] == "ssh-keyscan" for h in history)
+    controller_calls = [h for h in history if "mthydra-controller" in h["argv"][0]]
+    assert len(controller_calls) == 1 and "vantage-set-ssh" in controller_calls[0]["argv"]
 
 
 def test_cmd_vantage_setup_refuses_missing_root_key(tmp_path):
@@ -195,6 +228,9 @@ def test_password_method_omits_batchmode(tmp_path, monkeypatch):
             return subprocess.CompletedProcess(argv, 0, "h x\n", "")
         return subprocess.CompletedProcess(argv, 0, "", "")
     monkeypatch.setattr(vantage_setup.subprocess, "run", _fake)
+    # Force the fresh-vantage path (probe key not yet authorized) so the first
+    # ssh call is the provision session, not the idempotent-rerun short-circuit.
+    monkeypatch.setattr(vantage_setup, "_probe_login_ok", lambda **kw: False)
     monkeypatch.setattr(vantage_setup, "_verify_probe_login", lambda **kw: None)
     monkeypatch.setattr(vantage_setup, "_harden_sshd", lambda **kw: None)
     args = _args(tmp_path, root_key=None, password=True, print_pubkey=False,
@@ -223,6 +259,7 @@ def test_root_key_method_uses_batchmode(tmp_path, monkeypatch):
             return subprocess.CompletedProcess(argv, 0, "OK\n", "")
         return subprocess.CompletedProcess(argv, 0, "h x\n", "")
     monkeypatch.setattr(vantage_setup.subprocess, "run", _fake)
+    monkeypatch.setattr(vantage_setup, "_probe_login_ok", lambda **kw: False)
     monkeypatch.setattr(vantage_setup, "_verify_probe_login", lambda **kw: None)
     monkeypatch.setattr(vantage_setup, "_harden_sshd", lambda **kw: None)
     args = _args(tmp_path, password=False, print_pubkey=False, bootstrap_user="root")
