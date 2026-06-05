@@ -133,12 +133,61 @@ echo OK
         )
 
 
-def _verify_probe_login(**kwargs) -> None:  # real body in Task 7
-    pass
+def _verify_probe_login(*, vantage_host: str, vantage_port: int,
+                        key_path: Path, timeout: int = 30) -> None:
+    """Open a FRESH connection as probe with the shared key and confirm it
+    works. Must pass BEFORE hardening — a bad key here would otherwise lock us
+    out (spec T2-D6)."""
+    _say("verifying probe-key login before hardening")
+    # accept-new (TOFU) is deliberate: this is a one-time setup check and the
+    # authoritative host-key pinning happens just after, in _ssh_keyscan ->
+    # the dedicated known_hosts the runner uses. The operator supplied the IP.
+    argv = [
+        "ssh", "-i", str(key_path), "-p", str(vantage_port),
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+        f"probe@{vantage_host}", "echo", "VERIFY-OK",
+    ]
+    res = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    if res.returncode != 0 or "VERIFY-OK" not in res.stdout:
+        raise VantageSetupError(
+            f"probe login verification failed (rc={res.returncode}); NOT "
+            f"hardening. {res.stderr.strip() or res.stdout.strip()}")
 
 
-def _harden_sshd(**kwargs) -> None:         # real body in Task 7
-    pass
+def _harden_sshd(*, vantage_host: str, vantage_port: int, ssh_user: str,
+                 identity: str, extra_opts: list[str], timeout: int = 60) -> None:
+    """Lock the vantage to probe-key-only (spec T2-D7). Writes a sshd_config
+    drop-in, validates with `sshd -t`, then RELOADS (existing sessions survive,
+    so this same root session stays alive to report success)."""
+    remote_script = """
+set -e
+cat > /etc/ssh/sshd_config.d/60-mthydra-probe.conf <<'EOF'
+AllowUsers probe
+PasswordAuthentication no
+PermitRootLogin no
+EOF
+sshd -t
+systemctl reload ssh 2>/dev/null || systemctl reload sshd
+echo HARDENED
+"""
+    # Reload dispatch: Debian/Ubuntu's unit is `ssh`, RHEL/Fedora's is `sshd`.
+    # We try `ssh` first (2>/dev/null hides the expected "unit not found" on
+    # RHEL), falling back to `sshd`. Under `set -e`, if BOTH reloads fail the
+    # final `||` command's non-zero status aborts the script before `echo
+    # HARDENED` — so a genuine reload failure is never reported as success.
+    argv = ["ssh"]
+    if identity:
+        argv += ["-i", identity]
+    argv += ["-p", str(vantage_port), *extra_opts, f"{ssh_user}@{vantage_host}",
+             "bash", "-s"]
+    _say("hardening vantage sshd to probe-key-only (AllowUsers probe)")
+    res = subprocess.run(argv, input=remote_script, capture_output=True,
+                         text=True, timeout=timeout)
+    if res.returncode != 0 or "HARDENED" not in res.stdout:
+        raise VantageSetupError(
+            f"hardening failed (rc={res.returncode}): "
+            f"{res.stderr.strip() or res.stdout.strip()}")
 
 
 def _ssh_keyscan(vantage_host: str, vantage_port: int, known_hosts: Path) -> None:

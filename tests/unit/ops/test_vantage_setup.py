@@ -43,7 +43,14 @@ def _fake_run_factory(history):
             return subprocess.CompletedProcess(
                 argv, 0, "|1|hashed|x= ssh-ed25519 AAAA...\n", "")
         if argv[0] == "ssh":
-            # Provision script — must read 'OK' from stdout
+            # Verify call has 'echo VERIFY-OK' in argv; provision/harden use 'bash -s'
+            if "VERIFY-OK" in argv:
+                return subprocess.CompletedProcess(argv, 0, "VERIFY-OK\n", "")
+            if "bash" in argv and "-s" in argv:
+                # Provision script returns 'OK'; harden script returns 'HARDENED'
+                if input and "HARDENED" in input:
+                    return subprocess.CompletedProcess(argv, 0, "HARDENED\n", "")
+                return subprocess.CompletedProcess(argv, 0, "OK\n", "")
             return subprocess.CompletedProcess(argv, 0, "OK\n", "")
         if "mthydra-controller" in argv[0]:
             return subprocess.CompletedProcess(argv, 0, "vantage-set-ssh: ru-msk-1 updated\n", "")
@@ -65,7 +72,7 @@ def test_cmd_vantage_setup_happy_path(tmp_path, monkeypatch):
 
     bins = [h["argv"][0] for h in history]
     assert bins.count("ssh-keygen") == 1
-    assert bins.count("ssh") == 1
+    assert bins.count("ssh") == 3  # provision + verify + harden
     assert bins.count("ssh-keyscan") == 1
     # Last call must be vantage-set-ssh through the controller binary.
     controller_calls = [h for h in history if "mthydra-controller" in h["argv"][0]]
@@ -224,3 +231,52 @@ def test_root_key_method_uses_batchmode(tmp_path, monkeypatch):
     prov = captured["ssh_argvs"][0]
     assert "BatchMode=yes" in prov
     assert f"root@{args.vantage_host}" in prov
+
+
+def test_verify_probe_login_uses_probe_user_and_key(tmp_path, monkeypatch):
+    captured = {}
+    def _fake(argv, capture_output=True, text=True, timeout=None, input=None, **kw):
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, "VERIFY-OK\n", "")
+    monkeypatch.setattr(vantage_setup.subprocess, "run", _fake)
+    vantage_setup._verify_probe_login(
+        vantage_host="h", vantage_port=22, key_path=Path("/k/probe.key"))
+    argv = captured["argv"]
+    assert "probe@h" in argv
+    assert "BatchMode=yes" in argv
+    assert argv[argv.index("-i") + 1] == "/k/probe.key"
+
+
+def test_verify_probe_login_raises_on_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(vantage_setup.subprocess, "run",
+                        lambda argv, **kw: subprocess.CompletedProcess(argv, 255, "", "denied"))
+    with pytest.raises(vantage_setup.VantageSetupError, match="probe login verification failed"):
+        vantage_setup._verify_probe_login(
+            vantage_host="h", vantage_port=22, key_path=Path("/k/probe.key"))
+
+
+def test_harden_writes_lockdown_dropin_and_validates(tmp_path, monkeypatch):
+    captured = {}
+    def _fake(argv, capture_output=True, text=True, timeout=None, input=None, **kw):
+        captured["argv"] = argv
+        captured["input"] = input
+        return subprocess.CompletedProcess(argv, 0, "HARDENED\n", "")
+    monkeypatch.setattr(vantage_setup.subprocess, "run", _fake)
+    vantage_setup._harden_sshd(
+        vantage_host="h", vantage_port=22, ssh_user="root",
+        identity="/k/root.pem", extra_opts=["-o", "BatchMode=yes"])
+    script = captured["input"]
+    assert "AllowUsers probe" in script
+    assert "PasswordAuthentication no" in script
+    assert "PermitRootLogin no" in script
+    assert "sshd -t" in script                 # validate before reload
+    assert "reload" in script                  # reload, not a hard restart
+
+
+def test_harden_raises_when_remote_omits_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(vantage_setup.subprocess, "run",
+                        lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "config test failed\n", ""))
+    with pytest.raises(vantage_setup.VantageSetupError, match="hardening failed"):
+        vantage_setup._harden_sshd(
+            vantage_host="h", vantage_port=22, ssh_user="root",
+            identity="/k/root.pem", extra_opts=[])
