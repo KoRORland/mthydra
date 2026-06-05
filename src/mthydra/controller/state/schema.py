@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -579,6 +579,15 @@ _STATEMENTS: list[str] = [
       updated_at   TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS controller_probe_key (
+      id           INTEGER PRIMARY KEY CHECK (id = 1),
+      private_key  TEXT NOT NULL,
+      public_key   TEXT NOT NULL,
+      created_at   TEXT NOT NULL,
+      comment      TEXT
+    );
+    """,
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -818,6 +827,24 @@ def migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
         (16, _now()),
+    )
+    conn.commit()
+
+
+def migrate_v16_to_v17(conn: sqlite3.Connection) -> None:
+    """Idempotent v16 → v17: add controller_probe_key (single-row table).
+
+    Holds the one shared probe-runner SSH keypair so it rides the encrypted
+    DB backup and survives standby promotion (spec T2-D2)."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS controller_probe_key ("
+        "id INTEGER PRIMARY KEY CHECK (id = 1), "
+        "private_key TEXT NOT NULL, public_key TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, comment TEXT)"
+    )
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (17, _now()),
     )
     conn.commit()
 
@@ -1092,4 +1119,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v14_to_v15(conn)
         if current < 16:
             migrate_v15_to_v16(conn)
+        if current < 17:
+            migrate_v16_to_v17(conn)
     conn.commit()

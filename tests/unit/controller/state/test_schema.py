@@ -1253,7 +1253,7 @@ def test_v15_to_v16_upgrade_creates_tables(tmp_path):
     # Simulate a pre-v16 DB: drop the v16 tables and set version back to 15,
     # then re-apply so migrate_v15_to_v16 runs its CREATE TABLE path.
     from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state.schema import apply_schema, SCHEMA_VERSION
     c = connect(tmp_path / "s.sqlite")
     apply_schema(c)
     c.execute("DROP TABLE pending_enrollments")
@@ -1265,7 +1265,7 @@ def test_v15_to_v16_upgrade_creates_tables(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "pending_enrollments" in tables
     assert "bot_offsets" in tables
-    assert c.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == 16
+    assert c.execute("SELECT version FROM schema_version WHERE rowid=1").fetchone()[0] == SCHEMA_VERSION
     # No default_shard is seeded by the migration.
     assert c.execute(
         "SELECT COUNT(*) FROM shards WHERE shard_id='default_shard'"
