@@ -154,3 +154,29 @@ def test_dryrun_custom_label():
     sink = DryRunDistributionSink(label="dryrun-tg")
     res = sink(to_addr="x", subject="s", body="b")
     assert res.sink == "dryrun-tg"
+
+
+# --- Telegram send_photo ---
+
+
+def test_telegram_send_photo_posts_multipart_sendphoto():
+    captured = {}
+    def fake_photo(url, fields, png):
+        captured["url"] = url
+        captured["fields"] = fields
+        captured["png_len"] = len(png)
+        return 200, '{"ok":true}'
+    from mthydra.controller.distribution.sinks import TelegramDistributionSink
+    sink = TelegramDistributionSink("TOKEN", http_post_photo=fake_photo)
+    res = sink.send_photo(chat_id="123", png=b"\x89PNG......", caption="Proxy 1")
+    assert res.success is True
+    assert captured["url"].endswith("/sendPhoto")
+    assert captured["fields"] == {"chat_id": "123", "caption": "Proxy 1"}
+    assert captured["png_len"] == len(b"\x89PNG......")
+
+
+def test_telegram_send_photo_reports_http_error():
+    from mthydra.controller.distribution.sinks import TelegramDistributionSink
+    sink = TelegramDistributionSink("TOKEN", http_post_photo=lambda u, f, p: (400, "bad"))
+    res = sink.send_photo(chat_id="123", png=b"x", caption="c")
+    assert res.success is False and "400" in (res.error or "")

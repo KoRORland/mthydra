@@ -28,10 +28,12 @@ class TelegramDistributionSink:
         bot_token: str,
         http_post: Callable[[str, dict], tuple[int, str]] | None = None,
         http_get: Callable[[str, dict], tuple[int, str]] | None = None,
+        http_post_photo: Callable[[str, dict, bytes], tuple[int, str]] | None = None,
     ) -> None:
         self._bot_token = bot_token
         self._http_post = http_post or self._default_http_post
         self._http_get = http_get or self._default_http_get
+        self._http_post_photo = http_post_photo or self._default_http_post_photo
 
     @staticmethod
     def _default_http_post(url: str, body: dict) -> tuple[int, str]:
@@ -66,6 +68,48 @@ class TelegramDistributionSink:
             return int(e.code), e.read().decode("utf-8", errors="replace")
         except Exception as e:
             return 0, str(e)
+
+    @staticmethod
+    def _default_http_post_photo(url: str, fields: dict, png: bytes) -> tuple[int, str]:
+        import urllib.error
+        import urllib.request
+        import uuid as _uuid
+
+        boundary = _uuid.uuid4().hex
+        parts: list[bytes] = []
+        for k, v in fields.items():
+            parts.append(
+                (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\""
+                 f"\r\n\r\n{v}\r\n").encode("utf-8"))
+        parts.append(
+            (f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; "
+             f"filename=\"proxy.png\"\r\nContent-Type: image/png\r\n\r\n").encode("utf-8"))
+        parts.append(png)
+        parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+        body = b"".join(parts)
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return int(resp.status), resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            return int(e.code), e.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            return 0, str(e)
+
+    def send_photo(self, *, chat_id: str, png: bytes, caption: str) -> SinkResult:
+        url = f"https://api.telegram.org/bot{self._bot_token}/sendPhoto"
+        try:
+            status, text = self._http_post_photo(
+                url, {"chat_id": chat_id, "caption": caption}, png)
+        except Exception as e:
+            return SinkResult(sink="telegram", success=False, error=repr(e))
+        if 200 <= status < 300:
+            return SinkResult(sink="telegram", success=True, error=None)
+        return SinkResult(sink="telegram", success=False,
+                          error=f"http {status}: {text[:200]}")
 
     def get_me(self) -> str | None:
         url = f"https://api.telegram.org/bot{self._bot_token}/getMe"
