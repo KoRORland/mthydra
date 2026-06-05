@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-
 # Keyed by obligation_id prefix (for per-target ones) or whole id (singletons).
 # Each value is the operator action — one short line, no shell wrapping.
 _REMEDIATIONS: dict[str, str] = {
@@ -141,9 +140,13 @@ _REMEDIATIONS: dict[str, str] = {
         "(see the 'rotation is paused' alert)."
     ),
     "probe_kill_pending": (
-        "a probe scored this RU box for hard-kill. Inspect: "
-        "mthydra-controller ru-box-list; then terminate: "
-        "mthydra-controller ru-box-terminate <box-id>"
+        "automatic health checks for this box failed repeatedly — most often "
+        "that means the box is unreachable or down (see Details above for which "
+        "check). First confirm: run 'mthydra-controller ru-box-list' (is it still "
+        "live?) and check the box's IP responds on :443. If it's genuinely dead, "
+        "replace it with a fresh box ('mthydra-ops ru-bringup ...'). Only run "
+        "'mthydra-controller ru-box-terminate <box-id> --reason ...' once you've "
+        "decided it's gone — terminating burns the cover domain."
     ),
     "probe_evaluate_blocked": (
         "probe evaluation can't proceed (no reachable vantage or missing "

@@ -9,6 +9,13 @@ what (if anything) the operator must do when upgrading.
 
 ## Unreleased — 2026-06-05
 
+**Readable alerts.** Operator alert bodies are now plain language: coded verdicts
+(e.g. `soft_threshold_reached`) are spelled out, internal references (probe-result
+row ids) are hidden, and list values are de-snaked. The `probe_kill_pending`
+"What to do" now explains that repeated check failures usually mean the box is
+unreachable, tells you to confirm it's down first, and warns that terminating
+burns the cover domain — so you don't have to read the source to act.
+
 **Filterable operator email.** Every operator-facing email subject (heartbeat,
 alerts, and the backup-monitor gap alarm) is now prefixed with `[MTHYDRA] ` so
 you can catch all of it with a single mail filter. User-facing distribution mail

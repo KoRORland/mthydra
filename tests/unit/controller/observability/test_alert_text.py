@@ -55,3 +55,19 @@ def test_render_details_handles_none_and_garbage():
     assert render_details(None) == ""
     # Non-JSON falls back to the raw string rather than crashing.
     assert "not json" in render_details("not json")
+
+
+def test_render_details_humanizes_probe_kill_body():
+    out = render_details(
+        '{"verdict": "soft_threshold_reached", '
+        '"offending_checks": ["surface_scan"], "evidence_pointer": [3, 2, 1]}'
+    )
+    # Coded verdict becomes a plain phrase.
+    assert "repeated health checks failed" in out
+    assert "soft_threshold_reached" not in out
+    # List value is de-snaked, not a raw Python repr.
+    assert "Surface scan" in out
+    assert "['surface_scan']" not in out
+    # Internal-only reference is hidden from the operator body.
+    assert "evidence" not in out.lower()
+    assert "[3, 2, 1]" not in out

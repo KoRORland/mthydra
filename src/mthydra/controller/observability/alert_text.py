@@ -73,8 +73,30 @@ def human_age(seconds: int | float | None) -> str:
     return f"{n} day{'s' if n != 1 else ''}"
 
 
+# Detail keys that are internal references with no operator meaning — hidden
+# from the human body (they stay in the machine details_json for forensics).
+_HIDDEN_DETAIL_KEYS = {"evidence_pointer"}
+
+# Coded values that read as jargon in a body line — rendered as plain phrases.
+_VALUE_PHRASE = {
+    "soft_threshold_reached": "repeated health checks failed (soft-fail threshold reached)",
+    "hard_kill": "a health check failed outright (immediate-kill signal)",
+    "soft_pending": "a health check failed once (watching, not yet actionable)",
+}
+
+
+def _humanize_detail_value(v: object) -> str:
+    """Plain-language a single detail value: de-snake list items, phrase known
+    coded verdicts, pass anything else through."""
+    if isinstance(v, list):
+        return ", ".join(humanize_label(str(x)) for x in v) if v else "none"
+    return _VALUE_PHRASE.get(str(v), str(v))
+
+
 def render_details(details_json: str | None) -> str:
-    """Render a details JSON object as indented 'Label: value' lines.
+    """Render a details JSON object as indented 'Label: value' lines, in plain
+    language: internal-only keys are hidden, coded values are phrased, list
+    values are de-snaked.
 
     Falls back to the raw string for non-JSON, '' for None — never crashes.
     """
@@ -86,6 +108,8 @@ def render_details(details_json: str | None) -> str:
         return f"  {details_json}"
     if isinstance(data, dict):
         return "\n".join(
-            f"  {humanize_label(str(k))}: {v}" for k, v in data.items()
+            f"  {humanize_label(str(k))}: {_humanize_detail_value(v)}"
+            for k, v in data.items()
+            if k not in _HIDDEN_DETAIL_KEYS
         )
     return f"  {details_json}"
