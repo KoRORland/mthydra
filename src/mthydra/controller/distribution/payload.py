@@ -11,6 +11,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from mthydra.controller.state import shards as _shards
+from mthydra import proxy_link
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class SubsetBox:
     port: int
     sni: str
     credential_b64: str
+    proxy_url: str
 
 
 @dataclass(frozen=True)
@@ -66,12 +68,15 @@ def build_subset(
     boxes: list[SubsetBox] = []
     for box_id in box_ids:
         meta = conn.execute(
-            "SELECT public_ip, sni FROM ru_boxes "
+            "SELECT public_ip, sni, reality_uuid FROM ru_boxes "
             "WHERE box_id=? AND state IN ('provisioning','live')",
             (box_id,),
         ).fetchone()
-        if meta is None or not meta[0]:
+        if meta is None or not meta[0] or not meta[2]:
+            # no row, no public_ip, or no reality_uuid -> cannot form a usable
+            # client link (K2-D7); skip.
             continue
+        public_ip, sni, reality_uuid = meta[0], meta[1], meta[2]
         cred = conn.execute(
             "SELECT credential FROM onward_credentials "
             "WHERE box_id=? AND revoked_at IS NULL "
@@ -81,9 +86,12 @@ def build_subset(
         if cred is None:
             continue
         cred_blob = bytes(cred[0])
+        port = _box_port(box_id)
+        secret = proxy_link.derive_mtg_secret(reality_uuid, sni)
         boxes.append(SubsetBox(
-            box_id=box_id, public_ip=meta[0], port=_box_port(box_id),
-            sni=meta[1], credential_b64=base64.b64encode(cred_blob).decode("ascii"),
+            box_id=box_id, public_ip=public_ip, port=port, sni=sni,
+            credential_b64=base64.b64encode(cred_blob).decode("ascii"),
+            proxy_url=proxy_link.build_proxy_url(public_ip, port, secret),
         ))
     return SubsetPayload(
         user_id=user_id, shard_id=shard_id, generated_at=now,
@@ -105,6 +113,7 @@ def payload_to_json(payload: SubsetPayload) -> str:
                     "port": b.port,
                     "sni": b.sni,
                     "credential_b64": b.credential_b64,
+                    "proxy_url": b.proxy_url,
                 }
                 for b in payload.boxes
             ],
