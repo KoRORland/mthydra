@@ -1921,6 +1921,10 @@ def _cmd_serve(args) -> int:
         interval_seconds=cfg.probe.runner_interval_seconds,
         max_concurrent=cfg.probe.runner_max_concurrent,
         mode=mode,
+        # Shared probe key lives beside the state DB (in the standard deployment
+        # that is /var/lib/mthydra/ssh — the vantage-setup default), so it rides
+        # the same backup and a promoted standby rematerializes it on start.
+        ssh_dir=str(Path(args.db_path).parent / "ssh"),
     )
     tg_sink, em_sink = _build_alert_sinks(cfg, mode)
     alerter = AlertSweep(
