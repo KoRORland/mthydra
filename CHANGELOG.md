@@ -9,6 +9,13 @@ what (if anything) the operator must do when upgrading.
 
 ## Unreleased — 2026-06-05
 
+**Stale "user not registered" alerts self-clear.** A `dist_user_unregistered`
+alert is now cleared when its user is no longer assigned to a shard (deleted or
+unassigned) — previously it could orphan forever, because only still-iterated
+users got the per-user clear. Its remediation text is also fixed: it now
+explains the user needs their Telegram/email registered (`user-onboard`), rather
+than the wrong "has no descriptor".
+
 **`/start` always delivers + the bot speaks on failure.** Tapping `/start` (an
 explicit request) now bypasses the unchanged-subset dedupe and always
 re-delivers your current proxies — previously a repeat `/start` for an unchanged

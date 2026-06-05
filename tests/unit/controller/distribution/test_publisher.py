@@ -110,6 +110,31 @@ def test_second_tick_deduped_same_subset(db):
     assert len(em.calls) == 1
 
 
+def test_orphaned_unregistered_obligation_is_cleared(db):
+    """A dist-unregistered alert for a user who is no longer assigned (deleted
+    or unassigned, e.g. after manual shard cleanup) is reconciled away — it must
+    not orphan forever (only iterated users get the per-user clear)."""
+    conn = connect(db)
+    # Stale obligation for a user that doesn't exist / isn't assigned.
+    conn.execute(
+        "INSERT INTO obligation_clocks (obligation_id, last_proven_at, proven_by, "
+        "details, next_due_at) VALUES "
+        "('dist_user_unregistered::ghost', ?, 'test', NULL, ?)",
+        (NOW, NOW),
+    )
+    conn.commit()
+    conn.close()
+    pub = _pub(db, tg=DryRunDistributionSink(label="telegram"),
+               em=DryRunDistributionSink(label="email"))
+    pub.run_once()
+    conn = connect(db)
+    n = conn.execute(
+        "SELECT COUNT(*) FROM obligation_clocks "
+        "WHERE obligation_id='dist_user_unregistered::ghost'").fetchone()[0]
+    conn.close()
+    assert n == 0
+
+
 def test_force_user_ids_bypasses_dedupe(db):
     """An explicit request (/start, dist-publish-now) must redeliver even when
     the subset is unchanged — dedupe is only for the background sweep."""

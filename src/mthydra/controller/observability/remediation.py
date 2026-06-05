@@ -174,8 +174,11 @@ _REMEDIATIONS: dict[str, str] = {
         "mthydra-controller shard-assign-box <shard> <box-id>"
     ),
     "dist_user_unregistered": (
-        "a distribution user has no descriptor yet. Confirm publishing is "
-        "healthy: mthydra-controller dist-status"
+        "this user is assigned to a shard but you haven't registered their "
+        "Telegram (and/or email) yet, so they can't receive proxies. Finish "
+        "their setup: 'mthydra-controller user-onboard <user-id>' and send them "
+        "the link to tap. If this user is leftover/unwanted, the alert clears "
+        "itself once they're no longer assigned to a shard."
     ),
     "dist_user_heartbeat_breach": (
         "a distribution user hasn't checked in within their window (spec K). "

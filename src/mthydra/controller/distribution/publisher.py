@@ -94,6 +94,19 @@ class DistributionPublisher:
                     "ORDER BY user_id"
                 ).fetchall()
             ]
+            # Reconcile orphans: a dist-unregistered alert is only cleared for a
+            # user we still iterate (assigned). If a flagged user was later
+            # deleted or unassigned, their alert would orphan forever — so drop
+            # any whose user is no longer assigned.
+            assigned_set = set(assigned)
+            for (oid,) in conn.execute(
+                "SELECT obligation_id FROM obligation_clocks "
+                "WHERE obligation_id LIKE 'dist_user_unregistered::%'"
+            ).fetchall():
+                if oid.split("::", 1)[1] not in assigned_set:
+                    conn.execute(
+                        "DELETE FROM obligation_clocks WHERE obligation_id=?", (oid,)
+                    )
             for user_id in assigned:
                 payload = build_subset(conn, user_id, now=now)
                 if payload is None:
