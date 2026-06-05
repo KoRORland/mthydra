@@ -58,17 +58,43 @@ def _ensure_ssh_dir(ssh_dir: Path) -> None:
         pass
 
 
+def _entry_ssh_opts(args) -> tuple[str, str, list[str]]:
+    """Return (ssh_user, identity, extra_opts) for the privileged bootstrap
+    session, per the chosen entry method.
+
+    - --password : user 'root', NO identity, NO BatchMode (ssh prompts on the
+                   controlling TTY; the password is never captured — spec T2-D4).
+    - --root-key : user 'root', -i <key>, BatchMode=yes.
+    - re-run after --print-pubkey (no flag): user <bootstrap_user> (root-capable),
+                   identity 'SHARED' (caller substitutes the shared key path),
+                   BatchMode=yes.
+    identity is '' for password, a real path for --root-key, or the sentinel
+    'SHARED' for the bootstrap re-run."""
+    if args.password:
+        return "root", "", ["-o", "StrictHostKeyChecking=accept-new",
+                            "-o", "ConnectTimeout=15"]
+    if args.root_key:
+        return "root", str(Path(args.root_key).expanduser()), [
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+    return args.bootstrap_user, "SHARED", [
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+
+
 def _ssh_provision_vantage(
     *,
     vantage_host: str,
     vantage_port: int,
-    root_key: Path,
+    ssh_user: str,
+    identity: str,        # key path, or "" for password (no -i)
+    extra_opts: list[str],
     probe_pubkey: str,
     timeout: int = 120,
 ) -> None:
-    """SSH to the vantage as root and provision the probe user + deps in one
-    round trip. Idempotent: adduser is gated on `id probe` and the pubkey is
-    only appended if not already present.
+    """SSH to the vantage with a root-capable session and provision the probe
+    user + deps in one round trip. Idempotent: adduser is gated on `id probe`
+    and the pubkey is only appended if not already present.
 
     Repr-quoting the pubkey defends against shell-injection — the value comes
     from a file we wrote, but the shape lets a future caller pass an
@@ -86,17 +112,17 @@ DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null
 DEBIAN_FRONTEND=noninteractive apt-get install -y openssl ncat >/dev/null
 echo OK
 """
-    _say(f"provisioning vantage {vantage_host}:{vantage_port} via SSH")
-    argv = [
-        "ssh",
-        "-i", str(root_key),
-        "-p", str(vantage_port),
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=15",
-        f"root@{vantage_host}",
-        "bash", "-s",
-    ]
+    argv = ["ssh"]
+    if identity:
+        argv += ["-i", identity]
+    argv += ["-p", str(vantage_port), *extra_opts, f"{ssh_user}@{vantage_host}",
+             "bash", "-s"]
+    _say(f"provisioning vantage {vantage_host}:{vantage_port} as {ssh_user}")
+    # capture_output is safe on the --password path: ssh reads the password from
+    # /dev/tty (the inherited controlling terminal), NOT from these piped std
+    # streams, so the prompt still reaches the operator. The script is delivered
+    # to remote `bash -s` via the stdin pipe; remote stdout ("OK") is captured.
+    # No controlling tty (cron/pipe) -> ssh exits non-zero promptly, no hang.
     res = subprocess.run(
         argv, input=remote_script, capture_output=True, text=True, timeout=timeout,
     )
@@ -105,6 +131,14 @@ echo OK
             f"remote provisioning failed (rc={res.returncode}): "
             f"{res.stderr.strip() or res.stdout.strip()}"
         )
+
+
+def _verify_probe_login(**kwargs) -> None:  # real body in Task 7
+    pass
+
+
+def _harden_sshd(**kwargs) -> None:         # real body in Task 7
+    pass
 
 
 def _ssh_keyscan(vantage_host: str, vantage_port: int, known_hosts: Path) -> None:
@@ -153,9 +187,14 @@ def _register_with_controller(
 def cmd_vantage_setup(args) -> int:
     """One-command vantage SSH provisioning. See module docstring."""
     ssh_dir = Path(args.ssh_dir)
-    root_key = Path(args.root_key).expanduser()
-    if not root_key.exists():
-        _err(f"--root-key not found: {root_key}")
+    # argparse enforces mutual exclusion on the CLI; this guard also covers
+    # programmatic callers (e.g. tests) that build the Namespace directly.
+    methods = [bool(args.root_key), bool(args.password), bool(args.print_pubkey)]
+    if sum(methods) > 1:
+        _err("choose at most one of --root-key / --password / --print-pubkey")
+        return 2
+    if args.root_key and not Path(args.root_key).expanduser().exists():
+        _err(f"--root-key not found: {args.root_key}")
         return 2
     try:
         _ensure_ssh_dir(ssh_dir)
@@ -164,22 +203,33 @@ def cmd_vantage_setup(args) -> int:
         with connect(args.db_path) as conn:
             apply_schema(conn)
             key_path, probe_pubkey = ensure_probe_key(conn, ssh_dir)
+
+        if args.print_pubkey:
+            print(probe_pubkey)
+            _say("install the line above into the authorized_keys of a "
+                 "root-capable user on the vantage, then re-run vantage-setup "
+                 "WITHOUT --print-pubkey (uses --bootstrap-user, default root).")
+            return 0
+
+        ssh_user, identity, extra_opts = _entry_ssh_opts(args)
+        if identity == "SHARED":
+            identity = str(key_path)
         _ssh_provision_vantage(
-            vantage_host=args.vantage_host,
-            vantage_port=args.vantage_port,
-            root_key=root_key,
-            probe_pubkey=probe_pubkey,
-        )
+            vantage_host=args.vantage_host, vantage_port=args.vantage_port,
+            ssh_user=ssh_user, identity=identity, extra_opts=extra_opts,
+            probe_pubkey=probe_pubkey)
+        _verify_probe_login(
+            vantage_host=args.vantage_host, vantage_port=args.vantage_port,
+            key_path=key_path)
+        _harden_sshd(
+            vantage_host=args.vantage_host, vantage_port=args.vantage_port,
+            ssh_user=ssh_user, identity=identity, extra_opts=extra_opts)
         known_hosts = ssh_dir / "known_hosts"
         _ssh_keyscan(args.vantage_host, args.vantage_port, known_hosts)
         _register_with_controller(
-            vantage_id=args.vantage_id,
-            vantage_host=args.vantage_host,
-            vantage_port=args.vantage_port,
-            key_path=key_path,
-            known_hosts=known_hosts,
-            db_path=args.db_path,
-        )
+            vantage_id=args.vantage_id, vantage_host=args.vantage_host,
+            vantage_port=args.vantage_port, key_path=key_path,
+            known_hosts=known_hosts, db_path=args.db_path)
     except VantageSetupError as e:
         _err(str(e))
         return 3

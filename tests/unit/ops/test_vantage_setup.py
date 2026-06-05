@@ -16,6 +16,9 @@ def _args(tmp_path, **over):
         vantage_host="203.0.113.5",
         vantage_port=22,
         root_key=str(tmp_path / "root.pem"),
+        password=False,
+        print_pubkey=False,
+        bootstrap_user="root",
         ssh_dir=str(tmp_path / "ssh"),
         db_path=str(tmp_path / "db.sqlite"),
     )
@@ -98,7 +101,7 @@ def test_ssh_provision_carries_pubkey_in_script(tmp_path, monkeypatch):
     """The pubkey is repr-quoted into the remote script so a malicious
     pubkey value can't break out of shell context."""
     captured = {}
-    def _fake(argv, capture_output=True, text=True, timeout=None, input=None):
+    def _fake(argv, capture_output=True, text=True, timeout=None, input=None, **kw):
         captured["argv"] = argv
         captured["input"] = input
         return subprocess.CompletedProcess(argv, 0, "OK\n", "")
@@ -107,7 +110,10 @@ def test_ssh_provision_carries_pubkey_in_script(tmp_path, monkeypatch):
     vantage_setup._ssh_provision_vantage(
         vantage_host="x.example",
         vantage_port=2222,
-        root_key=Path("/tmp/nope"),
+        ssh_user="root",
+        identity=str(Path("/tmp/nope")),
+        extra_opts=["-o", "StrictHostKeyChecking=accept-new",
+                    "-o", "BatchMode=yes", "-o", "ConnectTimeout=15"],
         probe_pubkey="ssh-ed25519 AAAA REAL_KEY",
     )
     assert "-p" in captured["argv"]
@@ -120,13 +126,14 @@ def test_ssh_provision_raises_when_remote_does_not_print_ok(tmp_path, monkeypatc
     """Defensive: if remote script returns 0 but doesn't print OK (e.g.
     apt-get rewrote stdout), surface as VantageSetupError so the caller
     knows something is off, not silent success."""
-    def _fake(argv, capture_output=True, text=True, timeout=None, input=None):
+    def _fake(argv, capture_output=True, text=True, timeout=None, input=None, **kw):
         return subprocess.CompletedProcess(argv, 0, "weird success\n", "")
     monkeypatch.setattr(vantage_setup.subprocess, "run", _fake)
     with pytest.raises(vantage_setup.VantageSetupError, match="remote provisioning failed"):
         vantage_setup._ssh_provision_vantage(
             vantage_host="x.example", vantage_port=22,
-            root_key=Path("/tmp/nope"), probe_pubkey="k")
+            ssh_user="root", identity=str(Path("/tmp/nope")),
+            extra_opts=["-o", "BatchMode=yes"], probe_pubkey="k")
 
 
 def test_main_routes_vantage_setup(monkeypatch, tmp_path):
@@ -147,3 +154,73 @@ def test_main_routes_vantage_setup(monkeypatch, tmp_path):
     assert rc == 0 and "v" in called
     assert called["v"].vantage_id == "ru-msk-1"
     assert called["v"].vantage_port == 22  # default
+
+
+def test_print_pubkey_emits_key_and_exits_without_ssh(tmp_path, monkeypatch, capsys):
+    history: list[dict] = []
+    monkeypatch.setattr(vantage_setup.subprocess, "run",
+                        _fake_run_factory(history))
+    args = _args(tmp_path, root_key=None, password=False, print_pubkey=True,
+                 bootstrap_user="root")
+    rc = vantage_setup.cmd_vantage_setup(args)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "ssh-ed25519" in out                       # pubkey printed
+    assert not any(h["argv"][0] == "ssh" for h in history)  # no connection made
+
+
+def test_password_method_omits_batchmode(tmp_path, monkeypatch):
+    """Password entry must NOT set BatchMode=yes and must NOT use sshpass."""
+    captured = {}
+    def _fake(argv, capture_output=True, text=True, timeout=None, input=None, **kw):
+        if argv[0] == "ssh-keygen":
+            for i, tok in enumerate(argv):
+                if tok == "-f" and i + 1 < len(argv):
+                    Path(argv[i + 1]).write_text("PRIV\n")
+                    Path(argv[i + 1] + ".pub").write_text(
+                        "ssh-ed25519 AAAAFAKEKEY mthydra-probe-runner\n")
+                    break
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[0] == "ssh":
+            captured.setdefault("ssh_argvs", []).append(argv)
+            return subprocess.CompletedProcess(argv, 0, "OK\n", "")
+        if argv[0] == "ssh-keyscan":
+            return subprocess.CompletedProcess(argv, 0, "h x\n", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(vantage_setup.subprocess, "run", _fake)
+    monkeypatch.setattr(vantage_setup, "_verify_probe_login", lambda **kw: None)
+    monkeypatch.setattr(vantage_setup, "_harden_sshd", lambda **kw: None)
+    args = _args(tmp_path, root_key=None, password=True, print_pubkey=False,
+                 bootstrap_user="root")
+    rc = vantage_setup.cmd_vantage_setup(args)
+    assert rc == 0
+    prov = captured["ssh_argvs"][0]
+    assert "sshpass" not in " ".join(prov)
+    assert "BatchMode=yes" not in prov
+
+
+def test_root_key_method_uses_batchmode(tmp_path, monkeypatch):
+    (tmp_path / "root.pem").write_text("k")
+    captured = {}
+    def _fake(argv, capture_output=True, text=True, timeout=None, input=None, **kw):
+        if argv[0] == "ssh-keygen":
+            for i, tok in enumerate(argv):
+                if tok == "-f" and i + 1 < len(argv):
+                    Path(argv[i + 1]).write_text("PRIV\n")
+                    Path(argv[i + 1] + ".pub").write_text(
+                        "ssh-ed25519 AAAAFAKEKEY mthydra-probe-runner\n")
+                    break
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[0] == "ssh":
+            captured.setdefault("ssh_argvs", []).append(argv)
+            return subprocess.CompletedProcess(argv, 0, "OK\n", "")
+        return subprocess.CompletedProcess(argv, 0, "h x\n", "")
+    monkeypatch.setattr(vantage_setup.subprocess, "run", _fake)
+    monkeypatch.setattr(vantage_setup, "_verify_probe_login", lambda **kw: None)
+    monkeypatch.setattr(vantage_setup, "_harden_sshd", lambda **kw: None)
+    args = _args(tmp_path, password=False, print_pubkey=False, bootstrap_user="root")
+    rc = vantage_setup.cmd_vantage_setup(args)
+    assert rc == 0
+    prov = captured["ssh_argvs"][0]
+    assert "BatchMode=yes" in prov
+    assert f"root@{args.vantage_host}" in prov

@@ -35,7 +35,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-
 # Defaults — override via flags or env.
 _DEFAULT_DB = os.environ.get("MTHYDRA_DB_PATH", "/var/lib/mthydra/state.sqlite")
 _DEFAULT_CONFIG = os.environ.get(
@@ -1199,10 +1198,21 @@ def build_parser() -> argparse.ArgumentParser:
                     help="public IPv4 / hostname of the vantage VPS")
     vs.add_argument("--vantage-port", type=int, default=22,
                     help="vantage SSH port (default 22)")
-    vs.add_argument("--root-key", required=True,
-                    help="path to the SSH private key with root access on the vantage")
+    g = vs.add_mutually_exclusive_group()
+    g.add_argument("--root-key",
+                   help="SSH private key with root access on the vantage")
+    g.add_argument("--password", action="store_true",
+                   help="authenticate the setup session by password (you will be "
+                        "prompted on this terminal; never stored - spec T2-D4)")
+    g.add_argument("--print-pubkey", action="store_true", dest="print_pubkey",
+                   help="print the shared probe pubkey and exit, for providers "
+                        "that forbid password auth; install it on a root-capable "
+                        "user, then re-run without this flag")
+    vs.add_argument("--bootstrap-user", default="root",
+                    help="root-capable user to connect as on the --print-pubkey "
+                         "re-run (default root)")
     vs.add_argument("--ssh-dir", default="/var/lib/mthydra/ssh",
-                    help="where to store the probe-runner's keys + known_hosts")
+                    help="where to store the shared probe key + known_hosts")
     vs.add_argument("--db-path", default=_DEFAULT_DB)
 
     # upgrade  —  spec Q one-command controller upgrade
