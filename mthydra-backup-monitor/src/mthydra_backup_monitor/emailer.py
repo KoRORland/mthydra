@@ -33,7 +33,9 @@ def _send(cfg: EmailConfig, subject: str, body: str) -> None:
 
 def send_gap_alarm(cfg: EmailConfig, highest_gen: int, stuck_since: str, now_iso: str) -> None:
     """Send a single gap-alarm email."""
-    subject = f"mthydra: backup gap (highest_gen={highest_gen} stuck since {stuck_since})"
+    # Operator-facing: carry the same [MTHYDRA] subject prefix the controller
+    # uses, so all mthydra operator mail filters under one rule.
+    subject = f"[MTHYDRA] backup gap (highest_gen={highest_gen} stuck since {stuck_since})"
     body = (
         f"Backup generation has not advanced.\n\n"
         f"Highest generation observed: {highest_gen}\n"

@@ -8,7 +8,14 @@ from mthydra.controller.observability.sinks import (
     DryRunSink,
     EmailAlertSink,
     TelegramAlertSink,
+    tag_subject,
 )
+
+
+def test_tag_subject_prefixes_and_is_idempotent():
+    assert tag_subject("backup gap") == "[MTHYDRA] backup gap"
+    # already-tagged subjects are not double-prefixed
+    assert tag_subject("[MTHYDRA] backup gap") == "[MTHYDRA] backup gap"
 
 
 PAYLOAD = AlertPayload(
@@ -160,7 +167,8 @@ def test_email_success_calls_full_lifecycle():
     assert fake.login_pw == "pw"
     assert len(fake.sent_messages) == 1
     msg = fake.sent_messages[0]
-    assert msg["Subject"] == "b1 needs termination"
+    # Operator-facing mail is prefixed so it can be filtered in one rule.
+    assert msg["Subject"] == "[MTHYDRA] b1 needs termination"
     assert msg["X-Mthydra-Severity"] == "crit"
     assert msg["X-Mthydra-Kind"] == "probe_kill_pending"
     assert msg["X-Mthydra-Dedupe-Key"] == "probe_kill_pending::b1"

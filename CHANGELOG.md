@@ -9,6 +9,11 @@ what (if anything) the operator must do when upgrading.
 
 ## Unreleased — 2026-06-05
 
+**Filterable operator email.** Every operator-facing email subject (heartbeat,
+alerts, and the backup-monitor gap alarm) is now prefixed with `[MTHYDRA] ` so
+you can catch all of it with a single mail filter. User-facing distribution mail
+is deliberately left untagged to stay innocuous.
+
 **Granny-usable proxy links (spec K2).** The distribution bot now delivers a
 tappable `https://t.me/proxy?…` link + a QR image per box instead of raw JSON.
 The mtg FakeTLS secret derivation is single-sourced in `mthydra.proxy_link`

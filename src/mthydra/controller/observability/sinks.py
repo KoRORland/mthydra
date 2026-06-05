@@ -14,6 +14,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import EmailMessage
 
+# Every operator-facing email subject carries this prefix so the operator can
+# filter all mthydra mail with one rule. NOTE: only operator mail (alerts +
+# heartbeat) is tagged — user-facing distribution mail is deliberately left
+# untagged to stay innocuous.
+SUBJECT_PREFIX = "[MTHYDRA] "
+
+
+def tag_subject(subject: str) -> str:
+    return subject if subject.startswith(SUBJECT_PREFIX) else SUBJECT_PREFIX + subject
+
 
 @dataclass(frozen=True)
 class AlertPayload:
@@ -126,7 +136,7 @@ class EmailAlertSink:
 
     def __call__(self, payload: AlertPayload) -> SinkResult:
         msg = EmailMessage()
-        msg["Subject"] = payload.subject
+        msg["Subject"] = tag_subject(payload.subject)
         msg["From"] = self._from
         msg["To"] = self._to
         msg["X-Mthydra-Severity"] = payload.severity
