@@ -19,6 +19,7 @@ from mthydra.controller.distribution.payload import (
     build_subset,
     payload_to_json,
 )
+from mthydra.controller.distribution.render import RenderedMessage, render_user_message
 from mthydra.controller.distribution.sinks import DryRunDistributionSink
 from mthydra.controller.state import distribution_log as _dl
 from mthydra.controller.state import user_channels as _uc
@@ -114,6 +115,7 @@ class DistributionPublisher:
                     (f"dist_user_unregistered::{user_id}",),
                 )
                 payload_body = payload_to_json(payload)
+                rendered = render_user_message(payload)
 
                 for channel_label, configured in (
                     ("telegram", channels.telegram_chat_id),
@@ -126,7 +128,7 @@ class DistributionPublisher:
                         deduped += 1
                         continue
                     success, err = self._dispatch(
-                        channel_label, configured, payload_body, payload,
+                        channel_label, configured, rendered, payload,
                     )
                     _dl.append(
                         conn,
@@ -162,7 +164,7 @@ class DistributionPublisher:
         self,
         channel_label: str,
         configured: str,
-        payload_body: str,
+        rendered: RenderedMessage,
         payload,
     ) -> tuple[bool, str | None]:
         sink = (
@@ -173,15 +175,24 @@ class DistributionPublisher:
             sink = _OFFLINE_SINK
         try:
             if channel_label == "telegram":
-                res = sink(chat_id=configured, message=payload_body)
+                res = sink(chat_id=configured, message=rendered.text)
+                if getattr(res, "success", False):
+                    # QR photos are best-effort: the link text is the real
+                    # delivery. A failed/raised photo must NOT flip this
+                    # delivery to failed (which would re-dispatch the text).
+                    for caption, png in rendered.qr:
+                        try:
+                            sink.send_photo(chat_id=configured, png=png, caption=caption)
+                        except Exception:
+                            pass
             else:
                 res = sink(
                     to_addr=configured,
                     subject=(
-                        f"mthydra subset update — {payload.user_id} "
-                        f"({len(payload.boxes)} boxes)"
+                        f"mthydra proxy update — {payload.user_id} "
+                        f"({len(payload.boxes)} proxies)"
                     ),
-                    body=payload_body,
+                    body=rendered.text,
                 )
         except Exception as e:
             return False, repr(e)

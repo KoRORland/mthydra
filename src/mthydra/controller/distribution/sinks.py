@@ -223,7 +223,12 @@ class DryRunDistributionSink:
     def __init__(self, label: str = "dryrun") -> None:
         self._label = label
         self.calls: list[dict] = []
+        self.photo_calls: list[dict] = []
 
     def __call__(self, **kwargs) -> SinkResult:
         self.calls.append(dict(kwargs))
+        return SinkResult(sink=self._label, success=True, error=None)
+
+    def send_photo(self, *, chat_id: str, png: bytes, caption: str) -> SinkResult:
+        self.photo_calls.append({"chat_id": chat_id, "png": png, "caption": caption})
         return SinkResult(sink=self._label, success=True, error=None)

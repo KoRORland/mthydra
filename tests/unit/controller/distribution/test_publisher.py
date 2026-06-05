@@ -44,9 +44,9 @@ def _seed_user_with_box(conn, *, user_id="u1", box_id="b1",
     )
     conn.execute(
         "INSERT OR IGNORE INTO ru_boxes (box_id, provider, region, public_ip, sni, "
-        "shard_id, state, image_version, created_at) "
-        "VALUES (?, 'p', 'r', ?, ?, ?, 'live', 'v1', ?)",
-        (box_id, public_ip, f"sni-{box_id}", shard_id, NOW),
+        "shard_id, state, image_version, reality_uuid, created_at) "
+        "VALUES (?, 'p', 'r', ?, ?, ?, 'live', 'v1', ?, ?)",
+        (box_id, public_ip, f"sni-{box_id}", shard_id, f"reality-{box_id}", NOW),
     )
     conn.execute(
         "INSERT OR IGNORE INTO onward_credentials (cred_id, box_id, credential, "
@@ -131,10 +131,10 @@ def test_changed_subset_re_dispatches(db):
     res = pub.run_once()
     assert res["dispatched"] == 1
     assert len(tg.calls) == 2
-    # Last payload mentions b2.
-    last_payload = json.loads(tg.calls[-1]["message"])
-    box_ids = [b["box_id"] for b in last_payload["boxes"]]
-    assert "b2" in box_ids
+    # Last message is rendered text (link), not JSON.
+    last_msg = tg.calls[-1]["message"]
+    assert not last_msg.startswith("{"), "message must be rendered text, not JSON"
+    assert "https://t.me/proxy" in last_msg
 
 
 def test_unassigned_user_skipped(db):
@@ -295,3 +295,96 @@ def test_offline_mode_does_not_arm(db):
     pub.arm()
     assert pub._scheduler is None
     pub.disarm()
+
+
+class _TelegramFakeWithPhoto:
+    """Fake telegram sink that records both text messages and send_photo calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.photo_calls: list[dict] = []
+
+    def __call__(self, **kwargs) -> SinkResult:
+        self.calls.append(dict(kwargs))
+        return SinkResult(sink="telegram", success=True, error=None)
+
+    def send_photo(self, *, chat_id: str, png: bytes, caption: str) -> SinkResult:
+        self.photo_calls.append({"chat_id": chat_id, "png": png, "caption": caption})
+        return SinkResult(sink="telegram", success=True, error=None)
+
+
+def _seed_user_with_reality_box(conn, *, user_id="u2", box_id="b9",
+                                 shard_id="s9", public_ip="10.9.9.1"):
+    """Like _seed_user_with_box but sets reality_uuid so build_subset can form a proxy_url."""
+    import json as _json
+    conn.execute(
+        "INSERT OR IGNORE INTO credential_authority (generation, privkey_pem, "
+        "pubkey_pem, created_at) VALUES (1, 'priv', 'pub', ?)",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO ru_images (image_version, upstream_release, upstream_repo, "
+        "binary_url, manifest_url, binary_sha256, binary_size_bytes, state, built_at) "
+        "VALUES ('v1', 'r', 'r', 'u', 'm', 'sha', 1, 'candidate', ?)",
+        (NOW,),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES (?, ?, 2, ?, ?)",
+        (shard_id, _json.dumps([user_id]), NOW, NOW),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO users (user_id, display_name, out_of_band_channel, "
+        "current_shard_id, added_at) "
+        "VALUES (?, NULL, 'email', ?, ?)",
+        (user_id, shard_id, NOW),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO ru_boxes (box_id, provider, region, public_ip, sni, "
+        "shard_id, state, image_version, reality_uuid, created_at) "
+        "VALUES (?, 'p', 'r', ?, ?, ?, 'live', 'v1', ?, ?)",
+        (box_id, public_ip, f"sni-{box_id}", shard_id,
+         "aaaabbbbccccdddd", NOW),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO onward_credentials (cred_id, box_id, credential, "
+        "issued_at, authority_generation) VALUES (?, ?, ?, ?, 1)",
+        (f"c-{box_id}", box_id, b"\x00\x01\x02", NOW),
+    )
+    conn.commit()
+
+
+def test_publisher_sends_rendered_link_not_json(db):
+    """Publisher must deliver rendered link text + QR photo, not raw JSON."""
+    conn = connect(db)
+    _seed_user_with_reality_box(conn)
+    set_channels(conn, "u2", telegram_chat_id="99999", email_addr=None, at=NOW)
+    conn.close()
+
+    tg = _TelegramFakeWithPhoto()
+    em = DryRunDistributionSink(label="email")
+    pub = _pub(db, tg=tg, em=em)
+    res = pub.run_once()
+
+    assert res["dispatched"] == 1
+
+    # Text message must be rendered link text, not JSON.
+    assert len(tg.calls) == 1
+    msg = tg.calls[0]["message"]
+    assert not msg.startswith("{"), "message must not be raw JSON"
+    assert "https://t.me/proxy?server=" in msg
+
+    # One box → one QR photo sent.
+    assert len(tg.photo_calls) == 1, f"expected 1 send_photo call, got {len(tg.photo_calls)}"
+
+    # distribution_log must still store JSON for audit.
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT payload_json FROM distribution_log "
+        "WHERE user_id='u2' AND channel='telegram' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    stored = row[0]
+    assert stored.startswith("{"), "stored payload_json must be raw JSON"
+    assert "proxy_url" in stored
