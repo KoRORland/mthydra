@@ -511,7 +511,7 @@ If the wizard times out, open the TimeWeb web console for the VM and run `journa
 
 ### 7.4 Wire your vantage for automatic probes (one command)
 
-The spec-P probe runner SSHes into each registered vantage every 30 minutes and runs `tls_fall_through` / `cover_domain_consistency` / `surface_scan` for every live box. To get a vantage onto that loop, you need (a) a probe SSH key on the EU host, (b) a `probe` user with that key on the vantage, (c) `openssl` + `ncat` on the vantage, (d) the vantage's host key pinned in known_hosts, (e) the SSH config registered with the controller. **One command does all five:**
+The spec-P probe runner SSHes into each registered vantage every 30 minutes and runs `tls_fall_through` / `cover_domain_consistency` / `surface_scan` for every live box. To get a vantage onto that loop, you need (a) the controller's shared probe SSH key, (b) a `probe` user with that key on the vantage, (c) `openssl` + `ncat` on the vantage, (d) the vantage's host key pinned in known_hosts, (e) the SSH config registered with the controller — and then the vantage **locked down** so the only way in is that `probe` key. **One command does all of it** (spec T2):
 
 ```bash
 sudo -u mthydra mthydra-ops vantage-setup \
@@ -520,21 +520,23 @@ sudo -u mthydra mthydra-ops vantage-setup \
     --root-key /root/.ssh/timeweb-root.pem
 ```
 
-(The `--root-key` is the SSH key with root access on the vantage VPS — the one TimeWeb gave you, or your hand-injected key. It's used once during setup and not stored.)
+**Opening the vantage — pick the entry method your provider supports:**
+- `--root-key <path>` — an SSH key with root access on the vantage (the one TimeWeb gave you, or one you hand-injected). Used once, never stored.
+- `--password` — for providers that only offer password login at first boot. You'll be **prompted on this terminal** (twice: once to provision, once to harden). The password is typed into ssh's own prompt — never stored, never in argv/env/logs — and is made useless seconds later by the lockdown step.
+- `--print-pubkey` — for providers that forbid password auth entirely. Prints the shared probe pubkey; install it into the `authorized_keys` of a root-capable user on the vantage yourself, then re-run **without** `--print-pubkey` (it connects as `--bootstrap-user`, default `root`).
 
 The wizard:
-1. Ensures `/var/lib/mthydra/ssh` exists (0700).
-2. Generates an ed25519 keypair at `/var/lib/mthydra/ssh/ru-msk-1.key` if absent.
-3. SSHes to the vantage as root in a single session:
-   - creates user `probe` (idempotent)
-   - installs the EU-side pubkey to `/home/probe/.ssh/authorized_keys`
-   - `apt-get install -y openssl ncat`
-4. `ssh-keyscan` the vantage, append to `known_hosts`.
-5. Calls `mthydra-controller vantage-set-ssh ru-msk-1 ...`.
+1. Resolves the controller's **single shared probe key**. It lives in the state DB (table `controller_probe_key`) and is materialized to `/var/lib/mthydra/ssh/probe.key` (0600). First run generates it.
+2. SSHes to the vantage with your chosen entry method and, in one session: creates user `probe` (no sudo), installs the shared pubkey, `apt-get install -y openssl ncat`.
+3. **Verifies** it can log in as `probe` with the shared key — on a fresh connection, *before* touching sshd.
+4. **Hardens** sshd: writes `/etc/ssh/sshd_config.d/60-mthydra-probe.conf` with `AllowUsers probe` + `PasswordAuthentication no` + `PermitRootLogin no`, validates with `sshd -t`, then reloads. After this the **only** way into the vantage is `probe` + the controller key — root and password are gone (future root access is via the provider's web console only).
+5. `ssh-keyscan` the vantage → `known_hosts`; registers via `mthydra-controller vantage-set-ssh`.
 
 Within 30 minutes (or restart `mthydra-controller` to force the next tick), `mthydra-controller probe-due --json` should show recent probes for your box. From this point forward, `probe_coverage_pending` will stay green automatically.
 
-> **Older quickstart had 7 manual commands across two hosts** for this step. The wizard collapses them. Run with `--ssh-dir <path>` if you keep your probe-runner keys somewhere other than `/var/lib/mthydra/ssh/`.
+> **Failover is automatic.** Because the probe key lives in the state DB, it rides the encrypted backup. If you promote a warm standby, it restores the DB, rematerializes the identical key on startup, and resumes probing every vantage with no re-provisioning — the standby's key is already authorized everywhere.
+
+> **Older quickstart had 7 manual commands across two hosts** for this step. The wizard collapses them. Run with `--ssh-dir <path>` if you keep the probe key somewhere other than `/var/lib/mthydra/ssh/`.
 
 ---
 

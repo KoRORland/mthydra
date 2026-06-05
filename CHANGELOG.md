@@ -7,6 +7,29 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
+## Unreleased — 2026-06-05
+
+**vantage-setup hardening (spec T2).** `mthydra-ops vantage-setup` now opens a
+vantage by `--root-key`, `--password` (interactive, prompted on your terminal,
+never stored — for providers that only allow password login at first boot), or
+`--print-pubkey` (print the shared probe pubkey for you to install on a
+root-capable user — for providers that forbid password auth). After provisioning
+the `probe` user it **verifies** probe-key login on a fresh connection and then
+**locks sshd down** to `probe`-key-only (`AllowUsers probe`,
+`PasswordAuthentication no`, `PermitRootLogin no`); from then on the only way
+into the vantage is the controller's probe key (future root access is
+provider-console only). The probe keypair now lives in the state DB (table
+`controller_probe_key`, schema **v17**) instead of a per-vantage file, so it
+rides the encrypted backup: a promoted warm standby restores the DB,
+rematerializes the identical key on startup, and resumes probing every vantage
+with no manual re-provisioning.
+
+**Upgrade note:** schema migrates v16 → v17 automatically on first start (adds
+one table; no data migration). Existing vantages keep working; re-run
+`vantage-setup` on each to move it onto the shared key and apply the lockdown.
+
+---
+
 ## Unreleased — 2026-06-03
 
 **New: `mthydra-controller user-onboard` — one-command user onboarding with
