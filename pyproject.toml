@@ -13,6 +13,7 @@ dependencies = [
     # >=44 clears the pre-42 PKCS12 NULL-deref (CVE-2024-26130) and
     # Bleichenbacher timing (CVE-2023-50782) lines; tested against 48.x.
     "cryptography>=44.0.1",
+    "segno>=1.6",
 ]
 
 [project.optional-dependencies]
