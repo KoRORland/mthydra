@@ -81,6 +81,7 @@ class EnrollmentPoller:
         now = self._clock()
         conn = connect(self.db_path)
         enrolled: list[str] = []
+        enrolled_chats: dict[str, str] = {}
         try:
             offset = self._offset(conn)
             updates = self.recv.get_updates(offset=offset)
@@ -103,6 +104,7 @@ class EnrollmentPoller:
                                  telegram_chat_id=u["chat_id"],
                                  email_addr=email, at=now)
                 enrolled.append(user_id)
+                enrolled_chats[user_id] = u["chat_id"]
             if updates:
                 self._save_offset(conn, max_update_id + 1, now)
             conn.commit()
@@ -114,4 +116,16 @@ class EnrollmentPoller:
                     self.on_enrolled(uid)
                 except Exception:
                     log.exception("on_enrolled callback failed for %s", uid)
+                    # Never leave the user staring at a silent /start. Tell them
+                    # something went wrong (best-effort — don't let a notify
+                    # failure mask the original error).
+                    try:
+                        self.recv(
+                            chat_id=enrolled_chats[uid],
+                            message="⚠️ Sorry — we couldn't prepare your proxy "
+                                    "just now. The operator has been notified; "
+                                    "please try again shortly.",
+                        )
+                    except Exception:
+                        log.exception("failed to notify %s of delivery failure", uid)
         return enrolled

@@ -107,3 +107,35 @@ def test_offline_mode_does_not_arm(db):
     p = _poller(db, FakeReceive([]), [])
     p.arm()
     assert p._scheduler is None
+
+
+class FakeReceiveCallable(FakeReceive):
+    """FakeReceive that can also send (sink-style __call__)."""
+    def __init__(self, batches):
+        super().__init__(batches)
+        self.sent = []
+
+    def __call__(self, *, chat_id, message):
+        self.sent.append({"chat_id": chat_id, "message": message})
+
+
+def test_callback_failure_notifies_user(db):
+    """If delivery throws, the user must be told — not left with a silent /start."""
+    c = connect(db)
+    tok = enrollment.mint(c, "granny", ttl_seconds=3600, now="2026-06-03T10:00:00Z")
+    c.commit(); c.close()
+    recv = FakeReceiveCallable([[{"update_id": 5, "chat_id": "12345",
+                                  "text": f"/start {tok}"}]])
+
+    def boom(uid):
+        raise RuntimeError("delivery exploded")
+
+    p = EnrollmentPoller(
+        db_path=db, receive_client=recv,
+        poll_interval_seconds=30, mode="offline",
+        on_enrolled=boom, clock=lambda: "2026-06-03T10:30:00Z")
+    enrolled = p.run_once()
+    assert enrolled == ["granny"]                       # enrollment still saved
+    assert len(recv.sent) == 1                          # user was notified
+    assert recv.sent[0]["chat_id"] == "12345"
+    assert "couldn't prepare" in recv.sent[0]["message"].lower()

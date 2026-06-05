@@ -74,7 +74,14 @@ class DistributionPublisher:
             self._scheduler.shutdown(wait=False)
             self._scheduler = None
 
-    def run_once(self) -> dict[str, int]:
+    def run_once(self, force_user_ids: set[str] | None = None) -> dict[str, int]:
+        """Publish each assigned user's current subset.
+
+        force_user_ids: users for whom delivery bypasses the unchanged-subset
+        dedupe — used when the user explicitly asks (e.g. tapping /start), where
+        "you already have this" is the wrong answer. The background sweep passes
+        nothing, so it still dedupes and never spams."""
+        force = force_user_ids or set()
         now = self._clock()
         conn = connect(self.db_path)
         try:
@@ -124,7 +131,7 @@ class DistributionPublisher:
                     if not configured:
                         continue
                     last_hash = _dl.last_subset_hash(conn, user_id, channel_label)
-                    if last_hash == payload.subset_hash:
+                    if last_hash == payload.subset_hash and user_id not in force:
                         deduped += 1
                         continue
                     success, err = self._dispatch(

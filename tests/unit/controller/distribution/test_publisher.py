@@ -110,6 +110,26 @@ def test_second_tick_deduped_same_subset(db):
     assert len(em.calls) == 1
 
 
+def test_force_user_ids_bypasses_dedupe(db):
+    """An explicit request (/start, dist-publish-now) must redeliver even when
+    the subset is unchanged — dedupe is only for the background sweep."""
+    conn = connect(db)
+    _seed_user_with_box(conn)
+    set_channels(conn, "u1", telegram_chat_id="12345",
+                 email_addr="u1@example.org", at=NOW)
+    conn.close()
+    tg = DryRunDistributionSink(label="telegram")
+    em = DryRunDistributionSink(label="email")
+    pub = _pub(db, tg=tg, em=em)
+    pub.run_once()                       # first delivery
+    pub._clock = lambda: LATER
+    res = pub.run_once(force_user_ids={"u1"})   # same subset, but forced
+    assert res["dispatched"] == 2
+    assert res["deduped"] == 0
+    assert len(tg.calls) == 2            # redelivered, not skipped
+    assert len(em.calls) == 2
+
+
 def test_changed_subset_re_dispatches(db):
     conn = connect(db)
     _seed_user_with_box(conn, box_id="b1")

@@ -9,6 +9,14 @@ what (if anything) the operator must do when upgrading.
 
 ## Unreleased — 2026-06-05
 
+**`/start` always delivers + the bot speaks on failure.** Tapping `/start` (an
+explicit request) now bypasses the unchanged-subset dedupe and always
+re-delivers your current proxies — previously a repeat `/start` for an unchanged
+box was silently deduped. `dist-publish-now --user-id` now genuinely forces that
+user too (matching its help). And if delivery throws, the bot now sends the user
+a plain "couldn't prepare your proxy, operator notified" message instead of going
+silent.
+
 **Readable alerts.** Operator alert bodies are now plain language: coded verdicts
 (e.g. `soft_threshold_reached`) are spelled out, internal references (probe-result
 row ids) are hidden, and list values are de-snaked. The `probe_kill_pending`

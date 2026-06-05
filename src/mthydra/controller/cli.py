@@ -1979,7 +1979,7 @@ def _cmd_serve(args) -> int:
             db_path=args.db_path,
             receive_client=TelegramDistributionSink(cfg.distribution.telegram.bot_token),
             poll_interval_seconds=cfg.distribution.enroll_poll_interval_seconds,
-            on_enrolled=lambda uid: dist_publisher.run_once(),
+            on_enrolled=lambda uid: dist_publisher.run_once(force_user_ids={uid}),
             mode=mode,
         )
 
@@ -4418,7 +4418,9 @@ def _cmd_dist_publish_now(args, mode: str) -> int:
         sweep_interval_seconds=cfg.distribution.publish_sweep_interval_seconds,
         mode=mode, clock=_now,
     )
-    res = pub.run_once()
+    # "force immediate publish" — bypass the unchanged-subset dedupe for the
+    # named user so the operator can always push the current proxies.
+    res = pub.run_once(force_user_ids={args.user_id})
     print(f"dist-publish-now: dispatched={res['dispatched']} "
           f"deduped={res['deduped']} unregistered={res['unregistered']}")
     return 0
