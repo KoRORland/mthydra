@@ -161,13 +161,15 @@ def _clear_vantage_unreachable(db_path: str, vantage_id: str) -> None:
 class ProbeRunnerWheel:
     def __init__(self, db_path: str, interval_seconds: int,
                  max_concurrent: int, mode: str = "active",
-                 reach_check: bool = True) -> None:
+                 reach_check: bool = True,
+                 ssh_dir: str = "/var/lib/mthydra/ssh") -> None:
         self.db_path = db_path
         self.interval_seconds = interval_seconds
         self.max_concurrent = max_concurrent
         self.mode = mode
         # reach_check=False is for tests that monkeypatch _probe_one only.
         self.reach_check = reach_check
+        self.ssh_dir = ssh_dir
         self._scheduler: BackgroundScheduler | None = None
 
     def tick(self) -> None:
@@ -207,6 +209,9 @@ class ProbeRunnerWheel:
                 pool.submit(_probe_one, p, self.db_path)
 
     def start(self) -> None:
+        from mthydra.controller.probe_runner.key import ensure_probe_key
+        with connect(self.db_path) as conn:
+            ensure_probe_key(conn, self.ssh_dir)
         if self.mode == "offline":
             return
         self._scheduler = BackgroundScheduler(

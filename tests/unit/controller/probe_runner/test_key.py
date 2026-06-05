@@ -71,3 +71,27 @@ def test_rewrites_file_when_cache_is_stale(tmp_path, conn, monkeypatch):
     (ssh_dir / "probe.key").write_text("STALE\n")     # wrong contents
     key_path, _ = keymod.ensure_probe_key(conn, ssh_dir)
     assert key_path.read_text() == "CORRECT\n"        # rewritten from DB
+
+
+def test_wheel_start_materializes_key_from_db(tmp_path, monkeypatch):
+    """A promoted standby restores the DB; wheel.start() must rematerialize
+    the probe.key file before scheduling ticks."""
+    from mthydra.controller.probe_runner.wheel import ProbeRunnerWheel
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+    from mthydra.controller.state import probe_key as pk
+
+    db = tmp_path / "state.sqlite"
+    c = connect(db)
+    apply_schema(c)
+    pk.put(c, private_key="RESTORED\n", public_key="ssh-ed25519 R x",
+           comment=None, at="2026-06-05T00:00:00Z")
+    c.close()
+
+    ssh_dir = tmp_path / "ssh"
+    # mode='offline' so start() does materialization but schedules nothing.
+    wheel = ProbeRunnerWheel(db_path=str(db), interval_seconds=1800,
+                             max_concurrent=2, mode="offline",
+                             ssh_dir=str(ssh_dir))
+    wheel.start()
+    assert (ssh_dir / "probe.key").read_text() == "RESTORED\n"
