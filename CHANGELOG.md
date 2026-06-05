@@ -9,6 +9,16 @@ what (if anything) the operator must do when upgrading.
 
 ## Unreleased — 2026-06-05
 
+**Granny-usable proxy links (spec K2).** The distribution bot now delivers a
+tappable `https://t.me/proxy?…` link + a QR image per box instead of raw JSON.
+The mtg FakeTLS secret derivation is single-sourced in `mthydra.proxy_link`
+(shared by the RU box's `config_gen` and the EU payload builder) so the link
+always matches what the box accepts. New runtime dependency: `segno`
+(pure-Python QR). The internal payload keeps its structured fields (now incl.
+`proxy_url`) in `distribution_log` for audit; `subset_hash` is unchanged. Boxes
+without a `reality_uuid` are omitted from a user's delta (they can't form a
+usable link).
+
 **vantage-setup hardening (spec T2).** `mthydra-ops vantage-setup` now opens a
 vantage by `--root-key`, `--password` (interactive, prompted on your terminal,
 never stored — for providers that only allow password login at first boot), or
