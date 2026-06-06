@@ -76,6 +76,13 @@ def render_sing_box_config(
             ),
             "final": "telegram-direct",
         },
+        "experimental": {
+            "clash_api": {
+                # K3: localhost only — read by the co-located controller's
+                # EuExitObserver. MUST NOT bind a public interface.
+                "external_controller": cfg.clash_api_listen,
+            }
+        },
     }
     return json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
 

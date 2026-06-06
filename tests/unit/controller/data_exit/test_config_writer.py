@@ -4,6 +4,38 @@ from __future__ import annotations
 import json
 
 
+def test_config_enables_localhost_clash_api(tmp_path):
+    """K3: the rendered exit config exposes a localhost-bound clash_api."""
+    from mthydra.controller.config import DataExitConfig
+    from mthydra.controller.data_exit.config_writer import render_sing_box_config
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.schema import apply_schema
+
+    conn = connect(tmp_path / "s.sqlite")
+    apply_schema(conn)
+    cfg = DataExitConfig(
+        listen_port=443, sing_box_socket="/run/sb.sock", config_path="/etc/sb.json",
+        reality_key_path="/etc/r.key", telegram_dcs_v4=(), telegram_dcs_v6=(),
+        cover_sni_default="cover.example", cover_sni_per_node={},
+        clash_api_listen="127.0.0.1:9090",
+    )
+    payload = json.loads(render_sing_box_config(
+        conn, cfg, node_id="eu1", cover_sni="cover.example",
+        reality_private_key="PRIVKEY"))
+    assert payload["experimental"]["clash_api"]["external_controller"] == "127.0.0.1:9090"
+
+
+def test_clash_api_listen_defaults_to_localhost():
+    """The field is optional; the default must be localhost-bound (never public)."""
+    from mthydra.controller.config import DataExitConfig
+    cfg = DataExitConfig(
+        listen_port=443, sing_box_socket="/run/sb.sock", config_path="/etc/sb.json",
+        reality_key_path="/etc/r.key", telegram_dcs_v4=(), telegram_dcs_v6=(),
+        cover_sni_default="cover.example", cover_sni_per_node={},
+    )
+    assert cfg.clash_api_listen.startswith("127.0.0.1:")
+
+
 def _seed_authority(conn):
     """Insert a real Ed25519 authority row at generation 1."""
     from mthydra.controller.state.authority import insert_authority

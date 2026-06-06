@@ -103,6 +103,9 @@ class DataExitConfig:
     telegram_dcs_v6: tuple[str, ...]
     cover_sni_default: str
     cover_sni_per_node: dict[str, str] = field(default_factory=dict)
+    # K3: localhost-bound clash_api the co-located EuExitObserver reads. MUST
+    # NOT bind a public interface — it exposes live session metadata.
+    clash_api_listen: str = "127.0.0.1:9090"
 
     def cover_sni_for(self, node_id: str) -> str:
         return self.cover_sni_per_node.get(node_id, self.cover_sni_default)
@@ -300,6 +303,7 @@ def _load_data_exit(data: dict) -> DataExitConfig | None:
             telegram_dcs_v6=tuple(str(x) for x in dcs.get("v6", [])),
             cover_sni_default=str(cover_sni_default),
             cover_sni_per_node={str(k): str(v) for k, v in cover_sni_per_node.items()},
+            clash_api_listen=str(de_raw.get("clash_api_listen", "127.0.0.1:9090")),
         )
     except KeyError as e:
         raise ConfigError(f"[data_exit] missing required key: {e}") from e
