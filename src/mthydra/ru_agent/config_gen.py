@@ -18,7 +18,12 @@ def _pick_fingerprint(box_id: str, weighted_list) -> str:
     when the list changes. Falsy list -> 'chrome' (v2-descriptor fallback)."""
     if not weighted_list:
         return "chrome"
-    pairs = [(str(item["fp"]), int(item["weight"])) for item in weighted_list]
+    pairs = []
+    for item in weighted_list:
+        try:
+            pairs.append((str(item["fp"]), int(item["weight"])))
+        except (KeyError, TypeError, ValueError) as e:
+            raise ConfigError(f"malformed tls_fingerprints entry {item!r}: {e}") from e
     for fp, _w in pairs:
         if fp not in KNOWN_UTLS_FINGERPRINTS:
             raise ConfigError(f"unknown uTLS fingerprint in descriptor: {fp!r}")
