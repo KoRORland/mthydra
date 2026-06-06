@@ -13,6 +13,7 @@ from mthydra.controller.state.descriptor import (
 from mthydra.controller.state.eu_exit_set import list_active
 from mthydra.descriptor.keys import is_placeholder, sign as ed_sign
 from mthydra.descriptor.payload import (
+    KNOWN_UTLS_FINGERPRINTS,
     DescriptorPayload,
     EUExit,
     canonical_bytes,
@@ -67,12 +68,18 @@ def sign_new_descriptor(
     now_iso: str,
     valid_until_iso: str,
     next_signing_pubkey_hex: str | None = None,
+    tls_fingerprints: tuple[tuple[str, int], ...] | None = None,
 ) -> tuple[int, bytes, bytes]:
     """Assemble payload from current DB state, sign, persist.
 
     Returns (generation, payload_bytes, signature).
     Raises SignError if no active real signing key is available.
     """
+    if tls_fingerprints is not None:
+        for fp, _w in tls_fingerprints:
+            if fp not in KNOWN_UTLS_FINGERPRINTS:
+                raise SignError(f"invariant #33: unknown uTLS fingerprint {fp!r}")
+
     key_gen, priv, _pub = _active_signing_key(conn)
 
     prev = latest_descriptor_with_signature(conn)
@@ -101,6 +108,7 @@ def sign_new_descriptor(
         eu_exit_set=exits,
         previous_generation_hash=prev_hash,
         next_signing_pubkey=next_signing_pubkey_hex,
+        tls_fingerprints=tls_fingerprints,
     )
     blob = canonical_bytes(payload)
     sig = ed_sign(priv, blob)
