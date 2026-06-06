@@ -22,6 +22,11 @@ SCHEMA_V3 = "mthydra.descriptor.v3"
 SCHEMA = SCHEMA_V3  # default schema for new payloads
 _ACCEPTED_SCHEMAS = frozenset({SCHEMA_V1, SCHEMA_V2, SCHEMA_V3})
 
+KNOWN_UTLS_FINGERPRINTS = frozenset({
+    "chrome", "firefox", "safari", "ios", "android",
+    "edge", "360", "qq", "random", "randomized",
+})
+
 _KNOWN_FIELDS = frozenset({
     "schema",
     "generation",

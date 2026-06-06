@@ -1,13 +1,38 @@
 """Render mtg.toml + sing-box.json on the RU box from seed + current descriptor."""
 from __future__ import annotations
 
+import hashlib
 import json
 
 from mthydra import proxy_link
+from mthydra.descriptor.payload import KNOWN_UTLS_FINGERPRINTS
 
 
 class ConfigError(RuntimeError):
     pass
+
+
+def _pick_fingerprint(box_id: str, weighted_list) -> str:
+    """Deterministically pick a uTLS fingerprint for this box from a signed
+    weighted list. Stable per box_id, diverse across the fleet, re-pickable
+    when the list changes. Falsy list -> 'chrome' (v2-descriptor fallback)."""
+    if not weighted_list:
+        return "chrome"
+    pairs = [(str(item["fp"]), int(item["weight"])) for item in weighted_list]
+    for fp, _w in pairs:
+        if fp not in KNOWN_UTLS_FINGERPRINTS:
+            raise ConfigError(f"unknown uTLS fingerprint in descriptor: {fp!r}")
+    total = sum(max(0, w) for _fp, w in pairs)
+    if total <= 0:
+        return "chrome"
+    digest = hashlib.sha256(box_id.encode("utf-8")).digest()
+    idx = int.from_bytes(digest[:8], "big") % total
+    acc = 0
+    for fp, w in sorted(pairs):
+        acc += max(0, w)
+        if idx < acc:
+            return fp
+    return sorted(pairs)[-1][0]
 
 
 def render_mtg_config(seed, *, sing_box_socks_port: int) -> bytes:
