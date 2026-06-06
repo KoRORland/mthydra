@@ -56,6 +56,7 @@ class ObligationsConfig:
 class DescriptorConfig:
     rotation_interval_hours: int
     validity_window_hours: int
+    tls_fingerprints: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -563,6 +564,10 @@ def load_config(path: Path | str) -> Config:
         descriptor=DescriptorConfig(
             rotation_interval_hours=int(desc.get("rotation_interval_hours", 1)),
             validity_window_hours=int(desc.get("validity_window_hours", 24)),
+            tls_fingerprints=tuple(
+                (str(k), int(v))
+                for k, v in sorted(desc.get("tls_fingerprints", {}).items())
+            ),
         ),
         cover_pool=_load_cover_pool(raw),
         standby=_load_standby(raw),
