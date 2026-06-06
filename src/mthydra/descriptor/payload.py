@@ -82,9 +82,14 @@ class DescriptorPayload:
                 f"got {schema!r}"
             )
 
+        if "tls_fingerprints" in obj and schema != SCHEMA_V3:
+            raise ValueError("tls_fingerprints only valid in v3")
+
         _v2_or_v3 = schema in (SCHEMA_V2, SCHEMA_V3)
         allowed_exit_fields = (
-            _KNOWN_EXIT_FIELDS_V2 if _v2_or_v3 else _KNOWN_EXIT_FIELDS_V1
+            _KNOWN_EXIT_FIELDS_V3 if schema == SCHEMA_V3
+            else _KNOWN_EXIT_FIELDS_V2 if schema == SCHEMA_V2
+            else _KNOWN_EXIT_FIELDS_V1
         )
 
         exits_raw = obj.get("eu_exit_set", [])
@@ -105,7 +110,7 @@ class DescriptorPayload:
 
         fps_raw = obj.get("tls_fingerprints")
         tls_fingerprints: tuple[tuple[str, int], ...] | None
-        if fps_raw is None:
+        if not fps_raw:
             tls_fingerprints = None
         else:
             tls_fingerprints = tuple(
@@ -133,7 +138,9 @@ def canonical_bytes(payload: DescriptorPayload) -> bytes:
     if floats are somehow introduced; see spec B §4 constraint note.
 
     Per-exit fields depend on payload.schema: v1 omits cover_sni/reality_pubkey;
-    v2 always emits them (nullable when unset).
+    v2 and v3 always emit them (nullable when unset). The top-level
+    tls_fingerprints key is emitted only for v3, and only when non-empty;
+    an empty/None list is omitted (round-trips back to None).
     """
     if payload.schema not in _ACCEPTED_SCHEMAS:
         raise ValueError(f"unknown payload.schema: {payload.schema!r}")
@@ -171,7 +178,7 @@ def canonical_bytes(payload: DescriptorPayload) -> bytes:
         "next_signing_pubkey": payload.next_signing_pubkey,
     }
 
-    if payload.schema == SCHEMA_V3 and payload.tls_fingerprints is not None:
+    if payload.schema == SCHEMA_V3 and payload.tls_fingerprints:
         obj["tls_fingerprints"] = [
             {"fp": fp, "weight": w}
             for fp, w in sorted(payload.tls_fingerprints)
