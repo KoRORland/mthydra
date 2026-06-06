@@ -69,6 +69,8 @@ def render_sing_box_config(
     if not exits:
         raise ConfigError("descriptor contains no exits")
 
+    fp = _pick_fingerprint(seed.box_id, descriptor_payload.get("tls_fingerprints"))
+
     vless_outbounds = []
     for exit in exits:
         host, port = exit["endpoint"].rsplit(":", 1)
@@ -84,7 +86,7 @@ def render_sing_box_config(
                 "server_name": exit["cover_sni"],
                 # sing-box's Reality *client* requires uTLS; without it sing-box
                 # exits with "uTLS is required by reality client".
-                "utls": {"enabled": True, "fingerprint": "chrome"},
+                "utls": {"enabled": True, "fingerprint": fp},
                 "reality": {
                     "enabled": True,
                     "public_key": exit["reality_pubkey"],

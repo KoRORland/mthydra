@@ -137,3 +137,37 @@ def test_render_sing_box_config_consumes_real_controller_descriptor(tmp_path):
     assert len(vless) == 1
     assert vless[0]["tag"] == "exit-fp1"
     assert vless[0]["tls"]["server_name"] == "eu1.example"
+
+
+# ── Task 4 — per-box descriptor fingerprint wired into render ──────────────
+
+from types import SimpleNamespace
+from mthydra.ru_agent import config_gen as _cg
+
+
+def _seed(box_id="box-xyz"):
+    return SimpleNamespace(box_id=box_id, reality_uuid="uuid-1", sni="x.example")
+
+
+def _descriptor(fps):
+    return {
+        "eu_exit_set": [
+            {"fingerprint": "fp1", "endpoint": "9.9.9.9:443",
+             "cover_sni": "cover.example", "reality_pubkey": "pub==", "weight": 1},
+        ],
+        "tls_fingerprints": fps,
+    }
+
+
+def test_render_uses_descriptor_fingerprint():
+    cfg = json.loads(_cg.render_sing_box_config(
+        _seed(), _descriptor([{"fp": "firefox", "weight": 1}]), tproxy_port=12345))
+    vless = [o for o in cfg["outbounds"] if o.get("type") == "vless"][0]
+    assert vless["tls"]["utls"]["fingerprint"] == "firefox"
+
+
+def test_render_falls_back_to_chrome_without_field():
+    cfg = json.loads(_cg.render_sing_box_config(
+        _seed(), _descriptor(None), tproxy_port=12345))
+    vless = [o for o in cfg["outbounds"] if o.get("type") == "vless"][0]
+    assert vless["tls"]["utls"]["fingerprint"] == "chrome"
