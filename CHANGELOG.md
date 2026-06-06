@@ -7,6 +7,23 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
+## Unreleased — 2026-06-06
+
+**RU→EU connectivity check (K3).** RU boxes now run an end-to-end tunnel
+self-check: they open a TCP connection to a Telegram DC that their own
+iptables→sing-box→EU-exit path carries, and write the verdict to
+`/run/mthydra/health.json` plus a loud journal line (`EU tunnel check FAILED …`).
+This closes the blind spot where a box answered `telnet :443` while Telegram
+could not connect through it — TCP being open is no longer mistaken for working.
+On the controller side, the active EU node reads its co-located sing-box's
+(localhost-only) clash_api and raises a plain-language `box_eu_tunnel_unseen`
+alert for any live box not seen tunnelling within the freshness window. No new
+RU-box credential or outbound is added. Schema → v18 (forward-only migration,
+no operator action). To debug a flagged box: SSH in and
+`cat /run/mthydra/health.json` + `journalctl -u mthydra-agent`.
+
+---
+
 ## Unreleased — 2026-06-05
 
 **Stale "user not registered" alerts self-clear.** A `dist_user_unregistered`
