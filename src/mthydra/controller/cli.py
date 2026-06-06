@@ -1970,6 +1970,18 @@ def _cmd_serve(args) -> int:
         mode=mode,
     )
 
+    # ---- K3 EU exit observer (active node only; we are past the standby
+    # branch). Reads the co-located exit's localhost clash_api to corroborate
+    # RU->EU tunnels and flag live boxes not seen tunnelling. ----
+    exit_observer = None
+    if cfg.data_exit is not None:
+        from mthydra.controller.data_exit.exit_observer import EuExitObserver
+        exit_observer = EuExitObserver(
+            db_path=args.db_path,
+            clash_api_url="http://" + cfg.data_exit.clash_api_listen,
+            mode=mode,
+        )
+
     # ---- enrollment poller (deep-link onboarding, spec O) ----
     from mthydra.controller.distribution.enroll_poller import EnrollmentPoller
     from mthydra.controller.distribution.sinks import TelegramDistributionSink
@@ -2000,9 +2012,11 @@ def _cmd_serve(args) -> int:
         dist_user_heartbeat.arm()
         if enroll_poller is not None:
             enroll_poller.arm()
+        if exit_observer is not None:
+            exit_observer.arm()
         if cfg.probe.runner_enabled:
             probe_runner.start()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat armed", flush=True)
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat" + (" + eu exit observer" if exit_observer is not None else "") + " armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -2027,6 +2041,8 @@ def _cmd_serve(args) -> int:
         dist_user_heartbeat.disarm()
         if enroll_poller is not None:
             enroll_poller.disarm()
+        if exit_observer is not None:
+            exit_observer.disarm()
         probe_runner.shutdown(wait=False)
         print("serve: stopped", flush=True)
     return 0
