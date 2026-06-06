@@ -19,6 +19,7 @@ from mthydra.ru_agent import (
     hardening,
     iptables,
     supervisor,
+    tunnel_check,
 )
 from mthydra.ru_agent import seed as seed_mod
 from mthydra.ru_agent import shutdown as shutdown_mod
@@ -27,6 +28,7 @@ SEED_PATH = "/run/mthydra/seed.json"
 MTG_PATH = "/run/mthydra/mtg"
 MTG_CONFIG_PATH = "/run/mthydra/mtg.toml"
 SING_BOX_CONFIG_PATH = "/run/mthydra/sing-box.json"
+HEALTH_PATH = "/run/mthydra/health.json"
 TPROXY_PORT = 12345
 
 # Startup failures are usually transient at boot — the VM clock is still at epoch
@@ -124,6 +126,27 @@ def _startup():
     return s
 
 
+def _run_tunnel_check(*, dc_ips, connect_fn=None, log=None, clock=None) -> None:
+    """Run the EU tunnel self-check, write health.json, log the verdict.
+
+    Never raises: this runs inside the periodic recheck loop, which must keep
+    re-verifying hardening + iptables regardless of the probe outcome."""
+    log = log or (lambda m: print(m, file=sys.stderr, flush=True))
+    try:
+        v = tunnel_check.check_eu_tunnel(
+            dc_ips=dc_ips, connect_fn=connect_fn, clock=clock)
+        try:
+            tunnel_check.write_health(HEALTH_PATH, v)
+        except OSError as e:
+            log(f"agent: could not write {HEALTH_PATH}: {e}")
+        if v.verdict == "ok":
+            log(f"agent: EU tunnel check ok via {v.telegram_dc_tried}")
+        else:
+            log(f"agent: EU tunnel check FAILED — {v.detail}")
+    except Exception as e:  # defensive: the probe must never kill the loop
+        log(f"agent: EU tunnel check raised (ignored): {e!r}")
+
+
 def main() -> int:
     # Startup with bounded retry. On persistent failure, STAY UP (return 2) for
     # diagnosis — do not power off (see STARTUP_MAX_ATTEMPTS comment).
@@ -200,6 +223,11 @@ def main() -> int:
                 except iptables.IptablesError as e:
                     _terminate(f"iptables: {e}")
                     return
+            # K3: end-to-end RU->EU tunnel self-check. Never raises (must not
+            # take down the hardening/iptables re-verification loop).
+            dc_ips = list(s.telegram_dcs.get("v4", [])) + list(
+                s.telegram_dcs.get("v6", []))
+            _run_tunnel_check(dc_ips=dc_ips)
 
     threading.Thread(
         target=_periodic_recheck, daemon=True, name="periodic-recheck",
