@@ -1852,6 +1852,7 @@ def _cmd_serve(args) -> int:
         rotation_interval_seconds=cfg.descriptor.rotation_interval_hours * 3600,
         validity_window_seconds=cfg.descriptor.validity_window_hours * 3600,
         mode=mode,
+        tls_fingerprints=cfg.descriptor.tls_fingerprints or None,
     )
     reverify_sweep = CoverPoolReverifySweep(
         db_path=args.db_path,

@@ -25,12 +25,14 @@ class DescriptorRotator:
         mode: str = "production",
         clock: Callable[[], str] | None = None,
         timer_factory: Callable | None = None,  # unused; kept for interface parity
+        tls_fingerprints: tuple[tuple[str, int], ...] | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.rotation_interval_seconds = rotation_interval_seconds
         self.validity_window_seconds = validity_window_seconds
         self.mode = mode
         self._clock = clock
+        self.tls_fingerprints = tls_fingerprints
         self._scheduler: BackgroundScheduler | None = None
 
     def arm(self) -> None:
@@ -74,7 +76,12 @@ class DescriptorRotator:
 
         conn = connect(self.db_path)
         try:
-            gen, _, _ = sign_new_descriptor(conn, now_iso=now, valid_until_iso=valid_until)
+            gen, _, _ = sign_new_descriptor(
+                conn,
+                now_iso=now,
+                valid_until_iso=valid_until,
+                tls_fingerprints=self.tls_fingerprints or None,
+            )
             return gen
         except (SignError, Exception):
             # Logged via audit_log in sign_new_descriptor; scheduler loop continues.
