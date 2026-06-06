@@ -97,19 +97,19 @@ def test_sign_stores_in_db(tmp_path):
     assert len(sig) == 64
 
 
-def test_sign_emits_v2_schema_label(tmp_path):
-    """Spec E Task 5: new descriptors carry the v2 schema label."""
+def test_sign_emits_v3_schema_label(tmp_path):
+    """V1 plan: new descriptors carry the v3 schema label."""
     import json as _json
     conn, _ = _seeded_db(tmp_path)
     _, blob, _ = sign_new_descriptor(
         conn, now_iso="2026-05-19T00:00:00Z", valid_until_iso="2026-05-19T01:00:00Z"
     )
     obj = _json.loads(blob.decode("utf-8"))
-    assert obj["schema"] == "mthydra.descriptor.v2"
+    assert obj["schema"] == "mthydra.descriptor.v3"
 
 
-def test_descriptor_v2_includes_per_exit_cover_sni_and_reality_pubkey(tmp_path):
-    """Spec E Task 5: v2 per-exit dict carries cover_sni + reality_pubkey."""
+def test_descriptor_v3_includes_per_exit_cover_sni_and_reality_pubkey(tmp_path):
+    """V1 plan: v3 per-exit dict carries cover_sni + reality_pubkey (same as v2)."""
     import json as _json
     conn, _ = _seeded_db(tmp_path)
     add_exit(
@@ -128,7 +128,7 @@ def test_descriptor_v2_includes_per_exit_cover_sni_and_reality_pubkey(tmp_path):
         "SELECT payload FROM descriptor_history ORDER BY generation DESC LIMIT 1"
     ).fetchone()
     payload = _json.loads(row[0])
-    assert payload["schema"] == "mthydra.descriptor.v2"
+    assert payload["schema"] == "mthydra.descriptor.v3"
     assert len(payload["eu_exit_set"]) == 1
     assert payload["eu_exit_set"][0]["cover_sni"] == "cover1.example"
     assert payload["eu_exit_set"][0]["reality_pubkey"] == "PUBKEY1"

@@ -3,9 +3,11 @@
 Schema label evolution:
 - v1 (spec B): per-exit dict is {endpoint, fingerprint, weight}.
 - v2 (spec E): per-exit dict adds {cover_sni, reality_pubkey} (both optional/nullable).
+- v3 (V1 plan): same per-exit fields as v2; adds optional top-level tls_fingerprints
+  weighted list so RU boxes can self-pick a uTLS fingerprint.
 
-Both schemas round-trip through this module. New signs emit v2; verifiers
-accept both for rolling-deployment compatibility.
+All schemas round-trip through this module. New signs emit v3; verifiers
+accept v1/v2/v3 for rolling-deployment compatibility.
 """
 from __future__ import annotations
 
@@ -16,8 +18,9 @@ from typing import Any
 
 SCHEMA_V1 = "mthydra.descriptor.v1"
 SCHEMA_V2 = "mthydra.descriptor.v2"
-SCHEMA = SCHEMA_V2  # default schema for new payloads
-_ACCEPTED_SCHEMAS = frozenset({SCHEMA_V1, SCHEMA_V2})
+SCHEMA_V3 = "mthydra.descriptor.v3"
+SCHEMA = SCHEMA_V3  # default schema for new payloads
+_ACCEPTED_SCHEMAS = frozenset({SCHEMA_V1, SCHEMA_V2, SCHEMA_V3})
 
 _KNOWN_FIELDS = frozenset({
     "schema",
@@ -28,10 +31,12 @@ _KNOWN_FIELDS = frozenset({
     "eu_exit_set",
     "previous_generation_hash",
     "next_signing_pubkey",
+    "tls_fingerprints",
 })
 
 _KNOWN_EXIT_FIELDS_V1 = frozenset({"fingerprint", "endpoint", "weight"})
 _KNOWN_EXIT_FIELDS_V2 = _KNOWN_EXIT_FIELDS_V1 | {"cover_sni", "reality_pubkey"}
+_KNOWN_EXIT_FIELDS_V3 = _KNOWN_EXIT_FIELDS_V2
 
 
 @dataclass(frozen=True)
@@ -52,7 +57,8 @@ class DescriptorPayload:
     eu_exit_set: tuple[EUExit, ...]
     previous_generation_hash: str | None
     next_signing_pubkey: str | None
-    schema: str = SCHEMA_V2
+    schema: str = SCHEMA_V3
+    tls_fingerprints: tuple[tuple[str, int], ...] | None = None
 
     @classmethod
     def from_canonical_bytes(cls, blob: bytes) -> "DescriptorPayload":
@@ -76,8 +82,9 @@ class DescriptorPayload:
                 f"got {schema!r}"
             )
 
+        _v2_or_v3 = schema in (SCHEMA_V2, SCHEMA_V3)
         allowed_exit_fields = (
-            _KNOWN_EXIT_FIELDS_V2 if schema == SCHEMA_V2 else _KNOWN_EXIT_FIELDS_V1
+            _KNOWN_EXIT_FIELDS_V2 if _v2_or_v3 else _KNOWN_EXIT_FIELDS_V1
         )
 
         exits_raw = obj.get("eu_exit_set", [])
@@ -86,8 +93,8 @@ class DescriptorPayload:
             unknown_exit = set(e.keys()) - allowed_exit_fields
             if unknown_exit:
                 raise ValueError(f"unknown fields in eu_exit entry: {sorted(unknown_exit)}")
-            cover_sni = e.get("cover_sni") if schema == SCHEMA_V2 else None
-            reality_pubkey = e.get("reality_pubkey") if schema == SCHEMA_V2 else None
+            cover_sni = e.get("cover_sni") if _v2_or_v3 else None
+            reality_pubkey = e.get("reality_pubkey") if _v2_or_v3 else None
             exits.append(EUExit(
                 fingerprint=str(e["fingerprint"]),
                 endpoint=str(e["endpoint"]),
@@ -95,6 +102,15 @@ class DescriptorPayload:
                 cover_sni=None if cover_sni is None else str(cover_sni),
                 reality_pubkey=None if reality_pubkey is None else str(reality_pubkey),
             ))
+
+        fps_raw = obj.get("tls_fingerprints")
+        tls_fingerprints: tuple[tuple[str, int], ...] | None
+        if fps_raw is None:
+            tls_fingerprints = None
+        else:
+            tls_fingerprints = tuple(
+                (str(item["fp"]), int(item["weight"])) for item in fps_raw
+            )
 
         return cls(
             generation=int(obj["generation"]),
@@ -105,6 +121,7 @@ class DescriptorPayload:
             previous_generation_hash=obj.get("previous_generation_hash"),
             next_signing_pubkey=obj.get("next_signing_pubkey"),
             schema=schema,
+            tls_fingerprints=tls_fingerprints,
         )
 
 
@@ -121,7 +138,8 @@ def canonical_bytes(payload: DescriptorPayload) -> bytes:
     if payload.schema not in _ACCEPTED_SCHEMAS:
         raise ValueError(f"unknown payload.schema: {payload.schema!r}")
 
-    if payload.schema == SCHEMA_V2:
+    _v2_or_v3 = payload.schema in (SCHEMA_V2, SCHEMA_V3)
+    if _v2_or_v3:
         exits = [
             {
                 "cover_sni": e.cover_sni,
@@ -152,6 +170,13 @@ def canonical_bytes(payload: DescriptorPayload) -> bytes:
         "previous_generation_hash": payload.previous_generation_hash,
         "next_signing_pubkey": payload.next_signing_pubkey,
     }
+
+    if payload.schema == SCHEMA_V3 and payload.tls_fingerprints is not None:
+        obj["tls_fingerprints"] = [
+            {"fp": fp, "weight": w}
+            for fp, w in sorted(payload.tls_fingerprints)
+        ]
+
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
     )

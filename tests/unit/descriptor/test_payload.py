@@ -7,6 +7,7 @@ from mthydra.descriptor.payload import (
     SCHEMA,
     SCHEMA_V1,
     SCHEMA_V2,
+    SCHEMA_V3,
     DescriptorPayload,
     EUExit,
     canonical_bytes,
@@ -108,9 +109,9 @@ def test_empty_eu_exit_set_round_trips():
     assert DescriptorPayload.from_canonical_bytes(canonical_bytes(p)) == p
 
 
-def test_default_schema_is_v2():
-    assert SCHEMA == SCHEMA_V2
-    assert _GEN1.schema == SCHEMA_V2
+def test_default_schema_is_v3():
+    assert SCHEMA == SCHEMA_V3
+    assert _GEN1.schema == SCHEMA_V3
 
 
 def test_v2_per_exit_includes_cover_sni_and_reality_pubkey_keys():
