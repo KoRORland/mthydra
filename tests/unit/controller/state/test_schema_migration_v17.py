@@ -12,7 +12,7 @@ def test_fresh_schema_has_controller_probe_key():
     tables = {r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "controller_probe_key" in tables
-    assert schema.SCHEMA_VERSION == 17
+    assert schema.SCHEMA_VERSION >= 17
 
 
 def test_single_row_check_rejects_second_row():

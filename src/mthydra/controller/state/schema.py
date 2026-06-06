@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -149,6 +149,13 @@ _STATEMENTS: list[str] = [
       version    INTEGER NOT NULL,
       applied_at TEXT    NOT NULL,
       CHECK (rowid = 1)
+    )
+    """,
+    # --- spec K3: per-box last live session observed at the EU exit ---
+    """
+    CREATE TABLE IF NOT EXISTS eu_exit_observed (
+      box_id       TEXT PRIMARY KEY,
+      last_seen_at TEXT NOT NULL
     )
     """,
     # --- spec M: log compactor sentinel — created early so triggers can reference ---
@@ -831,6 +838,23 @@ def migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def migrate_v17_to_v18(conn: sqlite3.Connection) -> None:
+    """Idempotent v17 → v18: add eu_exit_observed (spec K3).
+
+    One row per box_id recording the last time the box had a live VLESS
+    session at the EU exit; the alerter compares last_seen_at against a
+    freshness threshold to flag boxes that should be tunnelling but are not."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS eu_exit_observed ("
+        "box_id TEXT PRIMARY KEY, last_seen_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (18, _now()),
+    )
+    conn.commit()
+
+
 def migrate_v16_to_v17(conn: sqlite3.Connection) -> None:
     """Idempotent v16 → v17: add controller_probe_key (single-row table).
 
@@ -1121,4 +1145,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v15_to_v16(conn)
         if current < 17:
             migrate_v16_to_v17(conn)
+        if current < 18:
+            migrate_v17_to_v18(conn)
     conn.commit()
