@@ -180,6 +180,15 @@ _REMEDIATIONS: dict[str, str] = {
         "the link to tap. If this user is leftover/unwanted, the alert clears "
         "itself once they're no longer assigned to a shard."
     ),
+    "box_eu_tunnel_unseen": (
+        "this RU box hasn't established a working tunnel to the EU exit "
+        "recently, so Telegram traffic can't flow through it (TCP :443 may "
+        "still answer — that's not enough). SSH in and check "
+        "'cat /run/mthydra/health.json' + 'journalctl -u mthydra-agent' for "
+        "the EU tunnel check verdict; confirm sing-box is up on the box and "
+        "the EU exit IP:port is reachable from it. If the box is genuinely "
+        "dead, replace it ('mthydra-ops ru-bringup ...')."
+    ),
     "dist_user_heartbeat_breach": (
         "a distribution user hasn't checked in within their window (spec K). "
         "Confirm publishing: mthydra-controller dist-status / dist-publish-now"

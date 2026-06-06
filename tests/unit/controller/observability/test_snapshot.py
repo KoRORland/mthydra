@@ -250,3 +250,14 @@ def test_probe_coverage_pending_graduates_to_crit(conn):
     a = snap.anti_obligations[0]
     assert a.kind == "probe_coverage_pending"
     assert a.severity == "crit"
+
+
+def test_box_eu_tunnel_unseen_surfaced(conn):
+    set_obligation(conn,
+                   obligation_id="box_eu_tunnel_unseen::box-1",
+                   last_proven_at=NOW, proven_by="eu_exit_observer",
+                   next_due_at=NOW, details='{"box_id":"box-1"}')
+    snap = collect_snapshot(conn, now=NOW)
+    rows = [a for a in snap.anti_obligations if a.kind == "box_eu_tunnel_unseen"]
+    assert len(rows) == 1
+    assert rows[0].target == "box-1"

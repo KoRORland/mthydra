@@ -43,6 +43,8 @@ _ANTI_PREFIXES = frozenset({
     "probe_vantage_unreachable",
     # V-2 — backup integrity smoke failure (per generation).
     "backup_integrity_failed",
+    # Spec K3 — RU->EU tunnel not seen at the EU exit within the freshness window.
+    "box_eu_tunnel_unseen",
 })
 
 
