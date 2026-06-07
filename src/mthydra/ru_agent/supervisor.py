@@ -6,6 +6,8 @@ import subprocess
 import time
 from typing import Callable
 
+from mthydra import debuglog
+
 
 class Supervisor:
     CRASH_WINDOW_SECONDS = 5 * 60
@@ -45,9 +47,14 @@ class Supervisor:
 
     def launch_all(self) -> None:
         self._mtg_proc = subprocess.Popen(self._mtg_cmd)
+        debuglog.log("child", "launched", name="mtg", cmd=" ".join(self._mtg_cmd))
         self._sing_box_proc = subprocess.Popen(self._sing_box_cmd)
+        debuglog.log("child", "launched", name="sing-box",
+                     cmd=" ".join(self._sing_box_cmd))
         if self._nfqws_cmd is not None:
             self._nfqws_proc = subprocess.Popen(self._nfqws_cmd)
+            debuglog.log("child", "launched", name="nfqws",
+                         cmd=" ".join(self._nfqws_cmd))
 
     def check_children_once(self) -> None:
         now = self._clock()

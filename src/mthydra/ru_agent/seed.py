@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from mthydra import debuglog
 from mthydra.descriptor.authority import (
     OnwardCredentialPayload, VerifyError, verify_onward_credential,
 )
@@ -107,4 +108,6 @@ def verify_credential(seed: Seed) -> OnwardCredentialPayload:
             f"onward credential box_id mismatch: "
             f"seed has {seed.box_id!r}, credential has {payload.box_id!r}"
         )
+    debuglog.log("seed", "verified", box_id=seed.box_id,
+                 gen=seed.issued_by_authority_generation)
     return payload

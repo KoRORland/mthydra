@@ -11,6 +11,8 @@ from typing import Callable
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+from mthydra import debuglog
+
 
 class RefreshError(RuntimeError):
     pass
@@ -130,6 +132,7 @@ class RefreshLoop:
     def run_forever(self, sleep_fn: Callable[[float], None] | None = None) -> None:
         sleep_fn = sleep_fn or time.sleep
         while True:
+            debuglog.log("refresh", "tick")
             self.tick()
             sleep_fn(self.next_sleep_seconds())
 
