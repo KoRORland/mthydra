@@ -1294,4 +1294,44 @@ other supply-chain pin, independent of strategy rolls.
 
 ---
 
+## §14 — Debug mode
+
+Verbose, **UNREDACTED** diagnostics (incoming connections, DB activity, network
+talks). Output may contain user IPs, session identifiers and secrets — enable
+only while actively debugging, and disable it as soon as you are done.
+
+### §14.1 — EU controller (persistent host, restart-safe)
+
+```bash
+sudo mthydra-controller debug enable            # 24h auto-expire, restarts service
+sudo mthydra-controller debug enable --ttl-hours 2
+sudo mthydra-controller debug status            # ON/OFF/EXPIRED + remaining TTL
+sudo mthydra-controller debug disable           # restarts service
+```
+
+Logs land in `/var/log/mthydra/debug.log` (rotated, 10 MB × 5). Debug
+auto-reverts to normal after the TTL **without** a restart (a watcher thread in
+`serve` downgrades the live process and removes the flag); `disable` also
+restarts to drop verbosity immediately. `--no-restart` updates the flag only
+(applies on the next restart / `serve` start). The flag lives at
+`/var/lib/mthydra/debug.flag`.
+
+### §14.2 — RU box (tmpfs only, MUST NOT restart)
+
+The box cannot be restarted (tmpfs seed + once-per-instance cloud-init — a
+restart kills it permanently). Toggle on the **live** agent via a flag file on
+tmpfs; the agent polls it every ~5s:
+
+```bash
+touch /run/mthydra/debug.flag    # debug ON within ~5s
+rm    /run/mthydra/debug.flag    # debug OFF
+```
+
+Output goes to `/run/mthydra/debug/agent-debug.log` (tmpfs) and journald; it is
+wiped on reboot and never touches persistent storage. **Seizure warning:** a
+powered-on box exposes `/run`. Do not leave RU debug enabled on a box you
+cannot promptly wipe.
+
+---
+
 *End of runbook. If anything here is wrong or out of date, that is a bug.*

@@ -9,6 +9,12 @@ what (if anything) the operator must do when upgrading.
 
 ## Unreleased — 2026-06-06
 
+- feat(debug): operator debug mode — `mthydra-controller debug
+  enable/disable/status` (rotating `/var/log/mthydra/debug.log`, 10 MB × 5,
+  24h auto-expire) on EU; live tmpfs flag file `/run/mthydra/debug.flag`
+  (`touch`/`rm`, no restart) on RU, output to `/run/mthydra/debug/` tmpfs.
+  Verbose and UNREDACTED (may contain IPs/session ids/secrets); off by
+  default. See runbook §14.
 - feat(V5): RU-egress self-measurement — RealityHandshakeObserver probes EU
   exits from a RU vantage (reality-handshake helper), capturing handshake
   health + emitted JA3; controller flags fingerprint staleness vs an
