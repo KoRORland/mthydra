@@ -202,6 +202,84 @@ def test_no_descriptor_is_noop(tmp_path):
     assert _obligation(db, f"eu_exit_handshake_degraded::{_EXIT_FP}") is None
 
 
+def test_raising_ssh_does_not_propagate(tmp_path, seeded_db):
+    """A ssh_cmd_fn that RAISES must not propagate out of tick(); the exit is
+    treated as degraded (error) rather than crashing the sweep."""
+    def raising(vantage, *cmd_parts, timeout_s=30):
+        raise RuntimeError("ssh exploded")
+
+    obs = RealityHandshakeObserver(
+        db_path=seeded_db, ja3_reference_path=None, ssh_cmd_fn=raising,
+        clock=_now, mode="offline",
+    )
+    obs.tick()  # must not raise
+
+    row = _obligation(seeded_db, f"eu_exit_handshake_degraded::{_EXIT_FP}")
+    assert row is not None
+    details = json.loads(row[1])
+    assert "error" in details["verdict"]
+    assert "ssh exploded" in details["verdict"]
+
+
+def test_corrupt_descriptor_payload_does_not_crash(tmp_path, seeded_db):
+    """A corrupt descriptor_history payload blob must degrade to a no-op tick,
+    not crash the scheduler job."""
+    conn = sqlite3.connect(str(seeded_db))
+    conn.execute("UPDATE descriptor_history SET payload=?", ("not-canonical-garbage",))
+    conn.commit()
+    conn.close()
+
+    fake = _fake_ssh((0, "mthydra-rh result=reset detail=rst\n"))
+    obs = RealityHandshakeObserver(
+        db_path=seeded_db, ja3_reference_path=None, ssh_cmd_fn=fake,
+        clock=_now, mode="offline",
+    )
+    obs.tick()  # must not raise
+    assert _obligation(seeded_db, f"eu_exit_handshake_degraded::{_EXIT_FP}") is None
+
+
+def test_first_none_ja3_does_not_shadow_real_ja3(tmp_path, seeded_db):
+    """Two exits, same fingerprint: the first yields no ja3 (reset), the second
+    yields a real ja3. Staleness must be evaluated against the real ja3, so a
+    matching ref produces NO stale obligation."""
+    matching_ja3 = "771,4865,0,29,0"
+    ref_path = tmp_path / "ja3_ref.json"
+    ref_path.write_text(json.dumps({"chrome": [matching_ja3]}))
+
+    # Add a second EU exit and re-sign so both are in the descriptor.
+    conn = connect(seeded_db)
+    exit_repo.add_exit(
+        conn, "eu-2", "203.0.113.100:443", 100, _NOW,
+        cover_sni="www.other.com", reality_pubkey="fedcba9876543210",
+    )
+    sign_new_descriptor(
+        conn, now_iso=_NOW, valid_until_iso="2026-06-07T00:00:00Z",
+        tls_fingerprints=(("chrome", 60),),
+    )
+    conn.close()
+
+    # First exit (eu-1, .99) resets (no ja3); second exit (eu-2, .100) is ok
+    # with the matching ja3. The fake keys off the endpoint host in the cmd.
+    def scripted(cmd_parts):
+        full = cmd_parts[2] if len(cmd_parts) > 2 else ""
+        if "203.0.113.99" in full:
+            return (0, "mthydra-rh result=reset detail=rst\n")
+        return (0, f"mthydra-rh result=ok ja3={matching_ja3} ttfb_ms=20\n")
+
+    fake = _fake_ssh(scripted)
+    obs = RealityHandshakeObserver(
+        db_path=seeded_db, ja3_reference_path=str(ref_path), ssh_cmd_fn=fake,
+        clock=_now, mode="offline",
+    )
+    obs.tick()
+
+    # Real ja3 wins over the earlier None -> matches ref -> no stale obligation.
+    assert _obligation(seeded_db, "tls_fingerprint_stale::chrome") is None
+    # eu-1 reset -> degraded; eu-2 ok -> not degraded.
+    assert _obligation(seeded_db, "eu_exit_handshake_degraded::eu-1") is not None
+    assert _obligation(seeded_db, "eu_exit_handshake_degraded::eu-2") is None
+
+
 def test_arm_disarm_offline_noop():
     obs = RealityHandshakeObserver(db_path="/tmp/does-not-matter.sqlite", mode="offline")
     obs.arm()

@@ -85,12 +85,18 @@ class RealityHandshakeObserver:
         now = self._clock()
         conn = connect(self._db_path)
         try:
-            row = latest_descriptor_with_signature(conn)
-            if row is None:
+            # (1) Parse the latest signed descriptor. A missing or malformed
+            # descriptor is 'no observations this tick' — never an excuse to
+            # crash the sweep and kill the scheduler job (mirror EuExitObserver).
+            try:
+                row = latest_descriptor_with_signature(conn)
+                if row is None:
+                    return
+                payload = DescriptorPayload.from_canonical_bytes(row[1])
+                exits = payload.eu_exit_set
+                fps = [fp for fp, _w in (payload.tls_fingerprints or (("chrome", 0),))]
+            except Exception:
                 return
-            payload = DescriptorPayload.from_canonical_bytes(row[1])
-            exits = payload.eu_exit_set
-            fps = [fp for fp, _w in (payload.tls_fingerprints or (("chrome", 0),))]
 
             conn.row_factory = sqlite3.Row
             vrow = conn.execute(
@@ -111,10 +117,22 @@ class RealityHandshakeObserver:
                     continue
                 degraded: HandshakeProbeResult | None = None
                 for fp in fps:
-                    res = probe_reality_handshake(
-                        _ssh, exit_endpoint=exit.endpoint, cover_sni=exit.cover_sni,
-                        reality_pubkey=exit.reality_pubkey, fingerprint=fp)
-                    observed_ja3_by_fp.setdefault(fp, res.ja3)
+                    # A raised exception from the prober/ssh path is a degraded
+                    # observation for this exit — not a reason to abort the whole
+                    # sweep. Treat it as an error result and keep going.
+                    try:
+                        res = probe_reality_handshake(
+                            _ssh, exit_endpoint=exit.endpoint, cover_sni=exit.cover_sni,
+                            reality_pubkey=exit.reality_pubkey, fingerprint=fp)
+                    except Exception as exc:  # noqa: BLE001
+                        res = HandshakeProbeResult(
+                            result="error", detail=str(exc), ja3=None, ttfb_ms=None)
+                    # Keep the first NON-None ja3 per fp across exits, so an
+                    # earlier exit's None doesn't shadow a healthy fingerprint.
+                    if observed_ja3_by_fp.get(fp) is None and res.ja3 is not None:
+                        observed_ja3_by_fp[fp] = res.ja3
+                    else:
+                        observed_ja3_by_fp.setdefault(fp, res.ja3)
                     if degraded is None and res.result in _DEGRADED_RESULTS:
                         degraded = res
                 oid = f"eu_exit_handshake_degraded::{exit.fingerprint}"
