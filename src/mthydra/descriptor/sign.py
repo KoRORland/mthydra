@@ -87,6 +87,12 @@ def sign_new_descriptor(
     if prev is not None:
         prev_hash = payload_hash(prev[1])
 
+    try:
+        from mthydra.controller.state.desync_strategy import live as _live_desync
+        _desync = _live_desync(conn)
+    except Exception:
+        _desync = None
+
     exits_raw = list_active(conn)
     exits = tuple(
         EUExit(
@@ -109,6 +115,7 @@ def sign_new_descriptor(
         previous_generation_hash=prev_hash,
         next_signing_pubkey=next_signing_pubkey_hex,
         tls_fingerprints=tls_fingerprints,
+        desync_strategy=_desync,
     )
     blob = canonical_bytes(payload)
     sig = ed_sign(priv, blob)
