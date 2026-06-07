@@ -2072,6 +2072,19 @@ def _cmd_serve(args) -> int:
             mode=mode,
         )
 
+    # ---- V5 reality-handshake observer (active EU node only — same gate as
+    # the K3 exit observer). Probes EU exits from a RU vantage to corroborate
+    # handshake health + flag JA3 staleness vs the operator-maintained
+    # reference set. ----
+    reality_observer = None
+    if cfg.data_exit is not None:
+        from mthydra.controller.probe_runner.reality_observer import RealityHandshakeObserver
+        reality_observer = RealityHandshakeObserver(
+            db_path=args.db_path,
+            ja3_reference_path=cfg.ru_egress.ja3_reference_path if cfg.ru_egress else None,
+            mode=mode,
+        )
+
     # ---- enrollment poller (deep-link onboarding, spec O) ----
     from mthydra.controller.distribution.enroll_poller import EnrollmentPoller
     from mthydra.controller.distribution.sinks import TelegramDistributionSink
@@ -2104,9 +2117,11 @@ def _cmd_serve(args) -> int:
             enroll_poller.arm()
         if exit_observer is not None:
             exit_observer.arm()
+        if reality_observer is not None:
+            reality_observer.arm()
         if cfg.probe.runner_enabled:
             probe_runner.start()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat" + (" + eu exit observer" if exit_observer is not None else "") + " armed", flush=True)
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat" + (" + eu exit observer" if exit_observer is not None else "") + (" + reality handshake observer" if reality_observer is not None else "") + " armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -2133,6 +2148,8 @@ def _cmd_serve(args) -> int:
             enroll_poller.disarm()
         if exit_observer is not None:
             exit_observer.disarm()
+        if reality_observer is not None:
+            reality_observer.disarm()
         probe_runner.shutdown(wait=False)
         print("serve: stopped", flush=True)
     return 0
