@@ -176,3 +176,19 @@ v6 = [
 # probe fall-through. Pick a domain that looks credible as Western-Internet
 # traffic. Override per host by adding `<node_id> = "host.specific.example"`.
 default = "www.example-cover-domain.invalid"
+
+# --- nfqws desync strategy (V2, spec V V-D6 / invariant #36) ---
+# There is intentionally NO `desync_strategy` key here: the live (fleet-wide)
+# nfqws strategy string is NOT a config-file value. It lives in controller
+# state, gated by a canary-proven marker, and is emitted into the signed
+# descriptor (v3) automatically once promoted. Manage it exclusively via:
+#
+#   mthydra-controller desync-strategy-stage   --strategy "<nfqws args>"
+#   mthydra-controller desync-strategy-show
+#   mthydra-controller desync-strategy-mark-proven --strategy "<nfqws args>"
+#   mthydra-controller desync-strategy-promote
+#
+# `promote` refuses to set `live` unless the staged candidate's hash matches
+# the operator-attested canary-proven hash (#36) — see doc/runbook.md §V.2
+# "Rolling a desync strategy safely" for the staged -> canary -> proven ->
+# promote workflow.

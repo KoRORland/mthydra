@@ -1199,4 +1199,97 @@ profile suddenly went bad — then refresh the file and re-run
 
 ---
 
+## §V.2 — Rolling a desync strategy safely
+
+> V2 self-defense: zapret `nfqws` runs supervised on each RU box, NFQUEUE-
+> desyncing only the RU→EU exit:443 Reality flow (it fails open via
+> `--queue-bypass` — a dead or missing `nfqws` passes traffic un-desynced
+> rather than dropping it). The strategy string (the `nfqws` argument set,
+> e.g. `--dpi-desync=fake --dpi-desync-fooling=md5sig`) is carried in the
+> signed descriptor (v3) and gated by a controller-enforced **canary marker**
+> (invariant #36, spec V V-D6): a fleet-wide ("live") strategy can only be
+> set from a staged candidate whose hash has been explicitly, operator-
+> attested, marked canary-proven. This prevents a bad strategy string from
+> rolling out fleet-wide and breaking every RU box's egress at once.
+
+**The workflow — stage → canary → soak → prove → promote:**
+
+1. **Stage the candidate.**
+   ```bash
+   mthydra-controller desync-strategy-stage \
+     --strategy "--dpi-desync=fake --dpi-desync-fooling=md5sig"
+   ```
+   This only writes to the `staged` slot — it has **no effect on the fleet**
+   yet (the `live` strategy, the one the signer emits, is untouched).
+
+2. **Distribute it to a canary shard.** Hand the staged strategy string to
+   the RU boxes in your canary shard out of band (e.g. apply it directly via
+   the box's `nfqws` supervisor config, or however your canary-rollout
+   mechanism delivers config ahead of the signed descriptor — this step is
+   intentionally manual; the canary gate exists precisely because the
+   controller will not auto-propagate an unproven strategy). Confirm with
+   `mthydra-controller desync-strategy-show` that the candidate you intended
+   is the one staged.
+
+3. **Watch the V5 handshake-health signal through a soak window.** Keep an
+   eye on `eu_exit_handshake_degraded::<exit_fingerprint>` in the
+   observability snapshot (`mthydra-controller obs-status`) and the alert log
+   for the canary shard's exits. Pick a soak window long enough to cover
+   normal daily traffic variance for that shard (a day is a reasonable
+   floor; longer for a higher-stakes change). The signal must **stay clear**
+   — any `eu_exit_handshake_degraded` finding for an exit the canary shard
+   uses means the new strategy is interfering with the Reality handshake;
+   abort, re-stage a different candidate (or revert to `(none)`), and do not
+   proceed to step 4.
+
+4. **Mark it canary-proven (operator-attested).** Only after the soak window
+   holds clean:
+   ```bash
+   mthydra-controller desync-strategy-mark-proven \
+     --strategy "--dpi-desync=fake --dpi-desync-fooling=md5sig"
+   ```
+   This is a manual attestation — you are vouching that you watched the
+   signal and it held. The `--strategy` argument must match the staged
+   candidate **verbatim**; the controller hashes it and stores the hash as
+   the canary-proven marker. Re-staging a different candidate after this
+   point invalidates the marker (the hash will no longer match) and you must
+   re-prove before promoting.
+
+5. **Promote to live.**
+   ```bash
+   mthydra-controller desync-strategy-promote
+   ```
+   This sets the fleet-wide `live` strategy from the staged candidate — but
+   **only** if the staged candidate's hash matches the canary-proven hash
+   (#36). If it doesn't (nothing staged, never proven, or re-staged after
+   proving), the command prints a `CanaryGateError` to stderr and exits
+   non-zero; nothing changes. On success, the next signed descriptor (v3)
+   carries the new `desync_strategy` and RU agents pick it up on their next
+   descriptor refresh.
+
+**Inspect state at any time** with `mthydra-controller desync-strategy-show`
+— it prints the staged candidate, the live (fleet-wide) strategy, and
+whether the staged candidate is currently canary-proven.
+
+**A strategy change needs a box recycle to fully take effect.** Only boxes
+that were *provisioned with `nfqws`* at startup honor `desync_strategy` from
+the descriptor at all — the RU agent fetches and supervises `nfqws` as part
+of box bring-up. A running `nfqws` process keeps the launch arguments it was
+started with; pushing a new live strategy changes what *future* provisioning
+writes and what the descriptor advertises, but an already-running box will
+not re-launch `nfqws` with the new args until it is recycled (or its
+supervisor is restarted with the refreshed strategy). Budget for a box
+recycle as part of any strategy rollout that needs to reach the whole fleet.
+
+**Trust anchors: `nfqws_url` / `nfqws_sha256`.** `nfqws` is built from a
+pinned `zapret` revision and published to B2; the seed (v3) carries
+`nfqws_url` and `nfqws_sha256`, and provisioning writes them into the box's
+bootstrap so the agent can fetch-and-verify the binary by hash before running
+it. These two values — not the strategy string — are what anchors trust in
+the `nfqws` binary itself; rotate them (rebuild from a new pinned revision,
+republish, update the seed) on the same cadence/discipline you'd apply to any
+other supply-chain pin, independent of strategy rolls.
+
+---
+
 *End of runbook. If anything here is wrong or out of date, that is a bug.*

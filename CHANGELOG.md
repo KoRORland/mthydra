@@ -19,6 +19,12 @@ what (if anything) the operator must do when upgrading.
   `tls_fingerprints` weighted list; each RU box deterministically self-picks
   a stable, diverse fingerprint the controller rolls fleet-wide without
   re-imaging. Verifier accepts v2 and v3. Invariant #33 (known-fp at sign).
+- feat(V2): nfqws desync layer — zapret nfqws supervised on the RU box,
+  NFQUEUE-desyncing only the RU->EU exit:443 Reality flow (fails open via
+  --queue-bypass); strategy carried in the signed descriptor (v3) and gated
+  by a controller-enforced canary marker (#36). Seed v3 carries the
+  sha256-verified nfqws binary URL. CLI: desync-strategy stage/show/promote/
+  mark-proven. Invariants #34-#36.
 
 **RU→EU connectivity check (K3).** RU boxes now run an end-to-end tunnel
 self-check: they open a TCP connection to a Telegram DC that their own
