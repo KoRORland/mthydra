@@ -1316,6 +1316,12 @@ restarts to drop verbosity immediately. `--no-restart` updates the flag only
 (applies on the next restart / `serve` start). The flag lives at
 `/var/lib/mthydra/debug.flag`.
 
+`enable` and `disable` each send a **crit alert to both Telegram and email**
+(via the `[observability]` sinks) so an enabled — i.e. UNREDACTED — session is
+never silent. Pass `--no-alert` to suppress the notification (e.g. when the
+sinks themselves are what you are debugging). TTL auto-expiry does **not**
+alert — the enable alert already states the expiry time.
+
 ### §14.2 — RU box (tmpfs only, MUST NOT restart)
 
 The box cannot be restarted (tmpfs seed + once-per-instance cloud-init — a

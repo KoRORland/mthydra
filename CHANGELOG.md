@@ -14,7 +14,9 @@ what (if anything) the operator must do when upgrading.
   24h auto-expire) on EU; live tmpfs flag file `/run/mthydra/debug.flag`
   (`touch`/`rm`, no restart) on RU, output to `/run/mthydra/debug/` tmpfs.
   Verbose and UNREDACTED (may contain IPs/session ids/secrets); off by
-  default. See runbook §14.
+  default. EU `debug enable`/`disable` sends a crit Telegram+email alert
+  (suppress with `--no-alert`) so an enabled session is never silent. See
+  runbook §14.
 - feat(V5): RU-egress self-measurement — RealityHandshakeObserver probes EU
   exits from a RU vantage (reality-handshake helper), capturing handshake
   health + emitted JA3; controller flags fingerprint staleness vs an

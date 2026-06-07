@@ -162,6 +162,11 @@ and other secrets (decision 3). Mitigations:
 
 - **Off by default**, behind an explicit operator action, with a loud banner
   in the log on every enable.
+- **EU enable/disable raises a crit alert to both Telegram and email** (reusing
+  the `[observability]` sinks and `alert_log`), so an enabled — UNREDACTED —
+  session is never silent. `--no-alert` suppresses it. RU has no operator
+  alert channel (pull-only, isolated), so RU enable is not alerted — the
+  tmpfs-only + reboot-wipe posture is its mitigation instead.
 - **RU output is tmpfs-only** — dies on reboot/power-off; never persisted.
   A seized *running* box already exposes `/run`, so this matches the existing
   threat model rather than widening it. Runbook will warn: do not enable RU

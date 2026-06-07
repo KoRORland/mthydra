@@ -108,6 +108,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-restart", action="store_true",
         help="update the flag but do not restart the service",
     )
+    dbg_p.add_argument(
+        "--no-alert", action="store_true",
+        help="do not send the tg/email debug-state alert (enable/disable)",
+    )
+    dbg_p.add_argument("--config", default="/etc/mthydra/controller.toml",
+                       help="controller.toml (read for the alert sinks)")
+    dbg_p.add_argument("--db-path", default=DEFAULT_DB)
 
     # init
     init_p = sub.add_parser("init", help="initialize a fresh controller DB")
@@ -1143,7 +1150,7 @@ def run(argv: list[str]) -> int:
         return _cmd_descriptor_migrate_placeholder(args)
 
     if args.cmd == "debug":
-        return _cmd_debug(args)
+        return _cmd_debug(args, mode)
 
     if args.cmd == "serve":
         return _cmd_serve(args)
@@ -1904,7 +1911,101 @@ def _resolve_backup_region(endpoint: str | None) -> str:
     return resolve_region(endpoint)
 
 
-def _cmd_debug(args) -> int:
+def _debug_alert_payload(*, enabled: bool, ttl_hours: float | None, now: str,
+                         host: str):
+    """Build the AlertPayload for a debug-mode state change. Severity crit so
+    it is unambiguous; dispatched to both telegram + email regardless."""
+    from mthydra.controller.observability.sinks import AlertPayload
+
+    if enabled:
+        kind = "debug_mode_enabled"
+        subject = "mthydra DEBUG MODE ENABLED"
+        ttl = f" (auto-expires in {ttl_hours}h)" if ttl_hours else ""
+        body = (
+            f"Verbose UNREDACTED debug logging was ENABLED on {host}{ttl}.\n"
+            f"Output may contain user IPs, session identifiers and secrets. "
+            f"Disable it as soon as you are done:\n"
+            f"    sudo mthydra-controller debug disable"
+        )
+    else:
+        kind = "debug_mode_disabled"
+        subject = "mthydra DEBUG MODE DISABLED"
+        body = f"Debug logging was DISABLED on {host}."
+    return AlertPayload(
+        severity="crit", kind=kind, target=host,
+        dedupe_key=f"{kind}::{now}", subject=subject, body=body,
+    )
+
+
+def _dispatch_debug_alert(tg_sink, em_sink, conn, *, payload, now) -> dict:
+    """Send `payload` to both sinks and (best-effort) record each attempt in
+    alert_log. Returns {label: (success, error)}. Never raises."""
+    from mthydra.controller.state import alert_log as _al
+
+    results: dict[str, tuple[bool, str | None]] = {}
+    for label, sink in (("telegram", tg_sink), ("email", em_sink)):
+        try:
+            res = sink(payload)
+            success = bool(getattr(res, "success", False))
+            err = getattr(res, "error", None)
+        except Exception as e:
+            success, err = False, repr(e)
+        results[label] = (success, err)
+        if conn is not None:
+            try:
+                _al.append(
+                    conn, attempted_at=now,
+                    delivered_at=now if success else None,
+                    sink=label, severity=payload.severity, kind=payload.kind,
+                    target=payload.target, dedupe_key=payload.dedupe_key,
+                    payload=f"{payload.subject}\n\n{payload.body}",
+                    error=err,
+                )
+            except Exception:
+                pass  # forensic record is best-effort; never block the toggle
+    return results
+
+
+def _send_debug_state_alert(args, mode: str, *, enabled: bool,
+                            ttl_hours: float | None = None) -> None:
+    """Notify the operator (telegram + email) that debug mode changed state.
+
+    Best-effort: a config/sink failure prints a warning but never blocks the
+    flag change or restart.
+    """
+    import socket
+
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.state.db import connect
+
+    try:
+        cfg = load_config(args.config)
+    except (ConfigError, OSError) as e:
+        print(f"debug: could not load config for alert ({e}); "
+              f"skipping tg/email notification", file=sys.stderr)
+        return
+    tg_sink, em_sink = _build_alert_sinks(cfg, mode)
+    now = _now()
+    payload = _debug_alert_payload(
+        enabled=enabled, ttl_hours=ttl_hours, now=now,
+        host=socket.gethostname())
+    conn = None
+    try:
+        conn = connect(args.db_path)
+    except Exception:
+        conn = None
+    try:
+        results = _dispatch_debug_alert(tg_sink, em_sink, conn,
+                                        payload=payload, now=now)
+    finally:
+        if conn is not None:
+            conn.close()
+    for label, (success, err) in results.items():
+        print(f"debug: alert {label} -> "
+              f"{'OK' if success else 'FAIL ' + (err or '')}")
+
+
+def _cmd_debug(args, mode: str) -> int:
     """Toggle verbose debug logging via the persistent flag + service restart."""
     import subprocess
     import time as _time
@@ -1927,9 +2028,14 @@ def _cmd_debug(args) -> int:
         debug_flag.write_flag(flag_path, ttl_hours=args.ttl_hours)
         print(f"debug: enabled (ttl={args.ttl_hours}h) "
               f"-> {debug_runtime.DEBUG_LOG_PATH}")
+        if not args.no_alert:
+            _send_debug_state_alert(args, mode, enabled=True,
+                                    ttl_hours=args.ttl_hours)
     else:  # disable
         debug_flag.clear_flag(flag_path)
         print("debug: disabled")
+        if not args.no_alert:
+            _send_debug_state_alert(args, mode, enabled=False)
 
     if args.no_restart:
         print("debug: --no-restart set; restart mthydra-controller to apply")
