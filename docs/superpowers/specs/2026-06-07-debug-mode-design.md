@@ -109,10 +109,11 @@ every 60s; when `now >= expires_at` it calls `debuglog.disable()`, removes
 the flag file, and logs the revert. Downgrades the *live* process — no
 restart required to turn debug off at TTL.
 
-**Defaults config (optional):** a `[debug]` section in `controller.toml`
-(`rotate_max_mb = 10`, `rotate_backups = 5`, `default_ttl_hours = 24`).
-Parsed in `config.py` as a frozen `DebugConfig` with these defaults so an
-absent section keeps current behaviour. CLI flags override.
+**Defaults:** rotation (`10 MB × 5`) and TTL (`24h`) are module constants in
+`debug_runtime.py`; the operator overrides TTL via `--ttl-hours`. No
+`controller.toml` change — keeps the large frozen `Config` dataclass
+untouched (a `[debug]` config section can be added later if defaults need to
+be operator-tunable).
 
 **Instrumentation points** (EU "incoming connections, DB, diagnostics"):
 
@@ -185,10 +186,9 @@ and other secrets (decision 3). Mitigations:
 
 ## Packaging / docs
 
-- `tmpfiles`: `/var/log/mthydra` already created by `ops install`; confirm it
-  exists for EU `debug.log`. RU `/run/mthydra/debug` is created at runtime by
-  the agent.
-- `controller.toml.example`: add a commented `[debug]` section.
+- `tmpfiles`: `/var/log/mthydra` already created by `ops install`; EU
+  `debug.log`'s parent is also `mkdir`'d by `debuglog.enable`. RU
+  `/run/mthydra/debug` is created at runtime by the agent.
 - `doc/runbook.md`: new "Debug mode" section for EU (`debug enable/disable/
   status`, TTL, where logs land) and RU (touch/rm flag, tmpfs-only, seizure
   warning).
