@@ -4,7 +4,9 @@ Schema label evolution:
 - v1 (spec B): per-exit dict is {endpoint, fingerprint, weight}.
 - v2 (spec E): per-exit dict adds {cover_sni, reality_pubkey} (both optional/nullable).
 - v3 (V1 plan): same per-exit fields as v2; adds optional top-level tls_fingerprints
-  weighted list so RU boxes can self-pick a uTLS fingerprint.
+  weighted list so RU boxes can self-pick a uTLS fingerprint, and an optional
+  top-level desync_strategy string (V2 plan) carrying nfqws CLI args for the
+  RU-side desync layer.
 
 All schemas round-trip through this module. New signs emit v3; verifiers
 accept v1/v2/v3 for rolling-deployment compatibility.
@@ -37,6 +39,7 @@ _KNOWN_FIELDS = frozenset({
     "previous_generation_hash",
     "next_signing_pubkey",
     "tls_fingerprints",
+    "desync_strategy",
 })
 
 _KNOWN_EXIT_FIELDS_V1 = frozenset({"fingerprint", "endpoint", "weight"})
@@ -64,6 +67,7 @@ class DescriptorPayload:
     next_signing_pubkey: str | None
     schema: str = SCHEMA_V3
     tls_fingerprints: tuple[tuple[str, int], ...] | None = None
+    desync_strategy: str | None = None
 
     @classmethod
     def from_canonical_bytes(cls, blob: bytes) -> "DescriptorPayload":
@@ -89,6 +93,9 @@ class DescriptorPayload:
 
         if "tls_fingerprints" in obj and schema != SCHEMA_V3:
             raise ValueError("tls_fingerprints only valid in v3")
+
+        if "desync_strategy" in obj and schema != SCHEMA_V3:
+            raise ValueError("desync_strategy only valid in v3")
 
         _v2_or_v3 = schema in (SCHEMA_V2, SCHEMA_V3)
         allowed_exit_fields = (
@@ -122,6 +129,11 @@ class DescriptorPayload:
                 (str(item["fp"]), int(item["weight"])) for item in fps_raw
             )
 
+        desync_strategy_raw = obj.get("desync_strategy")
+        desync_strategy = (
+            None if desync_strategy_raw is None else str(desync_strategy_raw)
+        )
+
         return cls(
             generation=int(obj["generation"]),
             signing_key_gen=int(obj["signing_key_gen"]),
@@ -132,6 +144,7 @@ class DescriptorPayload:
             next_signing_pubkey=obj.get("next_signing_pubkey"),
             schema=schema,
             tls_fingerprints=tls_fingerprints,
+            desync_strategy=desync_strategy,
         )
 
 
@@ -145,7 +158,9 @@ def canonical_bytes(payload: DescriptorPayload) -> bytes:
     Per-exit fields depend on payload.schema: v1 omits cover_sni/reality_pubkey;
     v2 and v3 always emit them (nullable when unset). The top-level
     tls_fingerprints key is emitted only for v3, and only when non-empty;
-    an empty/None list is omitted (round-trips back to None).
+    an empty/None list is omitted (round-trips back to None). The top-level
+    desync_strategy key is emitted only for v3, and only when truthy; None
+    and the empty string are both omitted (round-trip back to None).
     """
     if payload.schema not in _ACCEPTED_SCHEMAS:
         raise ValueError(f"unknown payload.schema: {payload.schema!r}")
@@ -188,6 +203,9 @@ def canonical_bytes(payload: DescriptorPayload) -> bytes:
             {"fp": fp, "weight": w}
             for fp, w in sorted(payload.tls_fingerprints)
         ]
+
+    if payload.schema == SCHEMA_V3 and payload.desync_strategy:
+        obj["desync_strategy"] = payload.desync_strategy
 
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
