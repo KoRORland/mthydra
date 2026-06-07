@@ -16,6 +16,7 @@ from pathlib import Path
 from mthydra.ru_agent import (
     binary,
     config_gen,
+    debug_poll,
     descriptor_refresh,
     desync,
     hardening,
@@ -320,6 +321,14 @@ def main() -> int:
 
     threading.Thread(
         target=_periodic_recheck, daemon=True, name="periodic-recheck",
+    ).start()
+
+    # 8b. Live debug toggle: poll /run/mthydra/debug.flag (tmpfs). touch ->
+    # verbose debug to /run/mthydra/debug/; rm -> off. No restart (would kill
+    # the box).
+    threading.Thread(
+        target=debug_poll.DebugPoller().run_forever,
+        daemon=True, name="debug-poll",
     ).start()
 
     # 9. Run supervisor in the main thread.
