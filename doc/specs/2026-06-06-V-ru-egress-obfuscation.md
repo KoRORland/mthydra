@@ -303,4 +303,16 @@ Rationale: each step is independently shippable, and step 2 is a precondition fo
 
 ## 11. Status
 
-Spec drafted 2026-06-06. Ready for implementation plan (per-unit, in the §9 build order). High-ROI core is Units 1+5; Unit 2 is the conditional arms-race extension.
+Spec drafted 2026-06-06. Implemented 2026-06-06/07 (all three units, build order 1→5→2). High-ROI core is Units 1+5; Unit 2 is the conditional arms-race extension.
+
+---
+
+## 12. As-built deviations (reconciled 2026-06-07)
+
+The implementation matches this spec except for the canary-gate mechanism (Unit 2, §4.5/§7/§8), which was simplified because **no shard-scoped descriptor infrastructure exists** in the codebase (descriptors are signed fleet-wide, not per-shard). As built:
+
+- **Canary proof is manual operator attestation, not auto-derived.** `mark-canary-proven <strategy>` records `sha256(strategy)` in the `desync_strategy` table; `promote` enforces invariant **#36** by refusing unless the staged strategy's hash matches that marker (`src/mthydra/controller/state/desync_strategy.py`). The operator stages the strategy, watches the Unit-5 `eu_exit_handshake_degraded` signal on a canary cohort for the soak window, then attests. The hard gate (#36) is fully enforced; the *derivation* of proof is operator-driven rather than computed from V5 probe rows. Documented in `doc/runbook.md §V.2`.
+- **`v_desync_strategy_canary_proven` is a bespoke table column, not a bootstrap obligation.** It does not appear in `obs-status`; visibility is via `desync-strategy-show`.
+- **`desync-strategy-stage` has no `<shard>` argument** (§8) — it writes a single global staged slot, consistent with the fleet-wide descriptor model.
+
+Follow-up (non-blocking): if per-shard descriptors are ever introduced, automate canary-proof derivation from V5 signal data and migrate the marker into the obligations framework.
