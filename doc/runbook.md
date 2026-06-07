@@ -1128,4 +1128,75 @@ The obscurity assumption is a control. Treat it like one.
 
 ---
 
+## §V.1 — Maintaining the JA3 reference set
+
+> V5 self-measurement: the controller's `RealityHandshakeObserver` probes EU
+> exits from a RU vantage and captures the JA3 fingerprint actually emitted by
+> each deployed uTLS profile. It compares those observed JA3s against an
+> operator-maintained "reference set" of JA3s that current popular browsers are
+> known to emit, and raises `tls_fingerprint_stale::<fp>` when a deployed
+> profile's JA3 has drifted from the reference (i.e. it no longer looks like
+> the browser it's supposed to impersonate).
+
+**File shape.** The reference set is a JSON file: a map from fingerprint name
+(matching the names used in `[descriptor.tls_fingerprints]`, e.g. `chrome`,
+`firefox`) to a list of JA3 strings that browser is currently known to produce
+(there can be more than one — different OS/version combinations emit slightly
+different JA3s):
+
+```json
+{
+  "chrome": ["cd08e31494f9531f560d64c695473da9", "..."],
+  "firefox": ["b20b44b18b853ef29ab773e921b03422"]
+}
+```
+
+**Where `[ru_egress] ja3_reference_path` points.** Set the path to this file in
+`controller.toml`:
+
+```toml
+[ru_egress]
+ja3_reference_path = "/etc/mthydra/ja3_reference.json"
+```
+
+Inspect current state at any time with:
+
+```bash
+mthydra-controller fingerprint-staleness-show --config /etc/mthydra/controller.toml
+```
+
+**Sourcing current-browser JA3s.** Capture a real handshake from an
+up-to-date, stock install of each browser you impersonate (e.g. via `tshark`/
+`tcpdump` + a JA3-extraction tool, or one of the public JA3 fingerprint
+databases that track current Chrome/Firefox releases) and record the resulting
+JA3 hash(es) for each major release channel you care about. Refresh this list
+**on every major browser release** — Chrome and Firefox rotate their TLS
+ClientHello shape (extension order, cipher lists, GREASE values) often enough
+that a JA3 captured against last year's release will not match this year's.
+
+**A missing or empty file disables staleness checks — silently.** If
+`ja3_reference_path` is unset, the file doesn't exist, or it parses to an empty
+map, `load_reference_set()` returns `{}` and `RealityHandshakeObserver` skips
+the comparison entirely: no `tls_fingerprint_stale` findings are raised, for
+better or worse. This is intentional (manual ops data — same maintenance class
+as `[data_exit.telegram_dcs]` — must not crash the sweep), but it also means a
+silently-stale or absent reference file gives you **false reassurance**: the
+absence of `tls_fingerprint_stale` alerts does not mean the fingerprints are
+healthy, it may mean nobody is checking them. `fingerprint-staleness-show`
+reports whether the reference file is present and loadable — check it
+periodically (fold it into §11 periodic maintenance).
+
+**A stale or uncurated reference set produces false positives.** The inverse
+failure mode: if you load a reference set and then never refresh it, every
+deployed fingerprint will eventually drift away from the (now outdated)
+reference as browsers update, and `tls_fingerprint_stale` will fire for
+profiles that are actually fine — they just no longer match your stale
+snapshot of "what Chrome looked like in early 2026." Treat a flood of
+`tls_fingerprint_stale` alerts across all configured fingerprints simultaneously
+as a signal that *your reference set* needs refreshing, not that every deployed
+profile suddenly went bad — then refresh the file and re-run
+`fingerprint-staleness-show` to confirm it clears.
+
+---
+
 *End of runbook. If anything here is wrong or out of date, that is a bug.*
