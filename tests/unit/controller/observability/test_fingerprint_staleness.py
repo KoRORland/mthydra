@@ -46,3 +46,31 @@ def test_load_reference_set_from_file(tmp_path):
 
 def test_load_reference_set_missing_file_returns_empty(tmp_path):
     assert load_reference_set(tmp_path / "does-not-exist.json") == {}
+
+
+def test_load_reference_set_top_level_list_returns_empty(tmp_path):
+    p = tmp_path / "reference.json"
+    p.write_text(json.dumps(["chrome", "firefox"]))
+    assert load_reference_set(p) == {}
+
+
+def test_load_reference_set_top_level_scalar_returns_empty(tmp_path):
+    p = tmp_path / "reference.json"
+    p.write_text(json.dumps("just-a-string"))
+    assert load_reference_set(p) == {}
+
+
+def test_load_reference_set_bare_string_value_is_skipped(tmp_path):
+    p = tmp_path / "reference.json"
+    p.write_text(json.dumps({"chrome": "ja3x"}))
+    ref = load_reference_set(p)
+    # The bare string must NOT be character-iterated into a set of single chars.
+    assert ref.get("chrome") is None
+    assert ref == {}
+
+
+def test_load_reference_set_mixed_good_and_malformed(tmp_path):
+    p = tmp_path / "reference.json"
+    p.write_text(json.dumps({"chrome": ["ja3-a", "ja3-b"], "firefox": "ja3x"}))
+    ref = load_reference_set(p)
+    assert ref == {"chrome": {"ja3-a", "ja3-b"}}

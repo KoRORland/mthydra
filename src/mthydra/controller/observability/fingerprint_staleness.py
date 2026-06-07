@@ -24,9 +24,15 @@ def load_reference_set(path: Path | str) -> dict[str, set[str]]:
         return {}
     try:
         raw = json.loads(p.read_text())
-    except (json.JSONDecodeError, OSError):
+        if not isinstance(raw, dict):
+            return {}
+        out: dict[str, set[str]] = {}
+        for fp, ja3s in raw.items():
+            if isinstance(ja3s, (list, set, tuple)):
+                out[str(fp)] = {str(j) for j in ja3s}
+        return out
+    except (json.JSONDecodeError, OSError, AttributeError, TypeError, ValueError):
         return {}
-    return {str(fp): {str(j) for j in ja3s} for fp, ja3s in raw.items()}
 
 
 def evaluate_fingerprint_staleness(
