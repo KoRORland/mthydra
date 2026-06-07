@@ -9,6 +9,12 @@ what (if anything) the operator must do when upgrading.
 
 ## Unreleased — 2026-06-06
 
+- feat(V5): RU-egress self-measurement — RealityHandshakeObserver probes EU
+  exits from a RU vantage (reality-handshake helper), capturing handshake
+  health + emitted JA3; controller flags fingerprint staleness vs an
+  operator-maintained reference. Signals tls_fingerprint_stale /
+  eu_exit_handshake_degraded surface in the observability snapshot +
+  remediation. CLI: fingerprint-staleness-show. Config: [ru_egress] ja3_reference_path.
 - feat(V1): uTLS fingerprint freshness + diversity — signed-descriptor v3
   `tls_fingerprints` weighted list; each RU box deterministically self-picks
   a stable, diverse fingerprint the controller rolls fleet-wide without
