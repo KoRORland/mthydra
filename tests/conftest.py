@@ -1,6 +1,16 @@
 import shutil
+import sys
+from pathlib import Path
 
 import pytest
+
+# The backup monitor ships as a separate wheel (mthydra-backup-monitor/) and is
+# not installed into this repo's venv. Put its src on sys.path so integration
+# tests that import it (e.g. test_gap_monitor) can be collected without a
+# separate `pip install -e mthydra-backup-monitor/`.
+_MONITOR_SRC = Path(__file__).resolve().parent.parent / "mthydra-backup-monitor" / "src"
+if _MONITOR_SRC.is_dir() and str(_MONITOR_SRC) not in sys.path:
+    sys.path.insert(0, str(_MONITOR_SRC))
 
 
 @pytest.fixture

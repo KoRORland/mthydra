@@ -42,6 +42,13 @@ def test_full_lifecycle_survives_backup_restore(tmp_path, age_keypair):
     apply_schema(conn)
     insert_box(conn, "box-1", "aws", "eu-west-1", "10.0.0.1", "sni.invalid",
                "img-v1", "2026-04-01T00:00:00Z")
+    # Boxes bind to a shard at provisioning; mark_live refuses a shardless box.
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-04-01T00:00:00Z", "2026-04-01T00:00:00Z"),
+    )
+    conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='box-1'")
     mark_live(conn, "box-1", public_ip="10.0.0.1", at="2026-04-01T00:00:00Z")
     add_candidate(conn, "live.org", added_at="2026-04-01T00:00:00Z")
     attest_verified(conn, "live.org", from_vantage="ru-vps-01",

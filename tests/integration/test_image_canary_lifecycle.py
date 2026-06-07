@@ -83,9 +83,17 @@ def test_image_canary_full_lifecycle(tmp_path, age_recipient, monkeypatch):
     # CLI requires B2 stubs).
     from mthydra.controller.state.ru_boxes import insert_box
     conn = connect(db)
+    # Boxes bind to a shard at provisioning; mark_live refuses a shardless box.
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-05-25T02:00:00Z", "2026-05-25T02:00:00Z"),
+    )
     for box_id, ip in [("b-canary-1", "10.0.0.1"), ("b-canary-2", "10.0.0.2")]:
         insert_box(conn, box_id, "p", "r", ip, f"sni-{box_id}",
                    "v2", "2026-05-25T02:00:00Z", is_canary=True)
+        conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id=?",
+                     (box_id,))
         mark_live(conn, box_id, public_ip=ip, at="2026-05-25T02:01:00Z")
     conn.close()
 

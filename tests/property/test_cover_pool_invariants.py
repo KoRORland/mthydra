@@ -30,6 +30,13 @@ def _setup(tmp_db_path):
     apply_schema(conn)
     insert_box(conn, "box-1", "aws", "eu-west-1", "10.0.0.1", "sni.invalid",
                "img-v1", "2026-04-01T00:00:00Z")
+    # Boxes bind to a shard at provisioning; mark_live refuses a shardless box.
+    conn.execute(
+        "INSERT OR IGNORE INTO shards (shard_id, members_json, target_size, "
+        "last_reshuffled_at, created_at) VALUES ('default_shard', '[]', 2, ?, ?)",
+        ("2026-04-01T00:00:00Z", "2026-04-01T00:00:00Z"),
+    )
+    conn.execute("UPDATE ru_boxes SET shard_id='default_shard' WHERE box_id='box-1'")
     mark_live(conn, "box-1", public_ip="10.0.0.1", at="2026-04-01T00:00:00Z")
     return conn
 
