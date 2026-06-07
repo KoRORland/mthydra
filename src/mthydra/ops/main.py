@@ -338,8 +338,7 @@ password  = "{obs_smtp_pass}"
 
 [distribution]
 publish_sweep_interval     = "5m"
-user_heartbeat_interval    = "24h"
-heartbeat_breach_threshold = 3
+delivery_breach_threshold  = 3
 
 [distribution.telegram]
 bot_token = "{dist_tg_bot_token}"

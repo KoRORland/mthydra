@@ -47,6 +47,7 @@ class DistributionPublisher:
         telegram_sink: Callable,
         email_sink: Callable,
         sweep_interval_seconds: float,
+        breach_threshold: int = 3,
         mode: str = "production",
         clock: Callable[[], str] | None = None,
     ) -> None:
@@ -54,8 +55,14 @@ class DistributionPublisher:
         self.telegram_sink = telegram_sink
         self.email_sink = email_sink
         self.sweep_interval_seconds = sweep_interval_seconds
+        self.breach_threshold = breach_threshold
         self.mode = mode
         self._clock = clock or _default_clock
+        # Per-user consecutive "could not reach this user at all this tick"
+        # counter. In-memory (resets on restart, as the old heartbeat did). At
+        # breach_threshold, raise dist_user_heartbeat_breach::<user_id> for the
+        # operator. No synthetic pings — this rides on real content delivery.
+        self._failures: dict[str, int] = {}
         self._scheduler: BackgroundScheduler | None = None
 
     def arm(self) -> None:
@@ -94,14 +101,16 @@ class DistributionPublisher:
                     "ORDER BY user_id"
                 ).fetchall()
             ]
-            # Reconcile orphans: a dist-unregistered alert is only cleared for a
-            # user we still iterate (assigned). If a flagged user was later
-            # deleted or unassigned, their alert would orphan forever — so drop
-            # any whose user is no longer assigned.
+            # Reconcile orphans: a per-user alert is only cleared for a user we
+            # still iterate (assigned). If a flagged user was later deleted or
+            # unassigned, their alert would orphan forever — so drop any whose
+            # user is no longer assigned. Covers both the unregistered alert and
+            # the unreachable/breach alert.
             assigned_set = set(assigned)
             for (oid,) in conn.execute(
                 "SELECT obligation_id FROM obligation_clocks "
-                "WHERE obligation_id LIKE 'dist_user_unregistered::%'"
+                "WHERE obligation_id LIKE 'dist_user_unregistered::%' "
+                "OR obligation_id LIKE 'dist_user_heartbeat_breach::%'"
             ).fetchall():
                 if oid.split("::", 1)[1] not in assigned_set:
                     conn.execute(
@@ -137,6 +146,8 @@ class DistributionPublisher:
                 payload_body = payload_to_json(payload)
                 rendered = render_user_message(payload)
 
+                attempted_user = 0
+                succeeded_user = 0
                 for channel_label, configured in (
                     ("telegram", channels.telegram_chat_id),
                     ("email", channels.email_addr),
@@ -150,6 +161,7 @@ class DistributionPublisher:
                     success, err = self._dispatch(
                         channel_label, configured, rendered, payload,
                     )
+                    attempted_user += 1
                     _dl.append(
                         conn,
                         user_id=user_id, channel=channel_label,
@@ -162,6 +174,7 @@ class DistributionPublisher:
                     )
                     if success:
                         dispatched += 1
+                        succeeded_user += 1
                 log_event(
                     conn, ts=now, actor="dist_publisher",
                     action="dist_publish_decided",
@@ -171,6 +184,16 @@ class DistributionPublisher:
                         "boxes": len(payload.boxes),
                     }),
                 )
+                # Per-user reachability (spec K §7, now ride-along instead of a
+                # synthetic heartbeat): only a tick where we actually attempted
+                # a send carries a signal. All attempts failing -> the user is
+                # unreachable this tick; a single success clears it. Deduped /
+                # unregistered ticks (attempted_user == 0) carry no signal.
+                if attempted_user > 0:
+                    self._update_reachability(
+                        conn, now, user_id,
+                        reachable=succeeded_user > 0,
+                    )
             self._heartbeat(conn, now, dispatched, deduped, unregistered)
             conn.commit()
             return {
@@ -218,6 +241,32 @@ class DistributionPublisher:
             return False, repr(e)
         return (bool(getattr(res, "success", False)),
                 getattr(res, "error", None))
+
+    def _update_reachability(
+        self, conn, now: str, user_id: str, *, reachable: bool,
+    ) -> None:
+        oid = f"dist_user_heartbeat_breach::{user_id}"
+        if reachable:
+            if self._failures.get(user_id):
+                self._failures[user_id] = 0
+            conn.execute(
+                "DELETE FROM obligation_clocks WHERE obligation_id=?", (oid,)
+            )
+            return
+        self._failures[user_id] = self._failures.get(user_id, 0) + 1
+        fails = self._failures[user_id]
+        log_event(
+            conn, ts=now, actor="dist_publisher",
+            action="dist_delivery_failed", target=user_id,
+            details_json=json.dumps({"consecutive_failures": fails}),
+        )
+        if fails >= self.breach_threshold:
+            set_obligation(
+                conn, obligation_id=oid,
+                last_proven_at=now, proven_by="dist_publisher",
+                next_due_at=now,
+                details=json.dumps({"consecutive_failures": fails}),
+            )
 
     def _heartbeat(
         self, conn, now: str,

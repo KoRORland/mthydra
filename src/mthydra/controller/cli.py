@@ -2201,9 +2201,6 @@ def _cmd_serve(args) -> int:
     from mthydra.controller.observability.alerter import AlertSweep
     from mthydra.controller.observability.heartbeat import ObsHeartbeatPublisher
     from mthydra.controller.distribution.publisher import DistributionPublisher
-    from mthydra.controller.distribution.user_heartbeat import (
-        DistUserHeartbeatPublisher,
-    )
 
     set_audit_mirror("/var/lib/mthydra/logs/audit.log")
 
@@ -2321,13 +2318,7 @@ def _cmd_serve(args) -> int:
         db_path=args.db_path,
         telegram_sink=dist_tg_sink, email_sink=dist_em_sink,
         sweep_interval_seconds=cfg.distribution.publish_sweep_interval_seconds,
-        mode=mode,
-    )
-    dist_user_heartbeat = DistUserHeartbeatPublisher(
-        db_path=args.db_path,
-        telegram_sink=dist_tg_sink,
-        interval_seconds=cfg.distribution.user_heartbeat_interval_seconds,
-        breach_threshold=cfg.distribution.heartbeat_breach_threshold,
+        breach_threshold=cfg.distribution.delivery_breach_threshold,
         mode=mode,
     )
 
@@ -2383,7 +2374,6 @@ def _cmd_serve(args) -> int:
         alerter.arm()
         obs_heartbeat.arm()
         dist_publisher.arm()
-        dist_user_heartbeat.arm()
         if enroll_poller is not None:
             enroll_poller.arm()
         if exit_observer is not None:
@@ -2392,7 +2382,7 @@ def _cmd_serve(args) -> int:
             reality_observer.arm()
         if cfg.probe.runner_enabled:
             probe_runner.start()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat" + (" + eu exit observer" if exit_observer is not None else "") + (" + reality handshake observer" if reality_observer is not None else "") + " armed", flush=True)
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher" + (" + eu exit observer" if exit_observer is not None else "") + (" + reality handshake observer" if reality_observer is not None else "") + " armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -2414,7 +2404,6 @@ def _cmd_serve(args) -> int:
         alerter.disarm()
         obs_heartbeat.disarm()
         dist_publisher.disarm()
-        dist_user_heartbeat.disarm()
         if enroll_poller is not None:
             enroll_poller.disarm()
         if exit_observer is not None:

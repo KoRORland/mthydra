@@ -433,3 +433,99 @@ def test_publisher_sends_rendered_link_not_json(db):
     stored = row[0]
     assert stored.startswith("{"), "stored payload_json must be raw JSON"
     assert "proxy_url" in stored
+
+
+# --- per-user "unreachable" breach detection (rides on real send failures) ---
+
+class _FailSink:
+    """Distribution sink that always fails — simulates a user who blocked the
+    bot / a dead chat_id / a bouncing email."""
+
+    def __init__(self, label="x"):
+        self._label = label
+        self.calls = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        return SinkResult(sink=self._label, success=False, error="boom")
+
+    def send_photo(self, **kwargs):
+        return SinkResult(sink=self._label, success=False, error="boom")
+
+
+def _breach_oid(user_id="u1"):
+    return f"dist_user_heartbeat_breach::{user_id}"
+
+
+def _has_obligation(db, oid):
+    conn = connect(db)
+    try:
+        r = conn.execute(
+            "SELECT 1 FROM obligation_clocks WHERE obligation_id=?", (oid,)
+        ).fetchone()
+        return r is not None
+    finally:
+        conn.close()
+
+
+def test_repeated_delivery_failure_raises_breach_after_threshold(db):
+    conn = connect(db)
+    _seed_user_with_box(conn)
+    set_channels(conn, "u1", telegram_chat_id="12345",
+                 email_addr="u1@example.org", at=NOW)
+    conn.close()
+    tg, em = _FailSink("telegram"), _FailSink("email")
+    pub = DistributionPublisher(
+        db_path=db, telegram_sink=tg, email_sink=em,
+        sweep_interval_seconds=300, mode="production",
+        clock=lambda: NOW, breach_threshold=3,
+    )
+    # Failed sends are not deduped (last_subset_hash only counts delivered rows),
+    # so each tick re-attempts and the per-user failure counter accumulates.
+    pub.run_once()
+    assert not _has_obligation(db, _breach_oid())   # 1
+    pub.run_once()
+    assert not _has_obligation(db, _breach_oid())   # 2
+    pub.run_once()
+    assert _has_obligation(db, _breach_oid())        # 3 -> breach
+
+
+def test_successful_delivery_clears_breach(db):
+    conn = connect(db)
+    _seed_user_with_box(conn)
+    set_channels(conn, "u1", telegram_chat_id="12345", email_addr=None, at=NOW)
+    conn.close()
+    fail = _FailSink("telegram")
+    em = DryRunDistributionSink(label="email")
+    pub = DistributionPublisher(
+        db_path=db, telegram_sink=fail, email_sink=em,
+        sweep_interval_seconds=300, mode="production",
+        clock=lambda: NOW, breach_threshold=2,
+    )
+    pub.run_once()
+    pub.run_once()
+    assert _has_obligation(db, _breach_oid())
+
+    # Now telegram recovers: a successful delivery clears the breach + counter.
+    ok = DryRunDistributionSink(label="telegram")
+    pub.telegram_sink = ok
+    pub.run_once()
+    assert not _has_obligation(db, _breach_oid())
+
+
+def test_deduped_tick_does_not_count_as_failure(db):
+    conn = connect(db)
+    _seed_user_with_box(conn)
+    set_channels(conn, "u1", telegram_chat_id="12345", email_addr=None, at=NOW)
+    conn.close()
+    ok = DryRunDistributionSink(label="telegram")
+    em = DryRunDistributionSink(label="email")
+    pub = DistributionPublisher(
+        db_path=db, telegram_sink=ok, email_sink=em,
+        sweep_interval_seconds=300, mode="production",
+        clock=lambda: NOW, breach_threshold=1,
+    )
+    pub.run_once()                       # delivers
+    for _ in range(5):
+        pub.run_once()                   # all deduped (subset unchanged)
+    assert not _has_obligation(db, _breach_oid())

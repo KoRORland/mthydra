@@ -190,8 +190,11 @@ _REMEDIATIONS: dict[str, str] = {
         "dead, replace it ('mthydra-ops ru-bringup ...')."
     ),
     "dist_user_heartbeat_breach": (
-        "a distribution user hasn't checked in within their window (spec K). "
-        "Confirm publishing: mthydra-controller dist-status / dist-publish-now"
+        "content delivery to this user has failed repeatedly (spec K) — they "
+        "likely blocked the bot, deleted the chat, or their email bounces. "
+        "Check their channel: mthydra-controller user-channels-show <user-id>; "
+        "re-onboard if needed. The alert clears on the next successful delivery "
+        "or once the user is no longer assigned to a shard."
     ),
     "tls_fingerprint_stale": (
         "a deployed uTLS fingerprint's JA3 no longer matches a current popular "

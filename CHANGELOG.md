@@ -9,6 +9,14 @@ what (if anything) the operator must do when upgrading.
 
 ## Unreleased — 2026-06-06
 
+- change(dist): removed the recurring user-facing Telegram heartbeat (the daily
+  `mthydra heartbeat @ <ts>` pulse) — it trained users to mute the channel and
+  miss new proxy/channel links. The operator's per-user "unreachable" detection
+  is preserved: `DistributionPublisher` now raises
+  `dist_user_heartbeat_breach::<user>` (crit) after `delivery_breach_threshold`
+  consecutive *real* content-delivery failures, with no extra messages to users.
+  Config: `[distribution]` `user_heartbeat_interval` removed,
+  `heartbeat_breach_threshold` → `delivery_breach_threshold`.
 - feat(debug): operator debug mode — `mthydra-controller debug
   enable/disable/status` (rotating `/var/log/mthydra/debug.log`, 10 MB × 5,
   24h auto-expire) on EU; live tmpfs flag file `/run/mthydra/debug.flag`

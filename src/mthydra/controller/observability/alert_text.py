@@ -34,7 +34,7 @@ _KIND_TITLE: dict[str, str] = {
     "shard_overdue_pending": "Shard is overdue for reshuffle",
     "shard_unassigned_pending": "Shard has no assigned box",
     "dist_user_unregistered": "Distribution user is not registered",
-    "dist_user_heartbeat_breach": "Distribution user went silent",
+    "dist_user_heartbeat_breach": "Distribution to user is failing",
     "image_rollback_pending": "RU box still running rolled-back image",
     "backup_integrity_failed": "Backup integrity check failed",
     "obs_dead_mans_switch_breach": "Heartbeat email is not going out",

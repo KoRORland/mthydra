@@ -696,8 +696,7 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
         ),
         distribution=DistributionConfig(
             publish_sweep_interval_seconds=300,
-            user_heartbeat_interval_seconds=86400,
-            heartbeat_breach_threshold=3,
+            delivery_breach_threshold=3,
             telegram=None,
             email=None,
         ),
@@ -805,8 +804,7 @@ def test_build_destination_derives_region_from_aws_endpoint(monkeypatch, tmp_pat
                 telegram=None, email=None),
             distribution=DistributionConfig(
                 publish_sweep_interval_seconds=300,
-                user_heartbeat_interval_seconds=86400,
-                heartbeat_breach_threshold=3,
+                delivery_breach_threshold=3,
                 telegram=None, email=None),
         )
 

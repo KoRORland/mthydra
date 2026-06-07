@@ -536,8 +536,7 @@ def test_load_config_distribution_section(tmp_path):
         + """
 [distribution]
 publish_sweep_interval = "5m"
-user_heartbeat_interval = "24h"
-heartbeat_breach_threshold = 3
+delivery_breach_threshold = 3
 
 [distribution.telegram]
 bot_token = "dist-token"
@@ -552,8 +551,7 @@ password = "app-pw"
     )
     cfg = load_config(p)
     assert cfg.distribution.publish_sweep_interval_seconds == 300
-    assert cfg.distribution.user_heartbeat_interval_seconds == 86400
-    assert cfg.distribution.heartbeat_breach_threshold == 3
+    assert cfg.distribution.delivery_breach_threshold == 3
     assert cfg.distribution.telegram is not None
     assert cfg.distribution.telegram.bot_token == "dist-token"
     assert cfg.distribution.email is not None

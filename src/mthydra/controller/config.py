@@ -184,8 +184,7 @@ class DistributionEmailConfig:
 @dataclass(frozen=True)
 class DistributionConfig:
     publish_sweep_interval_seconds: int
-    user_heartbeat_interval_seconds: int
-    heartbeat_breach_threshold: int
+    delivery_breach_threshold: int
     telegram: DistributionTelegramConfig | None
     email: DistributionEmailConfig | None
     enrollment_token_ttl_hours: int = 24
@@ -380,13 +379,9 @@ def _load_distribution(data: dict) -> DistributionConfig:
             "distribution.publish_sweep_interval",
             sec.get("publish_sweep_interval", 300),
         ),
-        user_heartbeat_interval_seconds=_parse_interval_seconds(
-            "distribution.user_heartbeat_interval",
-            sec.get("user_heartbeat_interval", 86400),
-        ),
-        heartbeat_breach_threshold=_require_positive(
-            "distribution.heartbeat_breach_threshold",
-            sec.get("heartbeat_breach_threshold", 3),
+        delivery_breach_threshold=_require_positive(
+            "distribution.delivery_breach_threshold",
+            sec.get("delivery_breach_threshold", 3),
         ),
         telegram=_tg(),
         email=_em(),

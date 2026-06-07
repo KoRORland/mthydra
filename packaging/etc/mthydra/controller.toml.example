@@ -133,8 +133,11 @@ password  = ""
 # [observability.telegram]. Both [distribution.telegram] and
 # [distribution.email] are REQUIRED on active nodes.
 publish_sweep_interval        = "5m"
-user_heartbeat_interval       = "24h"
-heartbeat_breach_threshold    = 3
+# Consecutive failed content deliveries to a user before raising a crit alert
+# to the operator (user likely blocked the bot / bad chat_id / bouncing email).
+# There is NO recurring user-facing heartbeat — detection rides on real
+# proxy-update sends only, so the user channel stays quiet between updates.
+delivery_breach_threshold     = 3
 
 [distribution.telegram]
 bot_token = ""    # distribution bot — distinct from operator alert bot

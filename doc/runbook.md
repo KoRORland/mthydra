@@ -204,7 +204,7 @@ mthydra-controller serve \
     --config /etc/mthydra/controller.toml
 ```
 
-You should see one line: `serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher + dist user heartbeat armed`.
+You should see one line: `serve: backup orchestrator + descriptor rotator + cover-pool sweeps + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher armed`.
 
 If you see `serve: refusing — [observability.X] are required for active mode` or `serve: refusing — [distribution.X] are required for active mode`, you missed credentials in §1.7. Fix and re-run.
 
@@ -792,7 +792,7 @@ You will get alerts. Most are warns; respond on the day. Crits are 1-hour SLA.
 | `shard_overdue_pending::<shard>` | controller is wedged; restart and check `journalctl` |
 | `shard_unassigned_pending::<user>` | §6.1 (wait for sweep) or §5.3 manually |
 | `dist_user_unregistered::<user>` | §5.2 |
-| `dist_user_heartbeat_breach::<user>` | the user's distribution bot is silent for them; check their telegram_chat_id is current via §5.2 |
+| `dist_user_heartbeat_breach::<user>` | content delivery to this user keeps failing (blocked bot / stale chat_id / bouncing email) — check `mthydra-controller user-channels-show <user>` and re-onboard via §5.2. Clears on next successful delivery. No user-facing heartbeat is sent. |
 | `obs_dead_mans_switch_breach` | your SMTP is down OR the operator's mailbox is gone. Recover SMTP; if mailbox lost, set up a new one and re-deploy. |
 | `image_rollback_pending::<box>` | §9.2 |
 | `image_promote_refused` | the gate refused promotion; rerun §3.5 to see why |
