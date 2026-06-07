@@ -210,6 +210,36 @@ def build_parser() -> argparse.ArgumentParser:
                      help="generation number (default: latest)")
     dsh.add_argument("--db-path", default=DEFAULT_DB)
 
+    # desync-strategy-{show,stage,promote,mark-proven} (V2 Task 8 — spec V
+    # V-D6 / invariant #36: staged vs live nfqws desync strategy + canary gate)
+    dss = sub.add_parser(
+        "desync-strategy-show",
+        help="show staged/live nfqws desync strategy and canary-proven status",
+    )
+    dss.add_argument("--db-path", default=DEFAULT_DB)
+
+    dst = sub.add_parser(
+        "desync-strategy-stage",
+        help="stage a candidate nfqws desync strategy for canary rollout",
+    )
+    dst.add_argument("--strategy", required=True,
+                     help="nfqws args, e.g. '--dpi-desync=fake'")
+    dst.add_argument("--db-path", default=DEFAULT_DB)
+
+    dsmp = sub.add_parser(
+        "desync-strategy-mark-proven",
+        help="operator-attested: mark a staged strategy as canary-proven (#36)",
+    )
+    dsmp.add_argument("--strategy", required=True,
+                      help="nfqws args matching the staged candidate, e.g. '--dpi-desync=fake'")
+    dsmp.add_argument("--db-path", default=DEFAULT_DB)
+
+    dsp = sub.add_parser(
+        "desync-strategy-promote",
+        help="promote the staged strategy to live (requires canary-proven hash match, #36)",
+    )
+    dsp.add_argument("--db-path", default=DEFAULT_DB)
+
     # tls-fingerprints-show
     tfs = sub.add_parser(
         "tls-fingerprints-show",
@@ -810,8 +840,27 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _fold_dashed_option_values(argv: list[str], opt: str) -> list[str]:
+    """argparse refuses `--opt --looks-like-an-option` (it can't tell the
+    value from a flag). nfqws strategy strings are themselves '--...' args
+    (e.g. '--dpi-desync=fake'), so fold `--strategy VALUE` pairs into
+    `--strategy=VALUE` before parsing when VALUE starts with '--'."""
+    out: list[str] = []
+    i = 0
+    while i < len(argv):
+        item = argv[i]
+        if item == opt and i + 1 < len(argv) and argv[i + 1].startswith("--"):
+            out.append(f"{item}={argv[i + 1]}")
+            i += 2
+            continue
+        out.append(item)
+        i += 1
+    return out
+
+
 def run(argv: list[str]) -> int:
     """Parse argv and dispatch to subcommand handler. Returns exit code."""
+    argv = _fold_dashed_option_values(argv, "--strategy")
     args = build_parser().parse_args(argv)
     mode = args.mode
 
@@ -1065,6 +1114,15 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "descriptor-show":
         return _cmd_descriptor_show(args)
+
+    if args.cmd == "desync-strategy-show":
+        return _cmd_desync_strategy_show(args)
+    if args.cmd == "desync-strategy-stage":
+        return _cmd_desync_strategy_stage(args)
+    if args.cmd == "desync-strategy-mark-proven":
+        return _cmd_desync_strategy_mark_proven(args)
+    if args.cmd == "desync-strategy-promote":
+        return _cmd_desync_strategy_promote(args)
 
     if args.cmd == "tls-fingerprints-show":
         return _cmd_tls_fingerprints_show(args)
@@ -1426,6 +1484,66 @@ def _cmd_descriptor_show(args) -> int:
             _, blob, _ = result
         obj = _json.loads(blob)
         print(_json.dumps(obj, indent=2, sort_keys=True))
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_desync_strategy_show(args) -> int:
+    """Read-only: print staged, live, and whether the staged candidate is
+    canary-proven (spec V V-D6 / invariant #36)."""
+    from mthydra.controller.state import desync_strategy as ds
+    conn = connect(args.db_path)
+    try:
+        candidate = ds.staged(conn)
+        live = ds.live(conn)
+        proven_hash = conn.execute(
+            "SELECT canary_proven_hash FROM desync_strategy WHERE id=1"
+        ).fetchone()[0]
+        is_proven = candidate is not None and proven_hash == ds._h(candidate)
+        print(f"staged: {candidate if candidate is not None else '(none)'}")
+        print(f"live: {live if live is not None else '(none)'}")
+        print(f"canary-proven: {'yes' if is_proven else 'no (not canary-proven)'}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_desync_strategy_stage(args) -> int:
+    """Stage a candidate nfqws desync strategy for canary rollout (#36)."""
+    from mthydra.controller.state import desync_strategy as ds
+    conn = connect(args.db_path)
+    try:
+        ds.stage(conn, args.strategy, at=_now())
+        print(f"desync-strategy-stage: staged {args.strategy!r}")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_desync_strategy_mark_proven(args) -> int:
+    """Operator-attested: mark a staged strategy as canary-proven (#36)."""
+    from mthydra.controller.state import desync_strategy as ds
+    conn = connect(args.db_path)
+    try:
+        ds.mark_canary_proven(conn, args.strategy, at=_now())
+        print(f"desync-strategy-mark-proven: marked {args.strategy!r} as canary-proven")
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_desync_strategy_promote(args) -> int:
+    """Promote the staged strategy to live; refuses unless canary-proven (#36)."""
+    from mthydra.controller.state import desync_strategy as ds
+    conn = connect(args.db_path)
+    try:
+        try:
+            ds.promote(conn, at=_now())
+        except ds.CanaryGateError as e:
+            print(f"desync-strategy-promote: {e}", file=sys.stderr)
+            return 2
+        print(f"desync-strategy-promote: promoted to live -> {ds.live(conn)!r}")
         return 0
     finally:
         conn.close()
