@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 _TRIGGER_COVER_POOL_REJECT_BURNED = """
     CREATE TRIGGER IF NOT EXISTS cover_pool_reject_burned
@@ -595,6 +595,17 @@ _STATEMENTS: list[str] = [
       comment      TEXT
     );
     """,
+    # --- spec V V-D6 / invariant #36: staged vs live desync strategy + canary gate ---
+    """
+    CREATE TABLE IF NOT EXISTS desync_strategy (
+      id                 INTEGER PRIMARY KEY CHECK (id = 1),
+      staged             TEXT,
+      live               TEXT,
+      canary_proven_hash TEXT,
+      updated_at         TEXT
+    )
+    """,
+    "INSERT OR IGNORE INTO desync_strategy (id) VALUES (1)",
 ]
 
 # Spec C migration triggers (applied by migrate_v2_to_v3)
@@ -834,6 +845,26 @@ def migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
         (16, _now()),
+    )
+    conn.commit()
+
+
+def migrate_v18_to_v19(conn: sqlite3.Connection) -> None:
+    """Idempotent v18 → v19: add desync_strategy single-row table (spec V V-D6).
+
+    Holds the staged-vs-live nfqws desync-strategy strings plus the hash of
+    whichever staged candidate has been canary-proven; a fleet-wide (live)
+    strategy can only be promoted from a staged candidate whose hash matches
+    canary_proven_hash (invariant #36)."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS desync_strategy ("
+        "id INTEGER PRIMARY KEY CHECK (id = 1), "
+        "staged TEXT, live TEXT, canary_proven_hash TEXT, updated_at TEXT)"
+    )
+    conn.execute("INSERT OR IGNORE INTO desync_strategy (id) VALUES (1)")
+    conn.execute(
+        "UPDATE schema_version SET version=?, applied_at=? WHERE rowid=1",
+        (19, _now()),
     )
     conn.commit()
 
@@ -1147,4 +1178,6 @@ def apply_schema(conn: sqlite3.Connection) -> None:
             migrate_v16_to_v17(conn)
         if current < 18:
             migrate_v17_to_v18(conn)
+        if current < 19:
+            migrate_v18_to_v19(conn)
     conn.commit()
