@@ -19,7 +19,7 @@ def test_stage_show_promote_flow(tmp_path, capsys):
     db = _db(tmp_path)
 
     assert cli.run(["desync-strategy-stage", "--db-path", db,
-                    "--strategy", "--dpi-desync=fake"]) == 0
+                    "--strategy=--dpi-desync=fake"]) == 0
     capsys.readouterr()
 
     assert cli.run(["desync-strategy-show", "--db-path", db]) == 0
@@ -32,7 +32,7 @@ def test_stage_show_promote_flow(tmp_path, capsys):
     assert "canary" in capsys.readouterr().err.lower()
 
     assert cli.run(["desync-strategy-mark-proven", "--db-path", db,
-                    "--strategy", "--dpi-desync=fake"]) == 0
+                    "--strategy=--dpi-desync=fake"]) == 0
     capsys.readouterr()
 
     assert cli.run(["desync-strategy-promote", "--db-path", db]) == 0
@@ -50,7 +50,7 @@ def test_promote_with_no_staged_strategy_fails(tmp_path, capsys):
 def test_show_reports_not_canary_proven_before_marking(tmp_path, capsys):
     db = _db(tmp_path)
     assert cli.run(["desync-strategy-stage", "--db-path", db,
-                    "--strategy", "--dpi-desync=fake"]) == 0
+                    "--strategy=--dpi-desync=fake"]) == 0
     capsys.readouterr()
     assert cli.run(["desync-strategy-show", "--db-path", db]) == 0
     out = capsys.readouterr().out

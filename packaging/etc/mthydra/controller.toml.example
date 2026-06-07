@@ -183,10 +183,11 @@ default = "www.example-cover-domain.invalid"
 # state, gated by a canary-proven marker, and is emitted into the signed
 # descriptor (v3) automatically once promoted. Manage it exclusively via:
 #
-#   mthydra-controller desync-strategy-stage   --strategy "<nfqws args>"
+#   mthydra-controller desync-strategy-stage   --strategy='<nfqws args>'
 #   mthydra-controller desync-strategy-show
-#   mthydra-controller desync-strategy-mark-proven --strategy "<nfqws args>"
+#   mthydra-controller desync-strategy-mark-proven --strategy='<nfqws args>'
 #   mthydra-controller desync-strategy-promote
+# (use --strategy=<value> equals form because the value starts with a dash)
 #
 # `promote` refuses to set `live` unless the staged candidate's hash matches
 # the operator-attested canary-proven hash (#36) — see doc/runbook.md §V.2

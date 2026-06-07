@@ -840,27 +840,8 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _fold_dashed_option_values(argv: list[str], opt: str) -> list[str]:
-    """argparse refuses `--opt --looks-like-an-option` (it can't tell the
-    value from a flag). nfqws strategy strings are themselves '--...' args
-    (e.g. '--dpi-desync=fake'), so fold `--strategy VALUE` pairs into
-    `--strategy=VALUE` before parsing when VALUE starts with '--'."""
-    out: list[str] = []
-    i = 0
-    while i < len(argv):
-        item = argv[i]
-        if item == opt and i + 1 < len(argv) and argv[i + 1].startswith("--"):
-            out.append(f"{item}={argv[i + 1]}")
-            i += 2
-            continue
-        out.append(item)
-        i += 1
-    return out
-
-
 def run(argv: list[str]) -> int:
     """Parse argv and dispatch to subcommand handler. Returns exit code."""
-    argv = _fold_dashed_option_values(argv, "--strategy")
     args = build_parser().parse_args(argv)
     mode = args.mode
 

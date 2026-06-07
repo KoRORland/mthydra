@@ -1217,8 +1217,9 @@ profile suddenly went bad — then refresh the file and re-run
 1. **Stage the candidate.**
    ```bash
    mthydra-controller desync-strategy-stage \
-     --strategy "--dpi-desync=fake --dpi-desync-fooling=md5sig"
+     --strategy='--dpi-desync=fake --dpi-desync-fooling=md5sig'
    ```
+   Use `--strategy=<value>` (equals form) because the value starts with a dash.
    This only writes to the `staged` slot — it has **no effect on the fleet**
    yet (the `live` strategy, the one the signer emits, is untouched).
 
@@ -1246,8 +1247,9 @@ profile suddenly went bad — then refresh the file and re-run
    holds clean:
    ```bash
    mthydra-controller desync-strategy-mark-proven \
-     --strategy "--dpi-desync=fake --dpi-desync-fooling=md5sig"
+     --strategy='--dpi-desync=fake --dpi-desync-fooling=md5sig'
    ```
+   Use `--strategy=<value>` (equals form) because the value starts with a dash.
    This is a manual attestation — you are vouching that you watched the
    signal and it held. The `--strategy` argument must match the staged
    candidate **verbatim**; the controller hashes it and stores the hash as
