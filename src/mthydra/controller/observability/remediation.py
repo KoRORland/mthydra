@@ -198,7 +198,7 @@ _REMEDIATIONS: dict[str, str] = {
         "browser (Details has the fp). Roll the pool: edit "
         "[descriptor.tls_fingerprints] in controller.toml and wait for the next "
         "descriptor rotation (or 'mthydra-controller descriptor-sign-now'). "
-        "Confirm with 'mthydra-controller tls-fingerprints-show'."
+        "Confirm with 'mthydra-controller fingerprint-staleness-show'."
     ),
     "eu_exit_handshake_degraded": (
         "the RU vantage is seeing TLS handshakes to this EU exit fail or get "

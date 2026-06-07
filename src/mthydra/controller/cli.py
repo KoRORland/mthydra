@@ -217,6 +217,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tfs.add_argument("--config", default="/etc/mthydra/controller.toml")
 
+    # fingerprint-staleness-show
+    fss = sub.add_parser(
+        "fingerprint-staleness-show",
+        help="show whether deployed uTLS fingerprints' captured JA3 matches the "
+             "operator-maintained reference set (V5)",
+    )
+    fss.add_argument("--config", default="/etc/mthydra/controller.toml")
+    fss.add_argument("--db-path", default=DEFAULT_DB)
+
     # descriptor-verify
     dvf = sub.add_parser("descriptor-verify",
                           help="verify a descriptor file against trusted keys in DB")
@@ -1059,6 +1068,8 @@ def run(argv: list[str]) -> int:
 
     if args.cmd == "tls-fingerprints-show":
         return _cmd_tls_fingerprints_show(args)
+    if args.cmd == "fingerprint-staleness-show":
+        return _cmd_fingerprint_staleness_show(args)
 
     if args.cmd == "descriptor-verify":
         return _cmd_descriptor_verify(args)
@@ -1435,6 +1446,56 @@ def _cmd_tls_fingerprints_show(args) -> int:
     for fp, w in sorted(fps):
         pct = (100 * w // total) if total else 0
         print(f"  {fp:12s} weight={w}  (~{pct}%)")
+    return 0
+
+
+def _cmd_fingerprint_staleness_show(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    from mthydra.controller.observability.fingerprint_staleness import load_reference_set
+    from mthydra.controller.state.descriptor import latest_descriptor_with_signature
+    from mthydra.descriptor.payload import DescriptorPayload
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"fingerprint-staleness-show: {e}", file=sys.stderr)
+        return 2
+
+    ja3_reference_path = cfg.ru_egress.ja3_reference_path if cfg.ru_egress else None
+
+    conn = connect(args.db_path)
+    try:
+        result = latest_descriptor_with_signature(conn)
+        fps: tuple[str, ...] = ()
+        if result is not None:
+            try:
+                payload = DescriptorPayload.from_canonical_bytes(result[1])
+                fps = tuple(fp for fp, _w in (payload.tls_fingerprints or ()))
+            except Exception:
+                fps = ()
+        if not fps:
+            print("no descriptor / no fingerprints configured")
+            return 0
+
+        for fp in fps:
+            row = conn.execute(
+                "SELECT details FROM obligation_clocks WHERE obligation_id=?",
+                (f"tls_fingerprint_stale::{fp}",),
+            ).fetchone()
+            if row is not None:
+                print(f"  {fp}: STALE ({row[0]})")
+            else:
+                print(f"  {fp}: OK")
+    finally:
+        conn.close()
+
+    if ja3_reference_path is None:
+        print("ja3_reference_path: (not configured)")
+    else:
+        reference = load_reference_set(ja3_reference_path)
+        status = "loaded" if reference else "missing/empty"
+        print(f"ja3_reference_path: {ja3_reference_path} ({status})")
+
     return 0
 
 
