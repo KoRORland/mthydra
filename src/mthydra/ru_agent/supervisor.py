@@ -16,30 +16,42 @@ class Supervisor:
         *,
         mtg_cmd: list[str],
         sing_box_cmd: list[str],
+        nfqws_cmd: list[str] | None = None,
         clock: Callable[[], float] | None = None,
         sleep_fn: Callable[[float], None] | None = None,
         on_persistent_failure: Callable[[str], None] | None = None,
     ):
         self._mtg_cmd = mtg_cmd
         self._sing_box_cmd = sing_box_cmd
+        self._nfqws_cmd = nfqws_cmd
         self._clock = clock or time.monotonic
         self._sleep_fn = sleep_fn or time.sleep
         self._on_failure = on_persistent_failure or (lambda r: None)
         self._mtg_proc: subprocess.Popen | None = None
         self._sing_box_proc: subprocess.Popen | None = None
+        self._nfqws_proc: subprocess.Popen | None = None
         self._mtg_crashes: list[float] = []
         self._sing_box_crashes: list[float] = []
+        self._nfqws_crashes: list[float] = []
+
+    def _children(self):
+        rows = [
+            ("mtg", "_mtg_proc", self._mtg_cmd, self._mtg_crashes),
+            ("sing-box", "_sing_box_proc", self._sing_box_cmd, self._sing_box_crashes),
+        ]
+        if self._nfqws_cmd is not None:
+            rows.append(("nfqws", "_nfqws_proc", self._nfqws_cmd, self._nfqws_crashes))
+        return rows
 
     def launch_all(self) -> None:
         self._mtg_proc = subprocess.Popen(self._mtg_cmd)
         self._sing_box_proc = subprocess.Popen(self._sing_box_cmd)
+        if self._nfqws_cmd is not None:
+            self._nfqws_proc = subprocess.Popen(self._nfqws_cmd)
 
     def check_children_once(self) -> None:
         now = self._clock()
-        for name, proc_attr, cmd, crashes in (
-            ("mtg", "_mtg_proc", self._mtg_cmd, self._mtg_crashes),
-            ("sing-box", "_sing_box_proc", self._sing_box_cmd, self._sing_box_crashes),
-        ):
+        for name, proc_attr, cmd, crashes in self._children():
             proc = getattr(self, proc_attr)
             if proc is None:
                 continue
@@ -61,7 +73,7 @@ class Supervisor:
             setattr(self, proc_attr, subprocess.Popen(cmd))
 
     def shutdown_children(self) -> None:
-        for proc in (self._mtg_proc, self._sing_box_proc):
+        for proc in (self._mtg_proc, self._sing_box_proc, self._nfqws_proc):
             if proc and proc.poll() is None:
                 proc.terminate()
                 try:

@@ -172,6 +172,54 @@ def test_shutdown_children_skips_already_exited(monkeypatch):
     assert actions == []
 
 
+def test_nfqws_crash_loop_triggers_persistent_failure(monkeypatch):
+    """An nfqws child that crash-loops (>=4 crashes in 5min) terminates the box,
+    with a reason mentioning 'nfqws'."""
+    from mthydra.ru_agent import supervisor
+    def fake_popen(cmd, **kw):
+        if "nfqws" in cmd[0]:
+            return _FakeChild(returncode=1)  # crashed
+        return _FakeChild(returncode=None)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", fake_popen)
+
+    clock = [0.0]
+    terminated = []
+    s = supervisor.Supervisor(
+        mtg_cmd=["mtg", "run"],
+        sing_box_cmd=["sing-box", "run"],
+        nfqws_cmd=["nfqws", "--qnum=200"],
+        clock=lambda: clock[0],
+        sleep_fn=lambda s: None,
+        on_persistent_failure=lambda r: terminated.append(r),
+    )
+    s.launch_all()
+    for _ in range(5):
+        clock[0] += 1.0
+        s.check_children_once()
+    assert terminated, "expected on_persistent_failure to fire"
+    assert any("nfqws" in r for r in terminated)
+
+
+def test_no_nfqws_when_cmd_is_none(monkeypatch):
+    """Without nfqws_cmd, launch_all() Popens only mtg+sing-box, and _children()
+    has length 2."""
+    from mthydra.ru_agent import supervisor
+    launched = []
+    def fake_popen(cmd, **kw):
+        launched.append(cmd)
+        return _FakeChild(returncode=None)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", fake_popen)
+    s = supervisor.Supervisor(
+        mtg_cmd=["mtg", "run", "/run/mtg.toml"],
+        sing_box_cmd=["sing-box", "run", "-c", "/run/sb.json"],
+        clock=lambda: 0.0,
+    )
+    s.launch_all()
+    assert len(launched) == 2
+    assert s._nfqws_proc is None
+    assert len(s._children()) == 2
+
+
 def test_run_forever_breaks_on_keyboard_interrupt(monkeypatch):
     """KeyboardInterrupt in sleep -> shutdown_children invoked, no re-raise."""
     from mthydra.ru_agent import supervisor
