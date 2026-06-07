@@ -6,6 +6,7 @@ the descriptor refresh loop, terminates the box on persistent failure.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import threading
@@ -16,6 +17,7 @@ from mthydra.ru_agent import (
     binary,
     config_gen,
     descriptor_refresh,
+    desync,
     hardening,
     iptables,
     supervisor,
@@ -30,6 +32,24 @@ MTG_CONFIG_PATH = "/run/mthydra/mtg.toml"
 SING_BOX_CONFIG_PATH = "/run/mthydra/sing-box.json"
 HEALTH_PATH = "/run/mthydra/health.json"
 TPROXY_PORT = 12345
+NFQWS_PATH = "/run/mthydra/nfqws"
+DESYNC_QNUM = 200
+
+
+def _exit_endpoints(descriptor_payload: dict) -> list[str]:
+    return [e["endpoint"] for e in descriptor_payload.get("eu_exit_set", [])]
+
+
+def _desync_strategy(descriptor_payload: dict) -> str | None:
+    s = descriptor_payload.get("desync_strategy")
+    return s or None
+
+
+# Current EU-exit endpoint set, as installed by the most recent descriptor
+# rewrite. Single writer (descriptor-refresh thread, via _rewrite), single
+# reader (periodic-recheck thread). GIL-safe: always replaced wholesale with a
+# new list, never mutated in place.
+_current_exit_endpoints: list[str] = []
 
 # Startup failures are usually transient at boot — the VM clock is still at epoch
 # (so the mtg presigned download fails on TLS/expiry), the network/S3 isn't ready,
@@ -72,9 +92,10 @@ def _atomic_write_bytes(path: str, data: bytes) -> None:
 
 
 def _startup():
-    """Run the startup sequence once. Returns the loaded seed on success;
-    raises _StartupError on any step failure (caller retries — never powers off
-    the box). Hardening → seed → mtg binary → configs → iptables."""
+    """Run the startup sequence once. Returns (seed, desync_strategy) on
+    success; raises _StartupError on any step failure (caller retries — never
+    powers off the box). Hardening → seed → mtg binary → configs → iptables →
+    optional nfqws/desync."""
     # 1. Apply what the agent can enforce itself (core_pattern, overwritten by
     # apport at boot), then verify all hardening invariants.
     hardening.apply_best_effort()
@@ -123,7 +144,26 @@ def _startup():
         )
     except iptables.IptablesError as e:
         raise _StartupError(f"iptables: {e}") from e
-    return s
+
+    # 6. Optional desync: fetch nfqws + install NFQUEUE rules for the EU exits.
+    strategy = _desync_strategy(descriptor_payload)
+    if strategy and s.nfqws_url and s.nfqws_sha256:
+        try:
+            binary.download_and_verify(
+                url=s.nfqws_url, expected_sha256=s.nfqws_sha256, out_path=NFQWS_PATH,
+            )
+        except binary.BinaryError as e:
+            raise _StartupError(f"nfqws binary: {e}") from e
+        try:
+            desync.install(exit_ips=_exit_endpoints(descriptor_payload), qnum=DESYNC_QNUM)
+        except desync.DesyncError as e:
+            raise _StartupError(f"desync rules: {e}") from e
+
+    # Seed the current-exit holder for the recheck thread.
+    global _current_exit_endpoints
+    _current_exit_endpoints = _exit_endpoints(descriptor_payload)
+
+    return s, strategy
 
 
 def _run_tunnel_check(*, dc_ips, connect_fn=None, log=None, clock=None) -> None:
@@ -151,9 +191,11 @@ def main() -> int:
     # Startup with bounded retry. On persistent failure, STAY UP (return 2) for
     # diagnosis — do not power off (see STARTUP_MAX_ATTEMPTS comment).
     s = None
+    strategy = None
     for attempt in range(1, STARTUP_MAX_ATTEMPTS + 1):
         try:
-            s = _startup()
+            res = _startup()
+            s, strategy = res
             break
         except _StartupError as e:
             print(f"agent: startup failed (attempt {attempt}/"
@@ -170,6 +212,8 @@ def main() -> int:
     sup = supervisor.Supervisor(
         mtg_cmd=[MTG_PATH, "run", MTG_CONFIG_PATH],
         sing_box_cmd=["sing-box", "run", "-c", SING_BOX_CONFIG_PATH],
+        nfqws_cmd=(desync.nfqws_argv(NFQWS_PATH, strategy, qnum=DESYNC_QNUM)
+                   if strategy and s.nfqws_url else None),
         on_persistent_failure=lambda r: _terminate(f"supervisor: {r}"),
     )
     sup.launch_all()
@@ -187,6 +231,19 @@ def main() -> int:
         # SIGHUP via systemctl. For tests, this is mocked.
         import subprocess
         subprocess.run(["systemctl", "kill", "-s", "HUP", "mthydra-sing-box"])
+
+        # Re-apply (or clear) desync rules for the new EU-exit set, and update
+        # the holder the periodic-recheck thread reads.
+        global _current_exit_endpoints
+        new_strategy = _desync_strategy(payload)
+        new_eps = _exit_endpoints(payload)
+        if new_strategy and s.nfqws_url:
+            # The periodic recheck will catch a persistent miss.
+            with contextlib.suppress(desync.DesyncError):
+                desync.install(exit_ips=new_eps, qnum=DESYNC_QNUM)
+        else:
+            desync.clear(DESYNC_QNUM)
+        _current_exit_endpoints = new_eps
 
     refresh = descriptor_refresh.RefreshLoop(
         url=s.descriptor_refresh_url,
@@ -223,6 +280,22 @@ def main() -> int:
                 except iptables.IptablesError as e:
                     _terminate(f"iptables: {e}")
                     return
+            # Desync rules: re-verify against the CURRENT exit set. Gate on
+            # both the startup-time strategy (whether desync is in play on
+            # this box at all) and a non-empty current holder — if a refresh
+            # dropped the strategy, _rewrite already cleared the rule and the
+            # holder is now empty, so verify_installed on an empty set would
+            # trivially pass; an empty gate here just avoids the redundant
+            # check (and a spurious terminate if the holder were non-empty but
+            # stale during a clear race).
+            if strategy and s.nfqws_url:
+                eps = list(_current_exit_endpoints)
+                if eps and not desync.verify_installed(exit_ips=eps, qnum=DESYNC_QNUM):
+                    try:
+                        desync.install(exit_ips=eps, qnum=DESYNC_QNUM)
+                    except desync.DesyncError as e:
+                        _terminate(f"desync: {e}")
+                        return
             # K3: end-to-end RU->EU tunnel self-check. Never raises (must not
             # take down the hardening/iptables re-verification loop).
             dc_ips = list(s.telegram_dcs.get("v4", [])) + list(
