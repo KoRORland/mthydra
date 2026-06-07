@@ -59,10 +59,14 @@ def install(*, exit_ips: list[str], qnum: int) -> None:
             continue
         _run([tool, "-t", _TABLE, "-N", _CHAIN])
         for ip in ips:
+            # --queue-bypass: if nfqws is absent/dead/restarting, matching
+            # traffic passes UN-desynced instead of being kernel-dropped
+            # (fail-open is correct for a connectivity tool; a persistently
+            # dead nfqws is still caught by the supervisor crash-loop).
             _run([
                 tool, "-t", _TABLE, "-A", _CHAIN,
                 "-d", ip, "-p", "tcp", "--dport", str(EXIT_PORT),
-                "-j", "NFQUEUE", "--queue-num", str(qnum),
+                "-j", "NFQUEUE", "--queue-num", str(qnum), "--queue-bypass",
             ])
         _run([tool, "-t", _TABLE, "-A", "OUTPUT", "-p", "tcp",
               "--dport", str(EXIT_PORT), "-j", _CHAIN])

@@ -51,6 +51,29 @@ def _desync_strategy(descriptor_payload: dict) -> str | None:
 # new list, never mutated in place.
 _current_exit_endpoints: list[str] = []
 
+
+def _apply_desync_on_refresh(*, startup_strategy: str | None, seed, payload: dict) -> list[str]:
+    """Manage NFQUEUE desync rules on a descriptor refresh.
+
+    Only boxes provisioned WITH nfqws at startup (a running nfqws process)
+    ever install/clear desync rules. A box that started without a strategy
+    must NEVER install NFQUEUE rules on a later refresh: there is no nfqws
+    process bound to the queue, so the rules would black-hole egress
+    (NFQUEUE with no reader -> kernel drop). Updates the current-exit holder."""
+    global _current_exit_endpoints
+    new_strategy = _desync_strategy(payload)
+    new_eps = _exit_endpoints(payload)
+    if startup_strategy and seed.nfqws_url:
+        # This box has a running nfqws (provisioned at startup).
+        if new_strategy:
+            with contextlib.suppress(desync.DesyncError):
+                desync.install(exit_ips=new_eps, qnum=DESYNC_QNUM)
+        else:
+            desync.clear(DESYNC_QNUM)
+    # else: box started without nfqws -> never touch NFQUEUE rules.
+    _current_exit_endpoints = new_eps
+    return new_eps
+
 # Startup failures are usually transient at boot — the VM clock is still at epoch
 # (so the mtg presigned download fails on TLS/expiry), the network/S3 isn't ready,
 # or tmpfs isn't mounted yet. Retry a few times, then GIVE UP BY STAYING UP (exit
@@ -233,17 +256,10 @@ def main() -> int:
         subprocess.run(["systemctl", "kill", "-s", "HUP", "mthydra-sing-box"])
 
         # Re-apply (or clear) desync rules for the new EU-exit set, and update
-        # the holder the periodic-recheck thread reads.
-        global _current_exit_endpoints
-        new_strategy = _desync_strategy(payload)
-        new_eps = _exit_endpoints(payload)
-        if new_strategy and s.nfqws_url:
-            # The periodic recheck will catch a persistent miss.
-            with contextlib.suppress(desync.DesyncError):
-                desync.install(exit_ips=new_eps, qnum=DESYNC_QNUM)
-        else:
-            desync.clear(DESYNC_QNUM)
-        _current_exit_endpoints = new_eps
+        # the holder the periodic-recheck thread reads. Gated on the STARTUP
+        # strategy: a box that started without nfqws must never install NFQUEUE
+        # rules (no reader -> kernel drop -> egress black-hole).
+        _apply_desync_on_refresh(startup_strategy=strategy, seed=s, payload=payload)
 
     refresh = descriptor_refresh.RefreshLoop(
         url=s.descriptor_refresh_url,

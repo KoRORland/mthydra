@@ -23,12 +23,13 @@ def test_install_builds_per_ip_nfqueue_rules(monkeypatch):
     flat = [" ".join(c) for c in calls]
     assert any("MTHYDRA_DESYNC" in f for f in flat)
     assert any("-d 9.9.9.9" in f and "--dport 443" in f
-               and "NFQUEUE" in f and "--queue-num 200" in f for f in flat)
+               and "NFQUEUE" in f and "--queue-num 200" in f
+               and "--queue-bypass" in f for f in flat)
 
 
 def test_verify_installed_token_exact(monkeypatch):
     listing = ("-A MTHYDRA_DESYNC -d 9.9.9.9/32 -p tcp -m tcp --dport 443 "
-               "-j NFQUEUE --queue-num 200\n")
+               "-j NFQUEUE --queue-num 200 --queue-bypass\n")
     monkeypatch.setattr(desync, "_run", lambda cmd: listing)
     assert desync.verify_installed(exit_ips=["9.9.9.9:443"], qnum=200) is True
     assert desync.verify_installed(exit_ips=["1.1.1.1:443"], qnum=200) is False
