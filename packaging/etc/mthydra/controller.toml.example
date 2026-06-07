@@ -25,6 +25,19 @@ recipient_email = "operator@example.org"
 rotation_interval_hours = 1        # how often the controller re-signs the descriptor (routine R1)
 validity_window_hours   = 24       # how far ahead valid_until is set from issued_at
 
+[descriptor.tls_fingerprints]
+# Weighted uTLS fingerprint pool emitted in the signed descriptor (schema v3).
+# Each RU box deterministically self-picks one by box_id, stable per box.
+# Update weights as the real browser population moves; the next signed
+# descriptor rolls the change fleet-wide (no re-imaging). Names MUST be in
+# sing-box's known uTLS set (chrome/firefox/safari/ios/android/edge/...).
+# Omit this section entirely to keep every box on the legacy 'chrome' default.
+chrome  = 60
+firefox = 15
+safari  = 10
+ios     = 10
+edge    = 5
+
 [obligations]
 # how long is each obligation valid before it counts as stale
 [obligations.timers_hours]

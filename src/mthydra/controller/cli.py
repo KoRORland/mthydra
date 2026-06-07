@@ -210,6 +210,13 @@ def build_parser() -> argparse.ArgumentParser:
                      help="generation number (default: latest)")
     dsh.add_argument("--db-path", default=DEFAULT_DB)
 
+    # tls-fingerprints-show
+    tfs = sub.add_parser(
+        "tls-fingerprints-show",
+        help="print the configured uTLS fingerprint pool + approximate weights (V1)",
+    )
+    tfs.add_argument("--config", default="/etc/mthydra/controller.toml")
+
     # descriptor-verify
     dvf = sub.add_parser("descriptor-verify",
                           help="verify a descriptor file against trusted keys in DB")
@@ -1050,6 +1057,9 @@ def run(argv: list[str]) -> int:
     if args.cmd == "descriptor-show":
         return _cmd_descriptor_show(args)
 
+    if args.cmd == "tls-fingerprints-show":
+        return _cmd_tls_fingerprints_show(args)
+
     if args.cmd == "descriptor-verify":
         return _cmd_descriptor_verify(args)
 
@@ -1408,6 +1418,24 @@ def _cmd_descriptor_show(args) -> int:
         return 0
     finally:
         conn.close()
+
+
+def _cmd_tls_fingerprints_show(args) -> int:
+    from mthydra.controller.config import ConfigError, load_config
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"tls-fingerprints-show: {e}", file=sys.stderr)
+        return 2
+    fps = cfg.descriptor.tls_fingerprints
+    if not fps:
+        print("tls_fingerprints: (none configured — boxes fall back to 'chrome')")
+        return 0
+    total = sum(w for _fp, w in fps)
+    for fp, w in sorted(fps):
+        pct = (100 * w // total) if total else 0
+        print(f"  {fp:12s} weight={w}  (~{pct}%)")
+    return 0
 
 
 def _cmd_descriptor_verify(args) -> int:
