@@ -1,12 +1,14 @@
 from mthydra.controller.probe_runner.probers import (
-    parse_handshake_probe_output, HandshakeProbeResult,
+    HandshakeProbeResult,
+    parse_handshake_probe_output,
 )
 
 
 def test_parse_ok():
     r = parse_handshake_probe_output(
         "mthydra-rh result=ok ja3=771,4865-4866,0-23,29-23,0 ttfb_ms=42\n")
-    assert r == HandshakeProbeResult(result="ok", ja3="771,4865-4866,0-23,29-23,0", ttfb_ms=42, detail=None)
+    assert r == HandshakeProbeResult(
+        result="ok", ja3="771,4865-4866,0-23,29-23,0", ttfb_ms=42, detail=None)
 
 
 def test_parse_reset():

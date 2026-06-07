@@ -117,7 +117,8 @@ def parse_handshake_probe_output(stdout: str) -> HandshakeProbeResult:
     """Parse the `mthydra-rh` one-line contract. Never raises — unrecognised
     output becomes result='error' so a broken helper degrades to a signal,
     not a crash."""
-    line = next((l for l in stdout.splitlines() if l.startswith("mthydra-rh ")), None)
+    line = next(
+        (ln for ln in stdout.splitlines() if ln.startswith("mthydra-rh ")), None)
     if line is None:
         return HandshakeProbeResult(result="error", detail="no mthydra-rh line")
     fields: dict[str, str] = {}
@@ -133,3 +134,33 @@ def parse_handshake_probe_output(stdout: str) -> HandshakeProbeResult:
         ttfb_ms=int(ttfb) if (ttfb and ttfb.isdigit()) else None,
         detail=fields.get("detail"),
     )
+
+
+def probe_reality_handshake(
+    ssh_cmd_fn: Callable,
+    *,
+    exit_endpoint: str,
+    cover_sni: str,
+    reality_pubkey: str,
+    fingerprint: str,
+) -> HandshakeProbeResult:
+    """Dial an EU exit from a RU vantage with box-equivalent Reality params and
+    report the handshake outcome + emitted JA3.
+
+    `ssh_cmd_fn` follows the wheel's convention shared with the other probers
+    in this module: it is called as `ssh_cmd_fn(*cmd_parts)` and returns a
+    subprocess.CompletedProcess-like object (`.returncode`/`.stdout`/
+    `.stderr`) — NOT a bare stdout string. We run `mthydra-rh` on the vantage
+    via `_ssh_or_softfail` and degrade any transport-level failure (SSH
+    timeout/refused, or the helper itself failing to run) to
+    result='error' so a broken vantage produces a signal, not a crash.
+    """
+    host, _, port = exit_endpoint.rpartition(":")
+    status, _rc, out = _ssh_or_softfail(
+        ssh_cmd_fn, "sh", "-c",
+        f"mthydra-rh --host {host} --port {port} "
+        f"--sni {cover_sni} --pubkey {reality_pubkey} --fingerprint {fingerprint}",
+    )
+    if status == "softfail":
+        return HandshakeProbeResult(result="error", detail=out)
+    return parse_handshake_probe_output(out)
