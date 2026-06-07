@@ -4,6 +4,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from mthydra import debuglog
+
 
 def connect(db_path: Path | str, *, read_only: bool = False) -> sqlite3.Connection:
     """Open a SQLite connection with the project's standard PRAGMAs.
@@ -21,4 +23,5 @@ def connect(db_path: Path | str, *, read_only: bool = False) -> sqlite3.Connecti
         conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
+    debuglog.log("db", "connect", path=str(db_path), read_only=read_only)
     return conn

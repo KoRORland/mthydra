@@ -15,6 +15,7 @@ from typing import Callable
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from mthydra import debuglog
 from mthydra.controller.data_exit.session_reader import poll_active_sessions
 from mthydra.controller.state import eu_exit_observed as _obs
 from mthydra.controller.state.audit import log_event
@@ -79,6 +80,8 @@ class EuExitObserver:
             seen = self._poll_fn(self._clash_api_url, timeout=5.0)
         except Exception:
             seen = set()
+        debuglog.log("conn", "observed live sessions", now=now,
+                     count=len(seen), boxes=",".join(sorted(seen)))
         conn = connect(self._db_path)
         try:
             for box_id in seen:
