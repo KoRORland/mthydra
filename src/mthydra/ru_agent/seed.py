@@ -23,7 +23,7 @@ _REQUIRED_FIELDS = (
     "issued_at", "issued_by_authority_generation",
 )
 
-_SUPPORTED_SCHEMAS = ("mthydra.ru_seed.v2",)
+_SUPPORTED_SCHEMAS = ("mthydra.ru_seed.v2", "mthydra.ru_seed.v3")
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,8 @@ class Seed:
     telegram_dcs: dict
     issued_at: str
     issued_by_authority_generation: int
+    nfqws_url: str | None = None
+    nfqws_sha256: str | None = None
 
 
 def load(path: Path | str) -> Seed:
@@ -80,6 +82,8 @@ def load(path: Path | str) -> Seed:
         telegram_dcs=raw["telegram_dcs"],
         issued_at=raw["issued_at"],
         issued_by_authority_generation=raw["issued_by_authority_generation"],
+        nfqws_url=raw.get("nfqws_url"),
+        nfqws_sha256=raw.get("nfqws_sha256"),
     )
 
 
