@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 
 
 def _ssh_or_softfail(ssh_cmd_fn: Callable, *cmd_parts: str
@@ -102,3 +103,33 @@ def probe_surface_scan(ssh_cmd_fn: Callable, box_ip: str) -> tuple[str, str]:
     extras = sorted(open_ports - {"443"})
     return ("hard_fail",
             f"unexpected open ports: {extras} (full: {sorted(open_ports)})")
+
+
+@dataclass(frozen=True)
+class HandshakeProbeResult:
+    result: str            # 'ok' | 'reset' | 'timeout' | 'tcp_fail' | 'error'
+    ja3: str | None = None
+    ttfb_ms: int | None = None
+    detail: str | None = None
+
+
+def parse_handshake_probe_output(stdout: str) -> HandshakeProbeResult:
+    """Parse the `mthydra-rh` one-line contract. Never raises — unrecognised
+    output becomes result='error' so a broken helper degrades to a signal,
+    not a crash."""
+    line = next((l for l in stdout.splitlines() if l.startswith("mthydra-rh ")), None)
+    if line is None:
+        return HandshakeProbeResult(result="error", detail="no mthydra-rh line")
+    fields: dict[str, str] = {}
+    for tok in line.split()[1:]:
+        if "=" in tok:
+            k, _, v = tok.partition("=")
+            fields[k] = v
+    result = fields.get("result", "error")
+    ttfb = fields.get("ttfb_ms")
+    return HandshakeProbeResult(
+        result=result,
+        ja3=fields.get("ja3"),
+        ttfb_ms=int(ttfb) if (ttfb and ttfb.isdigit()) else None,
+        detail=fields.get("detail"),
+    )
