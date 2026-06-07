@@ -113,6 +113,11 @@ class DataExitConfig:
 
 
 @dataclass(frozen=True)
+class RuEgressConfig:
+    ja3_reference_path: str | None = None
+
+
+@dataclass(frozen=True)
 class ShardManagerConfig:
     target_size: int
     max_size: int
@@ -202,6 +207,7 @@ class Config:
     observability: ObservabilityConfig
     distribution: DistributionConfig
     data_exit: DataExitConfig | None = None
+    ru_egress: RuEgressConfig | None = None
 
 
 _VALID_ROLES = {"active", "standby"}
@@ -308,6 +314,14 @@ def _load_data_exit(data: dict) -> DataExitConfig | None:
         )
     except KeyError as e:
         raise ConfigError(f"[data_exit] missing required key: {e}") from e
+
+
+def _load_ru_egress(data: dict) -> RuEgressConfig | None:
+    re_raw = data.get("ru_egress")
+    if re_raw is None:
+        return None
+    path = re_raw.get("ja3_reference_path")
+    return RuEgressConfig(ja3_reference_path=str(path) if path is not None else None)
 
 
 def _load_shard_manager(data: dict) -> ShardManagerConfig:
@@ -577,4 +591,5 @@ def load_config(path: Path | str) -> Config:
         observability=_load_observability(raw),
         distribution=_load_distribution(raw),
         data_exit=_load_data_exit(raw),
+        ru_egress=_load_ru_egress(raw),
     )
