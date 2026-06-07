@@ -9,6 +9,11 @@ what (if anything) the operator must do when upgrading.
 
 ## Unreleased — 2026-06-06
 
+- feat(V1): uTLS fingerprint freshness + diversity — signed-descriptor v3
+  `tls_fingerprints` weighted list; each RU box deterministically self-picks
+  a stable, diverse fingerprint the controller rolls fleet-wide without
+  re-imaging. Verifier accepts v2 and v3. Invariant #33 (known-fp at sign).
+
 **RU→EU connectivity check (K3).** RU boxes now run an end-to-end tunnel
 self-check: they open a TCP connection to a Telegram DC that their own
 iptables→sing-box→EU-exit path carries, and write the verdict to
