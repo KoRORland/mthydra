@@ -15,6 +15,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from mthydra.controller import debug_flag, debug_runtime
 from mthydra.controller.bootstrap import BootstrapError, init_state
 from mthydra.controller.image.builder import BuildError, build_image
 from mthydra.controller.image.upstream_tracker import UpstreamReleaseTracker
@@ -29,6 +30,7 @@ from mthydra.controller.state.obligations import prove
 
 DEFAULT_DB = "/var/lib/mthydra/state.sqlite"
 DEFAULT_RECIPIENT_FILE = "/etc/mthydra/age-recipient.txt"
+DEFAULT_DEBUG_FLAG = "/var/lib/mthydra/debug.flag"
 
 # V-3: default rotation cadence (days) per provider type. Gmail app
 # passwords age ~90d; AWS rotation is org-policy (90d is a common
@@ -91,6 +93,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="S3 bucket override for dryrun mode (env: MTHYDRA_BUCKET_OVERRIDE)",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    # debug — toggle verbose UNREDACTED diagnostic logging
+    dbg_p = sub.add_parser(
+        "debug",
+        help="toggle verbose UNREDACTED debug logging (restarts the controller)",
+    )
+    dbg_p.add_argument("action", choices=["enable", "disable", "status"])
+    dbg_p.add_argument(
+        "--ttl-hours", type=float, default=debug_flag.DEFAULT_TTL_HOURS,
+        help="auto-disable after this many hours (default 24; enable only)",
+    )
+    dbg_p.add_argument(
+        "--no-restart", action="store_true",
+        help="update the flag but do not restart the service",
+    )
 
     # init
     init_p = sub.add_parser("init", help="initialize a fresh controller DB")
@@ -1125,6 +1142,9 @@ def run(argv: list[str]) -> int:
     if args.cmd == "descriptor-migrate-placeholder":
         return _cmd_descriptor_migrate_placeholder(args)
 
+    if args.cmd == "debug":
+        return _cmd_debug(args)
+
     if args.cmd == "serve":
         return _cmd_serve(args)
 
@@ -1884,6 +1904,47 @@ def _resolve_backup_region(endpoint: str | None) -> str:
     return resolve_region(endpoint)
 
 
+def _cmd_debug(args) -> int:
+    """Toggle verbose debug logging via the persistent flag + service restart."""
+    import subprocess
+    import time as _time
+
+    flag_path = DEFAULT_DEBUG_FLAG
+
+    if args.action == "status":
+        f = debug_flag.read_flag(flag_path)
+        if f is None:
+            print("debug: OFF")
+            return 0
+        now = _time.time()
+        remaining = max(0, int(f.expires_at - now))
+        state = "EXPIRED" if f.is_expired(now) else "ON"
+        print(f"debug: {state} (ttl={f.ttl_hours}h, {remaining}s remaining) "
+              f"-> {debug_runtime.DEBUG_LOG_PATH}")
+        return 0
+
+    if args.action == "enable":
+        debug_flag.write_flag(flag_path, ttl_hours=args.ttl_hours)
+        print(f"debug: enabled (ttl={args.ttl_hours}h) "
+              f"-> {debug_runtime.DEBUG_LOG_PATH}")
+    else:  # disable
+        debug_flag.clear_flag(flag_path)
+        print("debug: disabled")
+
+    if args.no_restart:
+        print("debug: --no-restart set; restart mthydra-controller to apply")
+        return 0
+    try:
+        subprocess.run(["systemctl", "restart", "mthydra-controller"], check=True)
+        print("debug: restarted mthydra-controller")
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"debug: flag updated but restart failed ({e}); "
+              f"run 'sudo systemctl restart mthydra-controller' manually",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
 def _cmd_serve(args) -> int:
     """Run the backup orchestrator loop (spec A stub; spec F will add the full controller plane)."""
     import signal
@@ -1896,6 +1957,11 @@ def _cmd_serve(args) -> int:
 
     cfg = load_config(args.config)
     mode = args.mode
+
+    # Debug mode: honour a non-expired flag set by `mthydra-controller debug enable`.
+    # Applies to both active and standby serve paths. Starts an expiry watcher
+    # that downgrades the live process at TTL (no restart needed to turn off).
+    debug_runtime.arm_from_flag(DEFAULT_DEBUG_FLAG)
 
     from mthydra.controller.state.node_state import current_node_state
     _ns_conn = connect(args.db_path)
