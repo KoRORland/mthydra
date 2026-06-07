@@ -45,6 +45,9 @@ _ANTI_PREFIXES = frozenset({
     "backup_integrity_failed",
     # Spec K3 — RU->EU tunnel not seen at the EU exit within the freshness window.
     "box_eu_tunnel_unseen",
+    # Spec V V5 — self-measurement: TLS fingerprint drift + EU exit handshake health.
+    "tls_fingerprint_stale",
+    "eu_exit_handshake_degraded",
 })
 
 

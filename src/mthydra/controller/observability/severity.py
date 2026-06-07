@@ -22,6 +22,9 @@ _FIXED: dict[str, str] = {
     "dist_user_heartbeat_breach":      "crit",
     # Spec D2 — rollback-pending boxes still running rolled-back code.
     "image_rollback_pending":          "crit",
+    # Spec V V5 — self-measurement signals.
+    "tls_fingerprint_stale":           "warn",
+    "eu_exit_handshake_degraded":      "crit",
 }
 
 # Age-graduated thresholds (seconds) for probe coverage gaps.

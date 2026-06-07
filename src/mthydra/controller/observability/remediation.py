@@ -193,6 +193,20 @@ _REMEDIATIONS: dict[str, str] = {
         "a distribution user hasn't checked in within their window (spec K). "
         "Confirm publishing: mthydra-controller dist-status / dist-publish-now"
     ),
+    "tls_fingerprint_stale": (
+        "a deployed uTLS fingerprint's JA3 no longer matches a current popular "
+        "browser (Details has the fp). Roll the pool: edit "
+        "[descriptor.tls_fingerprints] in controller.toml and wait for the next "
+        "descriptor rotation (or 'mthydra-controller descriptor-sign-now'). "
+        "Confirm with 'mthydra-controller tls-fingerprints-show'."
+    ),
+    "eu_exit_handshake_degraded": (
+        "the RU vantage is seeing TLS handshakes to this EU exit fail or get "
+        "reset (Details has the verdict) — possible active blocking/throttling. "
+        "Check the exit is up ('mthydra-controller data-exit-status' on the EU "
+        "node) and reachable on :443 from RU; if a fingerprint or desync change "
+        "preceded this, consider rolling it back."
+    ),
     "image_rollback_pending": (
         "this RU box is still running an image that was rolled back. Re-apply "
         "the rollback / rebuild via the image pipeline (mthydra-controller "

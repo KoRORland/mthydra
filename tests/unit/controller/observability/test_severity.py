@@ -34,6 +34,16 @@ def test_anti_image_rollback_pending_is_crit():
     assert severity_for_anti("image_rollback_pending") == "crit"
 
 
+def test_anti_v5_self_measurement_kinds():
+    """Spec V V5 amendment to spec J's severity table.
+
+    A drifted fingerprint is an early-warning (operator can roll the pool on
+    their own schedule) -> warn. A confirmed handshake-failure from the RU
+    vantage means the EU exit is likely actively blocked right now -> crit."""
+    assert severity_for_anti("tls_fingerprint_stale") == "warn"
+    assert severity_for_anti("eu_exit_handshake_degraded") == "crit"
+
+
 def test_anti_probe_coverage_graduated():
     assert severity_for_anti("probe_coverage_pending", age_seconds=0) == "warn"
     assert severity_for_anti("probe_coverage_pending", age_seconds=3000) == "warn"
