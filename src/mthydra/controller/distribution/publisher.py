@@ -231,9 +231,14 @@ class DistributionPublisher:
             else:
                 res = sink(
                     to_addr=configured,
+                    # User-facing subject: friendly, and free of the tool name
+                    # and the internal user_id (keeps user mail untagged /
+                    # innocuous, per the distribution-sinks discipline). The
+                    # box count is user-meaningful, the user_id is not.
                     subject=(
-                        f"mthydra proxy update — {payload.user_id} "
-                        f"({len(payload.boxes)} proxies)"
+                        "Your Telegram proxy is ready"
+                        if len(payload.boxes) == 1
+                        else f"Your {len(payload.boxes)} Telegram proxies are ready"
                     ),
                     body=rendered.text,
                 )

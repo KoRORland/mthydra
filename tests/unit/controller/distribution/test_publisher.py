@@ -529,3 +529,21 @@ def test_deduped_tick_does_not_count_as_failure(db):
     for _ in range(5):
         pub.run_once()                   # all deduped (subset unchanged)
     assert not _has_obligation(db, _breach_oid())
+
+
+def test_email_subject_is_friendly_and_untagged(db):
+    """User-facing email subject must be human-friendly and leak neither the
+    tool name nor the internal user_id (keeps user mail innocuous)."""
+    conn = connect(db)
+    _seed_user_with_box(conn, user_id="user-internal-9f3a")
+    set_channels(conn, "user-internal-9f3a", telegram_chat_id=None,
+                 email_addr="u1@example.org", at=NOW)
+    conn.close()
+    em = DryRunDistributionSink(label="email")
+    pub = _pub(db, tg=DryRunDistributionSink(label="telegram"), em=em)
+    pub.run_once()
+    assert len(em.calls) == 1
+    subject = em.calls[0]["subject"]
+    assert "mthydra" not in subject.lower()
+    assert "user-internal-9f3a" not in subject
+    assert "ready" in subject.lower()
