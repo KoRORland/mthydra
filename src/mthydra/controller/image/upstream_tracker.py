@@ -74,9 +74,15 @@ class UpstreamReleaseTracker:
             return
         executors = {"default": ThreadPoolExecutor(max_workers=1)}
         self._scheduler = BackgroundScheduler(executors=executors, daemon=True)
+        # Fire once at startup, then on the long interval. Without this the
+        # first poll is a full poll_interval (default 168h) after serve start,
+        # so t4_upstream_check sits at its seeded due-time and reads "overdue"
+        # for the first week after init — pure noise. An immediate proof keeps
+        # it green from the moment serve comes up.
         self._scheduler.add_job(
             self.run_once,
             trigger=IntervalTrigger(seconds=self.poll_interval_seconds),
+            next_run_time=datetime.now(timezone.utc),
         )
         self._scheduler.start()
 

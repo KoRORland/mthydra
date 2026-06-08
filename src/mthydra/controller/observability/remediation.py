@@ -40,7 +40,10 @@ _REMEDIATIONS: dict[str, str] = {
         "+ cover-attest-verified <domain> --vantage <ru-vps-id>"
     ),
     "t5_pool_revalidation": (
-        "re-attest a verified cover domain: "
+        "normally auto-proven by the cover-pool auto-reverify sweep — overdue "
+        "means the pool hasn't had a clean reverify in 7d (every in-use domain "
+        "is drifting, or the sweep is wedged). Check cover_pool_reverify_drift "
+        "alerts + journalctl. To override by hand: "
         "mthydra-controller cover-attest-verified <domain> --vantage <ru-vps-id>"
     ),
     # Probe obligations.
@@ -78,14 +81,20 @@ _REMEDIATIONS: dict[str, str] = {
     ),
     # Image lifecycle.
     "t4_upstream_check": (
-        "mthydra-controller upstream-check (or wait for the next tracker tick)"
+        "normally auto-proven by the upstream tracker at startup + on interval "
+        "— overdue means the tracker can't reach GitHub. Check egress/journalctl; "
+        "or run mthydra-controller upstream-check"
     ),
     "t4_image_promoted": (
         "build + soak + promote: mthydra-ops image-prepare --yes"
     ),
     "t3_vantage_revalidation": (
-        "re-attest the vantage: mthydra-controller vantage-attest-active <vantage> "
-        "--evidence '<what you checked>'"
+        "normally auto-proven by the vantage self-check sweep — overdue means "
+        "NO active vantage passed (all SSH-unreachable or can't do an outbound "
+        "TLS handshake), or you have no active vantage at all. Check "
+        "probe_vantage_unreachable alerts + 'mthydra-controller vantage-list'; "
+        "add/repair a vantage. To override by hand: "
+        "mthydra-controller vantage-attest-active <vantage> --evidence '<what you checked>'"
     ),
     "t3_profile_repin": (
         "rebuild the image with --profile-json pointing at a fresh capture"

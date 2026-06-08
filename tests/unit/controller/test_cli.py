@@ -4179,3 +4179,50 @@ def test_cli_probe_credential_revoke_missing(tmp_path, age_recipient, capsys):
     rc = run(["probe-credential-revoke", "nope", "--reason", "x",
               "--db-path", str(db)])
     assert rc == 2
+
+
+def test_vantage_attest_active_proves_t3(tmp_path, age_recipient):
+    """Operator override: vantage-attest-active must prove t3_vantage_revalidation
+    so following the remediation actually clears the warn."""
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import list_obligations, set_obligation
+    db = _h_init(tmp_path, age_recipient)
+    conn = connect(db)
+    set_obligation(conn, "t3_vantage_revalidation",
+                   last_proven_at="2025-01-01T00:00:00Z", proven_by="bootstrap",
+                   next_due_at="2025-03-01T00:00:00Z")
+    conn.close()
+    run(["vantage-add", "v1", "--label", "kz1", "--source-kind", "x",
+         "--db-path", str(db)])
+    run(["vantage-attest-active", "v1", "--evidence", "ssh-log",
+         "--db-path", str(db)])
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    assert obs["t3_vantage_revalidation"].last_proven_at > "2025-01-01T00:00:00Z"
+    assert obs["t3_vantage_revalidation"].proven_by == "operator"
+    conn.close()
+
+
+def test_cover_attest_verified_proves_t5(tmp_path, age_recipient):
+    """Operator override: cover-attest-verified must also prove t5_pool_revalidation."""
+    from mthydra.controller.cli import run
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import list_obligations, set_obligation
+    db = tmp_path / "state.sqlite"
+    run([
+        "init", "--db-path", str(db), "--age-recipient", age_recipient,
+        "--provider-credential", "b2=id:secret",
+    ])
+    conn = connect(db)
+    set_obligation(conn, "t5_pool_revalidation",
+                   last_proven_at="2025-01-01T00:00:00Z", proven_by="bootstrap",
+                   next_due_at="2025-03-01T00:00:00Z")
+    conn.close()
+    run(["cover-add", "fresh.org", "--db-path", str(db)])
+    run(["cover-attest-verified", "fresh.org", "--vantage", "ru-vps-01",
+         "--db-path", str(db)])
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    assert obs["t5_pool_revalidation"].last_proven_at > "2025-01-01T00:00:00Z"
+    assert obs["t5_pool_revalidation"].proven_by == "operator"
+    conn.close()

@@ -2284,6 +2284,16 @@ def _cmd_serve(args) -> int:
         # the same backup and a promoted standby rematerializes it on start.
         ssh_dir=str(Path(args.db_path).parent / "ssh"),
     )
+    from mthydra.controller.probe_runner.vantage_self_check import (
+        VantageSelfCheckSweep,
+    )
+    vantage_self_check = VantageSelfCheckSweep(
+        db_path=args.db_path,
+        sweep_interval_seconds=cfg.probe.runner_interval_seconds,
+        cover_sni_ref=(cfg.data_exit.cover_sni_default
+                       if cfg.data_exit is not None else None),
+        mode=mode,
+    )
     tg_sink, em_sink = _build_alert_sinks(cfg, mode)
     alerter = AlertSweep(
         db_path=args.db_path,
@@ -2371,6 +2381,7 @@ def _cmd_serve(args) -> int:
         tracker.arm()
         shard_wheel.arm()
         probe_wheel.arm()
+        vantage_self_check.arm()
         alerter.arm()
         obs_heartbeat.arm()
         dist_publisher.arm()
@@ -2382,7 +2393,7 @@ def _cmd_serve(args) -> int:
             reality_observer.arm()
         if cfg.probe.runner_enabled:
             probe_runner.start()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + alerter + obs heartbeat + dist publisher" + (" + eu exit observer" if exit_observer is not None else "") + (" + reality handshake observer" if reality_observer is not None else "") + " armed", flush=True)
+        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + vantage self-check + alerter + obs heartbeat + dist publisher" + (" + eu exit observer" if exit_observer is not None else "") + (" + reality handshake observer" if reality_observer is not None else "") + " armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -2401,6 +2412,7 @@ def _cmd_serve(args) -> int:
         tracker.disarm()
         shard_wheel.disarm()
         probe_wheel.disarm()
+        vantage_self_check.disarm()
         alerter.disarm()
         obs_heartbeat.disarm()
         dist_publisher.disarm()
@@ -2576,6 +2588,16 @@ def _cmd_cover_attest_verified(args) -> int:
             prove(conn, "cover_pool_reverify_pass_proven",
                   proven_by="operator", at=now,
                   next_due_at=next_due, details=args.domain)
+        except KeyError:
+            pass
+        # A manual attestation is also the operator's override for the routine
+        # t5 pool revalidation (otherwise auto-proven by the auto-reverify
+        # sweep). Prove it here so following the remediation actually clears
+        # the t5 warn.
+        try:
+            prove(conn, "t5_pool_revalidation",
+                  proven_by="operator", at=now,
+                  next_due_at=_add_hours_iso(now, 168), details=args.domain)
         except KeyError:
             pass
         print(f"cover-attest-verified: {args.domain} -> candidate_verified (vantage={args.vantage})")
@@ -4132,14 +4154,25 @@ def _cmd_vantage_add(args) -> int:
 
 def _cmd_vantage_attest_active(args) -> int:
     from mthydra.controller.state.db import connect
+    from mthydra.controller.state.obligations import prove
     from mthydra.controller.state.probe_vantages import attest_active
     conn = connect(args.db_path)
     try:
+        now = _now()
         try:
-            attest_active(conn, args.vantage_id, at=_now(), evidence=args.evidence)
+            attest_active(conn, args.vantage_id, at=now, evidence=args.evidence)
         except (LookupError, ValueError) as e:
             print(f"vantage-attest-active: {e}", file=sys.stderr)
             return 2
+        # Operator override for the routine t3 vantage revalidation (otherwise
+        # auto-proven by the vantage self-check sweep). Prove it so following
+        # the remediation actually clears the t3 warn.
+        try:
+            prove(conn, "t3_vantage_revalidation",
+                  proven_by="operator", at=now,
+                  next_due_at=_add_hours_iso(now, 168), details=args.vantage_id)
+        except KeyError:
+            pass
         print(f"vantage-attest-active: {args.vantage_id} -> active")
         return 0
     finally:

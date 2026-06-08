@@ -9,6 +9,16 @@ what (if anything) the operator must do when upgrading.
 
 ## Unreleased — 2026-06-06
 
+- feat(self-attest): the controller now self-proves the routine revalidation
+  obligations from its own vantage instead of nagging the operator. A new
+  vantage self-check sweep verifies each active vantage (SSH reachable + an
+  outbound TLS handshake to the cover-SNI reference) and self-proves
+  `t3_vantage_revalidation`; the cover-pool auto-reverify sweep now self-proves
+  `t5_pool_revalidation` on a clean pass; the upstream tracker fires at startup
+  so `t4_upstream_check` stays green from boot. The operator is alerted only on
+  failure. Also fixes a latent bug: `t3`/`t5` previously had no prover at all,
+  and the manual `vantage-attest-active` / `cover-attest-verified` overrides now
+  actually prove them. `proven_by` records the self-check provenance.
 - change(dist): removed the recurring user-facing Telegram heartbeat (the daily
   `mthydra heartbeat @ <ts>` pulse) — it trained users to mute the channel and
   miss new proxy/channel links. The operator's per-user "unreachable" detection

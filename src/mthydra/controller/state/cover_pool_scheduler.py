@@ -337,6 +337,21 @@ class CoverPoolAutoReverifySweep:
                     details=json.dumps({"passed": len(passed), "failed": len(failed)}),
                 )
 
+            # T5 self-attestation: a clean pool (something passed, nothing
+            # drifted this cycle) self-proves the routine pool revalidation so
+            # the operator is not nagged to re-attest by hand. Per-domain drift
+            # still escalates below, so a degraded pool is never silently
+            # "proven". The 168h window mirrors the t5 obligation cadence.
+            if passed and not failed:
+                set_obligation(
+                    conn,
+                    obligation_id="t5_pool_revalidation",
+                    last_proven_at=now,
+                    proven_by="auto_reverify_sweep",
+                    next_due_at=_add_seconds_iso(now, 168 * 3600),
+                    details=json.dumps({"passed": len(passed)}),
+                )
+
             # Auto-rotate gate: for each drifted candidate_verified domain,
             # check whether burning it would still leave the pool at
             # >= freeze_threshold candidate_verified. If yes, burn it

@@ -458,3 +458,41 @@ def test_v1_burn_failure_falls_back_to_anti_obligation(db, monkeypatch):
         "WHERE obligation_id='cover_pool_reverify_drift_pending::drifted.org'"
     ).fetchone() is not None
     conn.close()
+
+
+def test_auto_reverify_sweep_self_proves_t5_on_clean_pass(db):
+    """Self-attestation: a clean pool (something passed, nothing drifted)
+    self-proves t5_pool_revalidation so the operator is not nagged to
+    re-attest the pool by hand."""
+    from mthydra.controller.state.cover_pool_scheduler import CoverPoolAutoReverifySweep
+    _add_attested(db, "fresh.org", at="2026-06-01T00:00:00Z")
+    sweep = CoverPoolAutoReverifySweep(
+        db_path=db, sweep_interval_seconds=3600, mode="offline",
+        clock=lambda: "2026-06-01T01:00:00Z",
+        check_fn=lambda domain: (True, "ok"),
+    )
+    sweep.run_once()
+    conn = connect(db)
+    obs = {o.obligation_id: o for o in list_obligations(conn)}
+    assert "t5_pool_revalidation" in obs
+    assert obs["t5_pool_revalidation"].proven_by == "auto_reverify_sweep"
+    conn.close()
+
+
+def test_auto_reverify_sweep_does_not_self_prove_t5_when_a_domain_drifts(db):
+    """A degraded pool must NOT silently self-prove t5 — the per-domain drift
+    still needs the operator, so t5 stays unproven (and will go overdue)."""
+    from mthydra.controller.state.cover_pool_scheduler import CoverPoolAutoReverifySweep
+    _add_attested(db, "good.org", at="2026-06-01T00:00:00Z")
+    _add_attested(db, "bad.org", at="2026-06-01T00:00:00Z")
+    sweep = CoverPoolAutoReverifySweep(
+        db_path=db, sweep_interval_seconds=3600, mode="offline",
+        clock=lambda: "2026-06-01T01:00:00Z",
+        check_fn=lambda d: (True, "ok") if d == "good.org" else (False, "timeout"),
+        freeze_threshold=99,  # keep pool "too tight" so bad.org isn't auto-burned
+    )
+    sweep.run_once()
+    conn = connect(db)
+    obs = {o.obligation_id for o in list_obligations(conn)}
+    assert "t5_pool_revalidation" not in obs
+    conn.close()
