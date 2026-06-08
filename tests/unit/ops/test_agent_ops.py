@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import tarfile
+from pathlib import Path
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from unittest.mock import MagicMock, patch
@@ -54,6 +56,52 @@ def test_package_agent_includes_descriptor_dependency(tmp_path):
         names = sorted(m.name for m in tf.getmembers())
     assert "mthydra/descriptor/__init__.py" in names
     assert "mthydra/descriptor/authority.py" in names
+
+
+def test_package_agent_includes_top_level_modules(tmp_path):
+    """The agent imports top-level single-file modules `mthydra.debuglog`
+    (ru_agent/debug_poll.py) and `mthydra.proxy_link` (ru_agent/config_gen.py).
+    If the tarball ships only the subpackages, the box dies on boot with
+    `ImportError: cannot import name '<mod>' from 'mthydra'`. Caught by the
+    integration-mvp harness 2026-06-09. Top-level modules must ship too."""
+    src = tmp_path / "src"
+    (src / "mthydra" / "ru_agent").mkdir(parents=True)
+    (src / "mthydra" / "__init__.py").write_text("")
+    (src / "mthydra" / "ru_agent" / "__init__.py").write_text("")
+    (src / "mthydra" / "ru_agent" / "config_gen.py").write_text(
+        "from mthydra import proxy_link\n")
+    (src / "mthydra" / "ru_agent" / "debug_poll.py").write_text(
+        "from mthydra import debuglog\n")
+    (src / "mthydra" / "debuglog.py").write_text("# verbose debug facility\n")
+    (src / "mthydra" / "proxy_link.py").write_text("# fake-tls secret formula\n")
+
+    tar_bytes, _sha = agent_ops.package_agent(src)
+    with tarfile.open(fileobj=BytesIO(tar_bytes), mode="r:gz") as tf:
+        names = sorted(m.name for m in tf.getmembers())
+    assert "mthydra/debuglog.py" in names
+    assert "mthydra/proxy_link.py" in names
+
+
+def test_package_agent_real_closure_imports(tmp_path):
+    """End-to-end guard against the whack-a-mole class: package the REAL source
+    tree, extract it, and confirm `mthydra.ru_agent.__main__` imports with only
+    the shipped closure on sys.path. Catches ANY new top-level/ subpackage dep
+    the agent grows that package_agent forgot to ship."""
+    import subprocess
+    import sys
+
+    repo_src = Path(__file__).resolve().parents[3] / "src"
+    tar_bytes, _sha = agent_ops.package_agent(repo_src)
+    dest = tmp_path / "closure"
+    dest.mkdir()
+    with tarfile.open(fileobj=BytesIO(tar_bytes), mode="r:gz") as tf:
+        tf.extractall(dest)
+    res = subprocess.run(
+        [sys.executable, "-c", "import mthydra.ru_agent.__main__"],
+        env={"PYTHONPATH": str(dest), "PATH": os.environ.get("PATH", "")},
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 0, f"agent closure failed to import:\n{res.stderr}"
 
 
 def test_package_agent_is_deterministic(tmp_path):

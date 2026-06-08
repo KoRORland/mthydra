@@ -1,0 +1,6 @@
+#!/bin/sh
+# Harness shim: no systemd in the container. The agent's descriptor-refresh
+# thread calls `systemctl kill -s HUP mthydra-sing-box` on every rotation;
+# sing-box also re-reads its config on the next tick, so a no-op is safe here.
+echo "[systemctl-shim] $*" >&2
+exit 0

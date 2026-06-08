@@ -7,6 +7,22 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
+## Unreleased — 2026-06-09
+
+- fix(ru-agent): the published RU-agent tarball now ships the top-level
+  `mthydra.debuglog` and `mthydra.proxy_link` modules, not just the `ru_agent`
+  and `descriptor` subpackages. Without them every freshly provisioned RU box
+  died on boot with `ImportError: cannot import name 'debuglog'/'proxy_link'
+  from 'mthydra'` (the agent grew these top-level imports on 2026-06-05/06 but
+  `package_agent` was never updated). No operator action: the next
+  `ru-bringup`/`agent-publish` republishes a correct tarball; existing live
+  boxes are unaffected until they're replaced.
+- test(harness): add `harness/integration-mvp/` — a real EU-controller +
+  RU-vantage + RU-box fleet in containers (MinIO standing in for S3) that walks
+  the MVP quickstart end-to-end with the real CLI and asserts the mtg tunnel
+  comes up on `:443` and is reachable from the vantage. This harness caught the
+  agent-closure bug above. Run with `bash harness/integration-mvp/run.sh`.
+
 ## Unreleased — 2026-06-06
 
 - feat(self-attest): the controller now self-proves the routine revalidation

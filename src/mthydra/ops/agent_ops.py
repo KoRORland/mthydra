@@ -28,6 +28,18 @@ _EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 # it, and keeping it off an exposed box is good hygiene.
 _AGENT_SUBPACKAGES = ("ru_agent", "descriptor")
 
+# Top-level single-file mthydra modules the agent imports at runtime. Both are
+# stdlib-only (no mthydra.controller import) so they're agent-safe:
+#   - debuglog: ru_agent.debug_poll + supervisor + seed + descriptor_refresh
+#     import `from mthydra import debuglog` (the live verbose-debug facility).
+#   - proxy_link: ru_agent.config_gen imports it for the MTProto FakeTLS secret,
+#     shared with the EU distribution payload builder.
+# Omitting either left the box dying on boot with
+# `ImportError: cannot import name '<mod>' from 'mthydra'` (caught by the
+# integration-mvp harness 2026-06-09). Keep this in sync with any new top-level
+# module the agent grows a dependency on.
+_AGENT_TOP_MODULES = ("debuglog", "proxy_link")
+
 
 def package_agent(source_dir: Path | str) -> tuple[bytes, str]:
     """Tar mthydra/__init__.py + the agent's mthydra subpackages (ru_agent +
@@ -42,6 +54,10 @@ def package_agent(source_dir: Path | str) -> tuple[bytes, str]:
     init = root / "__init__.py"
     if init.is_file():
         members.append(init)
+    for mod in _AGENT_TOP_MODULES:
+        modfile = root / f"{mod}.py"
+        if modfile.is_file():
+            members.append(modfile)
     for subpkg in _AGENT_SUBPACKAGES:
         for path in (root / subpkg).rglob("*"):
             if not path.is_file():
