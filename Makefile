@@ -1,4 +1,4 @@
-.PHONY: test test-monitor cov lint smoke smoke-descriptor smoke-install smoke-ru-cycle smoke-eu-automation agent-harness help
+.PHONY: test test-monitor cov lint smoke smoke-descriptor smoke-install smoke-ru-cycle smoke-eu-automation agent-harness integration help
 
 help:
 	@echo "Targets:"
@@ -7,10 +7,17 @@ help:
 	@echo "  cov           Run controller tests with coverage report"
 	@echo "  lint          Run ruff lint + format check on both packages"
 	@echo "  agent-harness Run the full RU-agent boot in an amd64 container (Docker; amd64 host)"
+	@echo "  integration   RELEASE GATE: boot EU+vantage+RU-box fleet, assert tunnel up (doc/release-playbook.md)"
 	@echo "  smoke         Print the manual smoke-test procedure (no automation)"
 
 agent-harness:
 	bash harness/agent-boot/run.sh
+
+# Release gate (doc/release-playbook.md): a real EU controller + RU vantage + RU
+# box fleet in containers walking the MVP quickstart; asserts the mtg tunnel
+# comes up on :443. MUST pass (final line: "✅ TUNNEL UP") before tagging.
+integration:
+	bash harness/integration-mvp/run.sh
 
 test:
 	pytest tests/

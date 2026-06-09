@@ -14,6 +14,7 @@ make test          # controller tests (pytest tests/)
 make test-monitor  # backup-monitor tests
 make cov           # controller tests + coverage
 make lint          # ruff on both packages
+make integration   # RELEASE GATE: boot EU+vantage+RU-box fleet, assert tunnel up
 ```
 
 Common test files:
@@ -34,6 +35,13 @@ Common test files:
 
 ## Release conventions
 
+See **`doc/release-playbook.md`** for the full gate. The hard rule: **never tag
+a release that hasn't passed `make integration`** (boots a real RU box and
+brings the tunnel up). Unit tests pass on code that still ships a broken
+RU-agent tarball — only the integration harness exercises the cross-host
+artifact path. Gate order: `ruff check <changed>` → `make test` +
+`make test-monitor` → `make integration` (require `✅ TUNNEL UP`) → tag.
+
 - **Do not assume a release.** Fixes and features land on `main` and are picked up via `mthydra-ops upgrade` (or `--ref <sha>`). Only create a version tag / CHANGELOG version header when explicitly instructed to cut a release.
 - **CHANGELOG entries** are written for the *next* release block (version TBD) when work lands; the version number is filled in at release time.
 - **Each version must be upgradable from the previous one.** If DB schema or on-disk state changes, `upgrade` must handle backfills automatically. Document any required operator action in the CHANGELOG entry.
@@ -50,6 +58,8 @@ This project uses [obra/superpowers](https://github.com/obra/superpowers) and [o
 | `doc/design.md` | Architecture overview |
 | `doc/runbook.md` | Full operator reference |
 | `doc/quickstart-mvp.md` | Install + day-2 routine |
+| `doc/release-playbook.md` | Release gate — `make integration` before any tag |
+| `harness/integration-mvp/` | The integration fleet harness itself |
 | `doc/automation-roadmap.md` | Automation status and roadmap |
 | `doc/specs/` | Artifact specifications |
 | `doc/plans/` | Implementation plans |
