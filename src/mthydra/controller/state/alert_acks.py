@@ -46,7 +46,8 @@ def ack(
         }),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    assert cur.lastrowid is not None  # INSERT always yields a rowid
+    return cur.lastrowid
 
 
 def is_acked(conn: sqlite3.Connection, dedupe_key: str, *, now: str) -> bool:

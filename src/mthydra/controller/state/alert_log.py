@@ -50,7 +50,8 @@ def append(
          target, dedupe_key, payload, error),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    assert cur.lastrowid is not None  # INSERT always yields a rowid
+    return cur.lastrowid
 
 
 def recent(

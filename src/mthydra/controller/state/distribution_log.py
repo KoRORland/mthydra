@@ -47,7 +47,8 @@ def append(
          subset_hash, payload_json, error),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    assert cur.lastrowid is not None  # INSERT always yields a rowid
+    return cur.lastrowid
 
 
 def last_subset_hash(

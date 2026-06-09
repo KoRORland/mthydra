@@ -1,11 +1,12 @@
-.PHONY: test test-monitor cov lint smoke smoke-descriptor smoke-install smoke-ru-cycle smoke-eu-automation agent-harness integration help
+.PHONY: test test-monitor cov lint typecheck smoke smoke-descriptor smoke-install smoke-ru-cycle smoke-eu-automation agent-harness integration help
 
 help:
 	@echo "Targets:"
-	@echo "  test          Run controller test suite (tests/)"
-	@echo "  test-monitor  Run backup-monitor test suite (mthydra-backup-monitor/tests/)"
+	@echo "  test          Run controller + backup-monitor test suites"
+	@echo "  test-monitor  Run backup-monitor test suite alone (mthydra-backup-monitor/tests/)"
 	@echo "  cov           Run controller tests with coverage report"
 	@echo "  lint          Run ruff lint + format check on both packages"
+	@echo "  typecheck     Run mypy static type checking on src/"
 	@echo "  agent-harness Run the full RU-agent boot in an amd64 container (Docker; amd64 host)"
 	@echo "  integration   RELEASE GATE: boot EU+vantage+RU-box fleet, assert tunnel up (doc/release-playbook.md)"
 	@echo "  smoke         Print the manual smoke-test procedure (no automation)"
@@ -19,8 +20,12 @@ agent-harness:
 integration:
 	bash harness/integration-mvp/run.sh
 
+# Both suites define a top-level `tests` package, so they cannot share one
+# pytest invocation (module-name collision). Run them sequentially instead;
+# the backup-monitor is a production service and must not be excluded.
 test:
 	pytest tests/
+	pytest mthydra-backup-monitor/tests/
 
 test-monitor:
 	pytest mthydra-backup-monitor/tests/
@@ -31,6 +36,9 @@ cov:
 lint:
 	ruff check src/ tests/
 	ruff check mthydra-backup-monitor/src/ mthydra-backup-monitor/tests/
+
+typecheck:
+	mypy
 
 smoke-descriptor:
 	@echo "--- descriptor smoke test (spec B §13.4) ---"

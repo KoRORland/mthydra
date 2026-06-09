@@ -23,6 +23,7 @@ dev = [
     "moto[s3]>=5",
     "hypothesis>=6",
     "ruff>=0.5",
+    "mypy>=1.11",
 ]
 
 [project.scripts]
@@ -36,6 +37,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+# Put the repo root on sys.path so cross-module test imports (e.g.
+# `from tests.unit...`) resolve under bare `pytest`, not just `python -m pytest`.
+pythonpath = ["."]
 
 [tool.coverage.run]
 source = [
@@ -59,3 +63,15 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+# Gradual adoption: a lenient-but-real baseline that runs clean on src/ today,
+# so any newly-introduced type error fails `make typecheck`. Tighten over time
+# (e.g. per-module disallow_untyped_defs) as modules gain annotations.
+python_version = "3.12"
+files = ["src"]
+# boto3 / apscheduler / segno ship no type stubs.
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true

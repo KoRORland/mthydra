@@ -48,6 +48,7 @@ def ensure_probe_key(conn: sqlite3.Connection, ssh_dir: Path | str) -> tuple[Pat
         priv, pub = _generate_keypair()
         pk.put(conn, private_key=priv, public_key=pub, comment=_COMMENT, at=_now())
         row = pk.get(conn)
+    assert row is not None  # just inserted above, or already present
 
     key_path = ssh_dir / "probe.key"
     pub_path = ssh_dir / "probe.key.pub"

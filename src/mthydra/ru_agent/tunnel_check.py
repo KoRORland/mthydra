@@ -40,7 +40,7 @@ def _default_clock() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _real_connect(ip: str, port: int, timeout: float):
+def _real_connect(ip: str, port: int, timeout: float) -> socket.socket:
     s = socket.create_connection((ip, port), timeout=timeout)
     s.settimeout(READ_TIMEOUT_SECONDS)
     return s
@@ -49,7 +49,7 @@ def _real_connect(ip: str, port: int, timeout: float):
 def check_eu_tunnel(
     *,
     dc_ips: list[str],
-    connect_fn: Callable[[str, int, float], object] | None = None,
+    connect_fn: Callable[[str, int, float], socket.socket] | None = None,
     clock: Callable[[], str] | None = None,
 ) -> Verdict:
     """Probe Telegram DCs through the tunnel until one succeeds.

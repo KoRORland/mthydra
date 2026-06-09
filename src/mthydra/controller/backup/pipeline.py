@@ -79,7 +79,7 @@ class BackupPipeline:
                     self._record_self_alarm_unreachable(streak)
                 raise
 
-    def _do_backup_locked(self, trigger: BackupTrigger) -> int:
+    def _do_backup_locked(self, trigger: BackupTrigger | str) -> int:
         """Core backup steps — must be called with self._mutex held."""
         conn = connect(self.db_path)
         try:

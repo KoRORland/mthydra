@@ -145,7 +145,8 @@ def publish_subset(conn: sqlite3.Connection, payload: dict[str, Any], channel: s
         (json.dumps(payload), at, channel),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    assert cur.lastrowid is not None  # INSERT always yields a rowid
+    return cur.lastrowid
 
 
 def latest_published_subset(conn: sqlite3.Connection) -> PublishedSubset:

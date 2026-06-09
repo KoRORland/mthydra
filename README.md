@@ -11,6 +11,16 @@ Resilient Telegram access controller. See `doc/design.md` for the architecture, 
 
 ## Development
 
+**System prerequisites.** Install these before running the suite, or a large
+block of tests silently skips:
+
+- `age` + `age-keygen` — required by ~160 CLI/startup/restore/key-gen tests.
+  Without them on `$PATH` those tests skip (and coverage drops, see below).
+- `shellcheck` — required by `tests/integration/test_install_sh.py`.
+- `mypy` — installed by `.[dev]`; run via `make typecheck`.
+
+All are widely packaged (`apt install age shellcheck`, etc.).
+
 ```
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
@@ -21,10 +31,11 @@ pip install -e 'mthydra-backup-monitor[dev]'
 Common targets (see `Makefile` for full list):
 
 ```
-make test          # controller test suite
-make test-monitor  # backup-monitor test suite
+make test          # controller + backup-monitor test suites
+make test-monitor  # backup-monitor suite alone
 make cov           # controller tests with coverage report
 make lint          # ruff on both packages
+make typecheck     # mypy on src/
 make smoke         # print manual smoke-test procedure
 ```
 

@@ -343,6 +343,7 @@ def _resolve_agent(args, cfg=None) -> tuple[str, str]:
             cfg = load_config(Path(args.config or _DEFAULT_CONFIG))
         manifest = agent_ops.publish_agent(cfg, tar_bytes, sha, _DEFAULT_DB,
                                            ttl_days=7)
+    assert manifest is not None  # non-None either from read_manifest or publish_agent
     return manifest.url, manifest.sha256
 
 

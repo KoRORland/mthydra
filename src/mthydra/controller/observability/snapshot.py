@@ -171,8 +171,8 @@ def collect_snapshot(
         cls = _classify_obligation(ob_id)
         if cls is not None:
             kind, layout, target = cls
-            age = max(0, now_s - _parse_iso(last_proven_at))
-            sev = severity_for_anti(kind, age_seconds=age)
+            anti_age = max(0, now_s - _parse_iso(last_proven_at))
+            sev = severity_for_anti(kind, age_seconds=anti_age)
             antis.append(AntiObligationRow(
                 obligation_id=ob_id,
                 last_proven_at=last_proven_at,

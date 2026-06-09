@@ -70,7 +70,8 @@ def record(
         (recorded_at, vantage_id),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    assert cur.lastrowid is not None  # INSERT always yields a rowid
+    return cur.lastrowid
 
 
 def recent_for_box(

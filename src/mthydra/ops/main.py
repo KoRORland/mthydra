@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from collections.abc import Callable
 from pathlib import Path
 
 # Defaults — override via flags or env.
@@ -1287,7 +1288,7 @@ def _dispatch_vantage_setup(args) -> int:
     return vantage_setup.cmd_vantage_setup(args)
 
 
-_DISPATCH: dict[str, object] = {
+_DISPATCH: dict[str, Callable[[argparse.Namespace], int | None]] = {
     "setup-host": cmd_setup_host,
     "gen-age-key": cmd_gen_age_key,
     "bootstrap": cmd_bootstrap,

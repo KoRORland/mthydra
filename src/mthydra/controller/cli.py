@@ -2362,11 +2362,14 @@ def _cmd_serve(args) -> int:
     from mthydra.controller.distribution.sinks import TelegramDistributionSink
     enroll_poller = None
     if cfg.distribution.telegram is not None:
+        def _on_enrolled(uid: str) -> None:
+            dist_publisher.run_once(force_user_ids={uid})
+
         enroll_poller = EnrollmentPoller(
             db_path=args.db_path,
             receive_client=TelegramDistributionSink(cfg.distribution.telegram.bot_token),
             poll_interval_seconds=cfg.distribution.enroll_poll_interval_seconds,
-            on_enrolled=lambda uid: dist_publisher.run_once(force_user_ids={uid}),
+            on_enrolled=_on_enrolled,
             mode=mode,
         )
 
@@ -2825,8 +2828,8 @@ def _cmd_cover_due(args) -> int:
                     print(f"  {r.domain}  entered_in_use_at={r.entered_in_use_at}")
             if stale:
                 print("stale candidate_verified (will downgrade on next sweep):")
-                for r in stale:
-                    print(f"  {r['domain']}  last_verified_at={r['last_verified_at']}")
+                for sr in stale:
+                    print(f"  {sr['domain']}  last_verified_at={sr['last_verified_at']}")
         return 0
     finally:
         conn.close()

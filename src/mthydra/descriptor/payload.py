@@ -106,16 +106,16 @@ class DescriptorPayload:
 
         exits_raw = obj.get("eu_exit_set", [])
         exits: list[EUExit] = []
-        for e in exits_raw:
-            unknown_exit = set(e.keys()) - allowed_exit_fields
+        for entry in exits_raw:
+            unknown_exit = set(entry.keys()) - allowed_exit_fields
             if unknown_exit:
                 raise ValueError(f"unknown fields in eu_exit entry: {sorted(unknown_exit)}")
-            cover_sni = e.get("cover_sni") if _v2_or_v3 else None
-            reality_pubkey = e.get("reality_pubkey") if _v2_or_v3 else None
+            cover_sni = entry.get("cover_sni") if _v2_or_v3 else None
+            reality_pubkey = entry.get("reality_pubkey") if _v2_or_v3 else None
             exits.append(EUExit(
-                fingerprint=str(e["fingerprint"]),
-                endpoint=str(e["endpoint"]),
-                weight=int(e["weight"]),
+                fingerprint=str(entry["fingerprint"]),
+                endpoint=str(entry["endpoint"]),
+                weight=int(entry["weight"]),
                 cover_sni=None if cover_sni is None else str(cover_sni),
                 reality_pubkey=None if reality_pubkey is None else str(reality_pubkey),
             ))

@@ -223,9 +223,12 @@ class DistributionPublisher:
                     # QR photos are best-effort: the link text is the real
                     # delivery. A failed/raised photo must NOT flip this
                     # delivery to failed (which would re-dispatch the text).
+                    # Only the Telegram sink has send_photo (sink is a union).
+                    send_photo = getattr(sink, "send_photo", None)
                     for caption, png in rendered.qr:
                         try:
-                            sink.send_photo(chat_id=configured, png=png, caption=caption)
+                            if send_photo is not None:
+                                send_photo(chat_id=configured, png=png, caption=caption)
                         except Exception:
                             pass
             else:

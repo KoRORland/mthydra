@@ -105,6 +105,7 @@ class RefreshLoop:
             if last_modified is not None:
                 self._last_modified = last_modified
             return
+        assert not isinstance(blob, _NotModified)  # narrowed by the guard above
         # 304-equivalent: fetch returned the same blob.
         new_hash = self._hash(blob)
         if new_hash == self._current_hash:
