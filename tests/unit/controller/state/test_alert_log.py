@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 
 from mthydra.controller.state.alert_log import (
-    AlertLogEntry,
     append,
     last_for_key,
     last_successful_heartbeat,

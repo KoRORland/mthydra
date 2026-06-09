@@ -1,6 +1,5 @@
 """Tests for DescriptorRotator (spec B §8 R1)."""
 import threading
-import time
 
 import pytest
 

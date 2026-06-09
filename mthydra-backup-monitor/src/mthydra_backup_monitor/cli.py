@@ -12,14 +12,13 @@ import sys
 import time
 import tomllib
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import boto3
 
 from mthydra_backup_monitor.emailer import EmailConfig, send_gap_alarm
 from mthydra_backup_monitor.poller import GapMonitorState, evaluate_gap
-
 
 STATE_FILE_DEFAULT = "/var/lib/mthydra/backup-monitor-state.json"
 
@@ -102,7 +101,7 @@ def _head_index(dest_client, bucket: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def main() -> None:

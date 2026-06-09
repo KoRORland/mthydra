@@ -19,7 +19,10 @@ from mthydra.controller.state.audit import recent_events
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.obligations import list_obligations
 from mthydra.controller.state.ru_images import (
-    current_promoted, list_images, promote, retire,
+    current_promoted,
+    list_images,
+    promote,
+    retire,
 )
 
 

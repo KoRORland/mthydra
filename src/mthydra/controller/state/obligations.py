@@ -23,7 +23,8 @@ def set_obligation(
     details: str | None = None,
 ) -> None:
     conn.execute(
-        "INSERT INTO obligation_clocks (obligation_id, last_proven_at, proven_by, details, next_due_at) "
+        "INSERT INTO obligation_clocks "
+        "(obligation_id, last_proven_at, proven_by, details, next_due_at) "
         "VALUES (?, ?, ?, ?, ?) "
         "ON CONFLICT(obligation_id) DO UPDATE SET "
         "  last_proven_at=excluded.last_proven_at, "
@@ -44,7 +45,8 @@ def prove(
     details: str | None,
 ) -> None:
     cur = conn.execute(
-        "UPDATE obligation_clocks SET last_proven_at=?, proven_by=?, details=?, next_due_at=? WHERE obligation_id=?",
+        "UPDATE obligation_clocks SET last_proven_at=?, proven_by=?, details=?, "
+        "next_due_at=? WHERE obligation_id=?",
         (at, proven_by, details, next_due_at, obligation_id),
     )
     if cur.rowcount == 0:

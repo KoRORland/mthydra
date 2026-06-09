@@ -49,8 +49,8 @@ def test_mirror_appends_multiple_lines(tmp_path, tmp_db_path):
         for i in range(3):
             log_event(conn, ts=f"2026-05-18T00:00:0{i}Z", actor="op",
                       action=f"action_{i}", target=None, details_json=None)
-        lines = [json.loads(l) for l in mirror.read_text().strip().splitlines()]
+        lines = [json.loads(line) for line in mirror.read_text().strip().splitlines()]
         assert len(lines) == 3
-        assert [l["action"] for l in lines] == ["action_0", "action_1", "action_2"]
+        assert [line["action"] for line in lines] == ["action_0", "action_1", "action_2"]
     finally:
         set_audit_mirror(None)

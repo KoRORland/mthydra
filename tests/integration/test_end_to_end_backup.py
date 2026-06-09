@@ -13,7 +13,7 @@ from mthydra.controller.restore.decrypt import decrypt_blob
 from mthydra.controller.restore.summary import summarize_db
 from mthydra.controller.state.backup_log import BackupTrigger
 from mthydra.controller.state.burned import mark_burned
-from mthydra.controller.state.cover_pool import add_candidate, attest_verified, assign_to_box
+from mthydra.controller.state.cover_pool import add_candidate, assign_to_box, attest_verified
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.ru_boxes import insert_box
 
@@ -27,7 +27,7 @@ BUCKET = "mthydra-e2e-test"
 @pytest.fixture
 def keypair(tmp_path):
     keyfile = tmp_path / "id.key"
-    r = subprocess.run(
+    subprocess.run(
         ["age-keygen", "-o", str(keyfile)], capture_output=True, text=True, check=True
     )
     recipient = next(

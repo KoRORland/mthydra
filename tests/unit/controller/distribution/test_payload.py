@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from mthydra import proxy_link
 from mthydra.controller.distribution.payload import (
     SubsetBox,
     build_subset,
@@ -14,8 +15,6 @@ from mthydra.controller.distribution.payload import (
 )
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema
-from mthydra import proxy_link
-
 
 _SENTINEL = object()  # distinguish "not provided" from explicit None
 

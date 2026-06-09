@@ -20,10 +20,13 @@ def get_publishing_token(conn: sqlite3.Connection, kind: str) -> str:
     return row[0]
 
 
-def set_provider_credential(conn: sqlite3.Connection, provider: str, credential: str, at: str) -> None:
+def set_provider_credential(
+    conn: sqlite3.Connection, provider: str, credential: str, at: str
+) -> None:
     conn.execute(
-        "INSERT INTO provider_api_credentials (provider, credential, rotated_at) VALUES (?, ?, ?) "
-        "ON CONFLICT(provider) DO UPDATE SET credential=excluded.credential, rotated_at=excluded.rotated_at",
+        "INSERT INTO provider_api_credentials (provider, credential, rotated_at) "
+        "VALUES (?, ?, ?) ON CONFLICT(provider) DO UPDATE SET "
+        "credential=excluded.credential, rotated_at=excluded.rotated_at",
         (provider, credential, at),
     )
     conn.commit()

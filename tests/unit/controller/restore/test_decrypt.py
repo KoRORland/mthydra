@@ -13,7 +13,7 @@ pytestmark = pytest.mark.skipif(shutil.which("age") is None, reason="age binary 
 @pytest.fixture
 def keypair(tmp_path):
     keyfile = tmp_path / "id.key"
-    r = subprocess.run(
+    subprocess.run(
         ["age-keygen", "-o", str(keyfile)], capture_output=True, text=True, check=True
     )
     recipient = next(

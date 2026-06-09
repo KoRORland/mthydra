@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 SCHEMA_VERSION = 19
 
@@ -41,7 +41,8 @@ _TRIGGER_RU_BOXES_TERMINATED_KEEPS_SHARD = """
      AND NEW.shard_id IS NULL
      AND OLD.shard_id IS NOT NULL
     BEGIN
-      SELECT RAISE(ABORT, 'shard-manager: terminating a box does not clear shard_id (history preservation)');
+      SELECT RAISE(ABORT,
+        'shard-manager: terminating a box does not clear shard_id (history preservation)');
     END
     """
 
@@ -169,7 +170,8 @@ _STATEMENTS: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS cover_domain_pool (
       domain                TEXT PRIMARY KEY,
-      state                 TEXT NOT NULL CHECK (state IN ('candidate_unverified','candidate_verified','in_use')),
+      state                 TEXT NOT NULL
+        CHECK (state IN ('candidate_unverified','candidate_verified','in_use')),
       last_verified_at      TEXT,
       verified_from_vantage TEXT,
       assigned_box_id       TEXT,
@@ -630,7 +632,7 @@ _V2_MIGRATION: list[str] = [
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:

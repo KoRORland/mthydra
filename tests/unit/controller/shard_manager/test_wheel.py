@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 import sqlite3
 
-import pytest
-
 from mthydra.controller.shard_manager.wheel import ShardReshuffleWheel
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema

@@ -1,10 +1,9 @@
 """Integration: gap-monitor full cycle (observe → alarm → clear) (spec A §13.2)."""
 import boto3
-import pytest
 from moto import mock_aws
+from mthydra_backup_monitor.poller import GapMonitorState, evaluate_gap
 
 from mthydra.controller.backup.s3_dest import S3Destination
-from mthydra_backup_monitor.poller import GapMonitorState, evaluate_gap
 
 BUCKET = "mthydra-gap-test"
 

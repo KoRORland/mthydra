@@ -1,11 +1,13 @@
 """Spec G — onward-credential crypto + authority keypair generation."""
-import base64
 
 import pytest
 
 from mthydra.descriptor.authority import (
-    OnwardCredentialPayload, VerifyError,
-    generate_authority_keypair, sign_onward_credential, verify_onward_credential,
+    OnwardCredentialPayload,
+    VerifyError,
+    generate_authority_keypair,
+    sign_onward_credential,
+    verify_onward_credential,
 )
 
 
@@ -76,15 +78,11 @@ def test_verify_rejects_wrong_schema_version():
     """Manually craft a payload with a future schema version; verify must refuse."""
     import json
     import struct
-    from cryptography.hazmat.primitives.asymmetric import ed25519
+
     from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
 
     priv_obj = ed25519.Ed25519PrivateKey.generate()
-    priv_pem = priv_obj.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode()
     pub_pem = priv_obj.public_key().public_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -153,6 +151,7 @@ def test_verify_rejects_non_ed25519_pubkey():
 def _craft_signed(payload_bytes: bytes) -> tuple[bytes, str]:
     """Sign arbitrary bytes with a fresh keypair; return (blob, pubkey_pem)."""
     import struct
+
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519
 

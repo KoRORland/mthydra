@@ -5,10 +5,9 @@ startup (production mode) or log a warning (dryrun mode for step 10).
 """
 from __future__ import annotations
 
-import os
 import shutil
-import sys
 from dataclasses import dataclass
+from datetime import UTC
 from pathlib import Path
 
 from mthydra.controller.backup.age_crypt import AgeError, validate_recipient
@@ -71,8 +70,8 @@ def run_startup_checks(
         return _fail("age_recipient", str(e))
 
     # Checks 4–9, 12–16: invariants (pure SQLite, all modes)
-    from datetime import datetime, timezone as _tz
-    _now_iso = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    from datetime import datetime
+    _now_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn = connect(db_path)
     try:
         try:
@@ -87,8 +86,8 @@ def run_startup_checks(
             return _fail("invariant", str(e))
 
         # §9 zombie cleanup: tag pre-push rows older than 1h as abandoned (all modes)
-        from datetime import datetime, timezone
-        _now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        from datetime import datetime
+        _now_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         abandon_zombie_starts(conn, now_iso=_now_iso, max_age_hours=1)
     finally:
         conn.close()
@@ -121,10 +120,10 @@ def run_startup_checks(
 
     # Check 11: crash-recovery reconciliation (not offline)
     if mode != "offline" and destination is not None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         def clock() -> str:
-            return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         reconcile_pending(db_path, destination, clock=clock)
 
@@ -142,9 +141,9 @@ def _check_destination(destination) -> StartupCheckResult | None:
 
 def reconcile_after_startup(db_path: Path | str, destination) -> int:
     """Run §9 crash-recovery after a clean startup check has passed."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     def clock() -> str:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     return reconcile_pending(Path(db_path), destination, clock=clock)

@@ -11,7 +11,6 @@ burn, record_probe), the structural invariants of T7 must hold:
 from __future__ import annotations
 
 import sqlite3
-import warnings
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -22,7 +21,6 @@ from mthydra.controller.state import probe_vantages as _pv
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.image_profiles import pin
 from mthydra.controller.state.schema import apply_schema
-
 
 CFG = ProbeConfigView(soft_fail_window_M=6, soft_fail_threshold_N=3,
                        min_distinct_vantages=2)

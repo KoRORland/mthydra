@@ -1,3 +1,5 @@
+from datetime import UTC
+
 import pytest
 
 from mthydra.controller.state.authority import insert_authority, retire_authority
@@ -95,7 +97,7 @@ def test_check_14_rejects_orphan_descriptor_fk(tmp_db_path):
 
 def test_check_15_rejects_chain_break(tmp_db_path):
     from mthydra.descriptor.keys import sign as ed_sign
-    from mthydra.descriptor.payload import DescriptorPayload, EUExit, canonical_bytes, payload_hash
+    from mthydra.descriptor.payload import DescriptorPayload, canonical_bytes
     conn = _seeded(tmp_db_path)
     priv = conn.execute(
         "SELECT privkey FROM descriptor_signing_key WHERE retired_at IS NULL"
@@ -866,8 +868,8 @@ def test_check_42_threshold_floor_is_two_hours(tmp_db_path):
     conn = _seeded(tmp_db_path)
     # Heartbeat 90 min old, 30-min cadence → naive threshold 60 min, but
     # floor enforces 2h → passes.
-    from datetime import datetime, timedelta, timezone
-    now_dt = datetime.strptime(NOW, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    from datetime import datetime, timedelta
+    now_dt = datetime.strptime(NOW, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     hb = (now_dt - timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn.execute(
         "INSERT INTO alert_log (attempted_at, delivered_at, sink, severity, "

@@ -120,6 +120,7 @@ def test_shutdown_children_terminates_running(monkeypatch):
 def test_shutdown_children_force_kills_on_timeout(monkeypatch):
     """If wait() raises TimeoutExpired, kill() is invoked."""
     import subprocess as sp
+
     from mthydra.ru_agent import supervisor
 
     killed = []

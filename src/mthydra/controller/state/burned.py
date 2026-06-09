@@ -32,7 +32,8 @@ def mark_burned(
         if cur.rowcount == 0:
             raise ValueError(f"domain {domain!r} is not present in cover_domain_pool")
         conn.execute(
-            "INSERT INTO burned_domains (domain, burned_at, reason, last_box_id, details) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO burned_domains (domain, burned_at, reason, last_box_id, details) "
+            "VALUES (?, ?, ?, ?, ?)",
             (domain, at, reason, last_box_id, details),
         )
         # Audit row must commit in the SAME transaction as the burn — otherwise a

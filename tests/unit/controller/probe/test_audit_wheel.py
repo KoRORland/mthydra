@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from mthydra.controller.probe.audit_wheel import ProbeAuditWheel
 from mthydra.controller.probe.evaluator import ProbeConfigView
 from mthydra.controller.state.db import connect
@@ -12,7 +10,6 @@ from mthydra.controller.state.image_profiles import pin
 from mthydra.controller.state.probe_results import record
 from mthydra.controller.state.probe_vantages import add_candidate, attest_active
 from mthydra.controller.state.schema import apply_schema
-
 
 CFG = ProbeConfigView(
     soft_fail_window_M=4,

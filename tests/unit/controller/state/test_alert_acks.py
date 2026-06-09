@@ -4,11 +4,13 @@ from __future__ import annotations
 import pytest
 
 from mthydra.controller.state.alert_acks import (
-    ack, is_acked, list_active, list_all,
+    ack,
+    is_acked,
+    list_active,
+    list_all,
 )
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema
-
 
 NOW = "2026-05-26T12:00:00Z"
 LATER = "2026-05-26T13:00:00Z"

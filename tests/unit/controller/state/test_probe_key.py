@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import pytest
 
+from mthydra.controller.state import probe_key
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema
-from mthydra.controller.state import probe_key
 
 
 @pytest.fixture

@@ -1,7 +1,5 @@
 """Tests for the do_backup orchestration pipeline (spec A §6.2)."""
 import shutil
-import sqlite3
-from pathlib import Path
 from unittest.mock import patch
 
 import boto3
@@ -26,7 +24,7 @@ def keypair(tmp_path):
     import subprocess
 
     keyfile = tmp_path / "id.key"
-    r = subprocess.run(
+    subprocess.run(
         ["age-keygen", "-o", str(keyfile)], capture_output=True, text=True, check=True
     )
     recipient = next(
@@ -103,7 +101,6 @@ def test_do_backup_cleans_tmp_files(tmp_path, keypair, seeded_db, dest):
 @needs_age
 def test_do_backup_records_full_lifecycle(tmp_path, keypair, seeded_db, dest):
     """backup_log row should have all three timestamps set after success."""
-    from mthydra.controller.state.backup_log import BackupRecord
 
     _, recipient = keypair
     tmp_dir = tmp_path / "tmp"

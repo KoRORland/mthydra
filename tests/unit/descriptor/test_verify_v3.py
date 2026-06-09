@@ -1,6 +1,7 @@
 """Task 2 — Verifier accepts v3 descriptor with tls_fingerprints."""
-from mthydra.descriptor.keys import generate_keypair, sign as ed_sign
-from mthydra.descriptor.payload import DescriptorPayload, SCHEMA_V3, canonical_bytes
+from mthydra.descriptor.keys import generate_keypair
+from mthydra.descriptor.keys import sign as ed_sign
+from mthydra.descriptor.payload import SCHEMA_V3, DescriptorPayload, canonical_bytes
 from mthydra.descriptor.verify import TrustedKey, verify_descriptor
 
 

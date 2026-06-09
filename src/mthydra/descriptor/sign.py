@@ -11,7 +11,8 @@ from mthydra.controller.state.descriptor import (
     next_descriptor_generation,
 )
 from mthydra.controller.state.eu_exit_set import list_active
-from mthydra.descriptor.keys import is_placeholder, sign as ed_sign
+from mthydra.descriptor.keys import is_placeholder
+from mthydra.descriptor.keys import sign as ed_sign
 from mthydra.descriptor.payload import (
     KNOWN_UTLS_FINGERPRINTS,
     DescriptorPayload,

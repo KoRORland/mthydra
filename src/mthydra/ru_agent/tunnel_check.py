@@ -18,9 +18,9 @@ import json
 import os
 import socket
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from typing import Callable
+from datetime import UTC, datetime
 
 DC_PORT = 443
 PROBE_BYTES = b"\x00" * 8          # minimal nudge so the upstream must engage
@@ -37,7 +37,7 @@ class Verdict:
 
 
 def _default_clock() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _real_connect(ip: str, port: int, timeout: float) -> socket.socket:
@@ -72,7 +72,7 @@ def check_eu_tunnel(
             sock.sendall(PROBE_BYTES)
             try:
                 data = sock.recv(64)
-            except (TimeoutError, socket.timeout):
+            except TimeoutError:
                 # Peer is holding the connection open -> upstream is alive.
                 return Verdict(now, "ok", "upstream held connection", ip)
             if data:

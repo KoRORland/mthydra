@@ -4,7 +4,6 @@ from moto import mock_aws
 
 from mthydra.controller.backup.s3_dest import S3Destination
 
-
 BUCKET = "mthydra-test"
 
 

@@ -25,7 +25,8 @@ def issue_credential(
 ) -> str:
     cred_id = str(uuid.uuid4())
     conn.execute(
-        "INSERT INTO onward_credentials (cred_id, box_id, credential, issued_at, authority_generation) "
+        "INSERT INTO onward_credentials "
+        "(cred_id, box_id, credential, issued_at, authority_generation) "
         "VALUES (?, ?, ?, ?, ?)",
         (cred_id, box_id, credential, issued_at, authority_generation),
     )

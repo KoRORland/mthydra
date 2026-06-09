@@ -8,7 +8,9 @@ from pathlib import Path
 
 from mthydra import debuglog
 from mthydra.descriptor.authority import (
-    OnwardCredentialPayload, VerifyError, verify_onward_credential,
+    OnwardCredentialPayload,
+    VerifyError,
+    verify_onward_credential,
 )
 
 

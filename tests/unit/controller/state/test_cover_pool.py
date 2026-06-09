@@ -2,7 +2,7 @@
 import pytest
 
 from mthydra.controller.state.audit import recent_events
-from mthydra.controller.state.burned import is_burned, mark_burned
+from mthydra.controller.state.burned import is_burned
 from mthydra.controller.state.cover_pool import (
     add_candidate,
     assign_to_box,
@@ -286,7 +286,10 @@ def test_attest_verified_accepts_active_vantage(tmp_db_path):
     from mthydra.controller.state.cover_pool import add_candidate, attest_verified
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.probe_vantages import (
-        add_candidate as add_vantage, attest_active,
+        add_candidate as add_vantage,
+    )
+    from mthydra.controller.state.probe_vantages import (
+        attest_active,
     )
     from mthydra.controller.state.schema import apply_schema
     conn = connect(tmp_db_path)

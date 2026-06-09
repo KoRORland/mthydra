@@ -28,7 +28,6 @@ from mthydra.controller.state.users_shards import (
     set_user_shard,
 )
 
-
 _USERS = ["u1", "u2", "u3", "u4", "u5", "u6"]
 _BOXES = ["b1", "b2", "b3"]
 _MAX = 3

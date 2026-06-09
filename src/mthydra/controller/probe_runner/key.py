@@ -7,10 +7,11 @@ the DB rematerializes the identical key file with no manual step.
 """
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from mthydra.controller.state import probe_key as pk
@@ -19,7 +20,7 @@ _COMMENT = "mthydra-probe-runner"
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _generate_keypair() -> tuple[str, str]:
@@ -38,10 +39,8 @@ def ensure_probe_key(conn: sqlite3.Connection, ssh_dir: Path | str) -> tuple[Pat
     materialize the 0600 file cache from the DB row. Returns (key_path, pubkey)."""
     ssh_dir = Path(ssh_dir)
     ssh_dir.mkdir(parents=True, exist_ok=True)
-    try:
+    with contextlib.suppress(PermissionError):
         ssh_dir.chmod(0o700)
-    except PermissionError:
-        pass
 
     row = pk.get(conn)
     if row is None:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from mthydra.controller.backup.age_crypt import AgeError, validate_recipient
@@ -41,7 +41,7 @@ def _stamp_credential_rotation(conn, *, provider: str, at: str) -> None:
 
 def _add_hours(iso: str, hours: int) -> str:
     t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    return (t + timedelta(hours=hours)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (t + timedelta(hours=hours)).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def init_state(

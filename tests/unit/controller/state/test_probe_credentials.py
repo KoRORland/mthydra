@@ -7,10 +7,13 @@ import pytest
 
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.probe_credentials import (
-    issue, list_active_for_box, list_active_for_vantage, list_all, revoke,
+    issue,
+    list_active_for_box,
+    list_active_for_vantage,
+    list_all,
+    revoke,
 )
 from mthydra.controller.state.schema import apply_schema
-
 
 NOW = "2026-05-26T12:00:00Z"
 

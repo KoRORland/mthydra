@@ -13,7 +13,6 @@ import json
 
 
 def test_image_canary_full_lifecycle(tmp_path, age_recipient, monkeypatch):
-    from mthydra.controller.backup.s3_dest import S3Destination
     from mthydra.controller.cli import run
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.image_profiles import pin
@@ -65,8 +64,6 @@ def test_image_canary_full_lifecycle(tmp_path, age_recipient, monkeypatch):
     conn.close()
 
     # Step 3: Without probe data, gate fails.
-    capsys_buf = []
-    import sys as _sys
     import contextlib
     import io
     buf = io.StringIO()

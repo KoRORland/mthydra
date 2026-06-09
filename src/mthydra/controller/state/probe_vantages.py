@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC
 
 from mthydra.controller.state import audit
 
@@ -180,12 +181,12 @@ def list_due_for_rotation(
     conn: sqlite3.Connection, *, now: str, ttl_days: int,
 ) -> list[str]:
     """Active vantages whose attestation is older than ttl_days."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     def _to_s(iso: str) -> int:
         return int(
             datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")
-            .replace(tzinfo=timezone.utc).timestamp()
+            .replace(tzinfo=UTC).timestamp()
         )
 
     now_s = _to_s(now)

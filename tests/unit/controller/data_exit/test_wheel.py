@@ -14,7 +14,8 @@ def _seed_authority(conn):
 
 def _seed_active_eu_node(conn):
     from mthydra.controller.state.eu_nodes import (
-        add_eu_node, set_data_exit_identity,
+        add_eu_node,
+        set_data_exit_identity,
     )
     add_eu_node(
         conn,
@@ -44,9 +45,9 @@ def _make_cfg(tmp_path):
 
 def test_wheel_tick_writes_initial_config(tmp_path):
     """First tick on a fresh DB renders config + writes it + SIGHUPs."""
+    from mthydra.controller.data_exit.wheel import DataExitWheel
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.data_exit.wheel import DataExitWheel
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -75,9 +76,9 @@ def test_wheel_tick_writes_initial_config(tmp_path):
 
 def test_wheel_tick_skips_unchanged_config(tmp_path):
     """Second tick with no DB change does not re-write the config or SIGHUP."""
+    from mthydra.controller.data_exit.wheel import DataExitWheel
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.data_exit.wheel import DataExitWheel
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -102,15 +103,18 @@ def test_wheel_tick_skips_unchanged_config(tmp_path):
 
 def test_wheel_tick_rewrites_after_credential_revoke(tmp_path):
     """Revoking a credential triggers a new config render + SIGHUP."""
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.state.ru_boxes import (
-        insert_box, mark_live, set_reality_uuid,
-    )
-    from mthydra.controller.state.credentials import (
-        issue_credential, revoke_credential,
-    )
     from mthydra.controller.data_exit.wheel import DataExitWheel
+    from mthydra.controller.state.credentials import (
+        issue_credential,
+        revoke_credential,
+    )
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import (
+        insert_box,
+        mark_live,
+        set_reality_uuid,
+    )
+    from mthydra.controller.state.schema import apply_schema
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -155,9 +159,9 @@ def test_wheel_tick_rewrites_after_credential_revoke(tmp_path):
 
 def test_wheel_tick_registers_eu_exit_set_on_first_render(tmp_path):
     """First successful tick also registers the eu_exit_set row."""
+    from mthydra.controller.data_exit.wheel import DataExitWheel
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.data_exit.wheel import DataExitWheel
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -184,9 +188,9 @@ def test_wheel_tick_registers_eu_exit_set_on_first_render(tmp_path):
 
 def test_wheel_tick_no_reality_key_no_write(tmp_path):
     """Missing reality key file -> tick is a no-op (no config, no SIGHUP)."""
+    from mthydra.controller.data_exit.wheel import DataExitWheel
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.data_exit.wheel import DataExitWheel
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -211,15 +215,19 @@ def test_wheel_tick_no_reality_key_no_write(tmp_path):
 def test_wheel_tick_sighup_failure_after_first_render_reraises(tmp_path):
     """If SIGHUP fails on a *subsequent* re-render, audit + re-raise."""
     import pytest
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.state.ru_boxes import (
-        insert_box, mark_live, set_reality_uuid,
-    )
-    from mthydra.controller.state.credentials import (
-        issue_credential, revoke_credential,
-    )
+
     from mthydra.controller.data_exit.wheel import DataExitWheel
+    from mthydra.controller.state.credentials import (
+        issue_credential,
+        revoke_credential,
+    )
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.ru_boxes import (
+        insert_box,
+        mark_live,
+        set_reality_uuid,
+    )
+    from mthydra.controller.state.schema import apply_schema
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -266,10 +274,10 @@ def test_wheel_tick_sighup_failure_after_first_render_reraises(tmp_path):
 
 def test_wheel_tick_handles_exit_set_register_failure(tmp_path):
     """If register_started raises ValueError (e.g., missing identity), audit but continue."""
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.state.eu_nodes import add_eu_node
     from mthydra.controller.data_exit.wheel import DataExitWheel
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import add_eu_node
+    from mthydra.controller.state.schema import apply_schema
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -308,9 +316,9 @@ def test_wheel_tick_handles_exit_set_register_failure(tmp_path):
 
 def test_wheel_start_and_stop_online_mode(tmp_path, monkeypatch):
     """online mode: start() builds + starts a BackgroundScheduler; stop() shuts it down."""
+    from mthydra.controller.data_exit import wheel as wheel_mod
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.data_exit import wheel as wheel_mod
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -348,9 +356,9 @@ def test_wheel_start_and_stop_online_mode(tmp_path, monkeypatch):
 
 def test_wheel_start_offline_mode_noop(tmp_path):
     """offline mode: start() doesn't even touch the scheduler."""
+    from mthydra.controller.data_exit.wheel import DataExitWheel
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.data_exit.wheel import DataExitWheel
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)

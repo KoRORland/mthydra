@@ -11,8 +11,12 @@ from mthydra.controller.restore.decrypt import decrypt_blob
 from mthydra.controller.state.audit import recent_events
 from mthydra.controller.state.burned import is_burned
 from mthydra.controller.state.cover_pool import (
-    add_candidate, assign_to_box, attest_verified, list_by_state,
-    list_due_for_rotation, rotate_and_burn,
+    add_candidate,
+    assign_to_box,
+    attest_verified,
+    list_by_state,
+    list_due_for_rotation,
+    rotate_and_burn,
 )
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.ru_boxes import insert_box, mark_live

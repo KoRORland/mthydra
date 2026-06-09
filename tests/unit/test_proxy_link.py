@@ -25,6 +25,7 @@ def test_config_gen_uses_shared_secret(monkeypatch):
     """The secret rendered into mtg.toml must equal proxy_link.derive_mtg_secret
     for the same (reality_uuid, sni) — they must never drift."""
     from types import SimpleNamespace
+
     from mthydra.ru_agent import config_gen
 
     seed = SimpleNamespace(reality_uuid="abc-123", sni="discord.com")

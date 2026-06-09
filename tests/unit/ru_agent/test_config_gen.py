@@ -142,6 +142,7 @@ def test_render_sing_box_config_consumes_real_controller_descriptor(tmp_path):
 # ── Task 4 — per-box descriptor fingerprint wired into render ──────────────
 
 from types import SimpleNamespace
+
 from mthydra.ru_agent import config_gen as _cg
 
 

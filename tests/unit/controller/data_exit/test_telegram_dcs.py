@@ -6,6 +6,7 @@ def test_flatten_combines_v4_and_v6():
 
 def test_flatten_rejects_invalid_cidr():
     import pytest
+
     from mthydra.controller.data_exit.telegram_dcs import flatten_cidrs
     with pytest.raises(ValueError, match="invalid CIDR"):
         flatten_cidrs(v4=("not-a-cidr",), v6=())

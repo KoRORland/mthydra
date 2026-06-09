@@ -1,6 +1,7 @@
 """Render sing-box server JSON from controller state."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -115,8 +116,6 @@ def write_atomic(path: Path | str, content: bytes) -> None:
         finally:
             os.close(dir_fd)
     except Exception:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp_path)
-        except FileNotFoundError:
-            pass
         raise

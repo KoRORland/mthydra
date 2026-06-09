@@ -5,13 +5,11 @@ import pytest
 
 from mthydra.controller.observability.heartbeat import ObsHeartbeatPublisher
 from mthydra.controller.observability.sinks import (
-    AlertPayload,
     DryRunSink,
     SinkResult,
 )
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema
-
 
 NOW = "2026-05-25T12:00:00Z"
 
@@ -384,6 +382,7 @@ def test_remediation_for_unknown_returns_none():
 def test_format_overdue_block_includes_age_hint():
     """Operator sees 'overdue 2h' at a glance, not just the obligation id."""
     from dataclasses import dataclass
+
     from mthydra.controller.observability.remediation import format_overdue_block
 
     @dataclass

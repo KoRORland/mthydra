@@ -4,7 +4,6 @@ import pytest
 
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.ru_boxes import (
-    Box,
     insert_box,
     list_live,
     mark_live,
@@ -155,7 +154,8 @@ def test_list_canary_boxes_filters(tmp_db_path):
 def test_clear_canary_flag_audits(tmp_db_path):
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_boxes import (
-        clear_canary_flag, insert_box,
+        clear_canary_flag,
+        insert_box,
     )
     from mthydra.controller.state.schema import apply_schema
     conn = connect(tmp_db_path)
@@ -175,7 +175,8 @@ def test_clear_canary_flag_audits(tmp_db_path):
 def test_clear_canary_flag_refuses_non_canary(tmp_db_path):
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_boxes import (
-        clear_canary_flag, insert_box,
+        clear_canary_flag,
+        insert_box,
     )
     from mthydra.controller.state.schema import apply_schema
     conn = connect(tmp_db_path)
@@ -202,8 +203,8 @@ def test_clear_canary_flag_refuses_missing_box(tmp_db_path):
 
 def test_mark_live_refuses_box_with_null_shard(tmp_path):
     from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
     from mthydra.controller.state.ru_boxes import mark_live
+    from mthydra.controller.state.schema import apply_schema
     c = connect(tmp_path / "s.sqlite")
     apply_schema(c)
     c.execute(
@@ -220,8 +221,8 @@ def test_mark_live_refuses_box_with_null_shard(tmp_path):
 
 def test_mark_live_succeeds_with_shard(tmp_path):
     from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
     from mthydra.controller.state.ru_boxes import mark_live
+    from mthydra.controller.state.schema import apply_schema
     c = connect(tmp_path / "s.sqlite")
     apply_schema(c)
     c.execute(

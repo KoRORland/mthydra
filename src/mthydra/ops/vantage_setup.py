@@ -17,6 +17,7 @@ state already matches).
 """
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import subprocess
 import sys
@@ -51,11 +52,9 @@ def _run(argv: list[str], *, timeout: int = 60) -> subprocess.CompletedProcess:
 
 def _ensure_ssh_dir(ssh_dir: Path) -> None:
     ssh_dir.mkdir(parents=True, exist_ok=True)
-    try:
+    # We may be running as mthydra against a dir owned by root; best-effort.
+    with contextlib.suppress(PermissionError):
         ssh_dir.chmod(0o700)
-    except PermissionError:
-        # We may be running as mthydra against a dir owned by root; best-effort.
-        pass
 
 
 def _entry_ssh_opts(args) -> tuple[str, str, list[str]]:

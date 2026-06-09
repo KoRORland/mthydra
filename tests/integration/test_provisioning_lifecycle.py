@@ -17,14 +17,14 @@ from mthydra.controller.bootstrap import init_state
 from mthydra.controller.image.builder import build_image
 from mthydra.controller.provisioning.seed import provision_box
 from mthydra.controller.state.audit import recent_events
-from mthydra.controller.state.authority import current_authority
 from mthydra.controller.state.burned import is_burned
 from mthydra.controller.state.cover_pool import add_candidate, attest_verified
 from mthydra.controller.state.credentials import active_for_box
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.ru_boxes import mark_live, mark_terminated
 from mthydra.descriptor.authority import (
-    generate_authority_keypair, verify_onward_credential,
+    generate_authority_keypair,
+    verify_onward_credential,
 )
 
 
@@ -154,8 +154,8 @@ def test_provisioning_lifecycle_end_to_end(tmp_path, recipient_fixture):
     conn.close()
 
     conn = connect(db)
-    from mthydra.controller.state.credentials import revoke_credential
     from mthydra.controller.state.burned import mark_burned
+    from mthydra.controller.state.credentials import revoke_credential
     for c in active_for_box(conn, seed.box_id):
         revoke_credential(conn, c.cred_id, at=NOW)
     mark_burned(conn, seed.sni, "test", seed.box_id, NOW, None)

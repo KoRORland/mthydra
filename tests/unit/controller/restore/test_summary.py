@@ -2,7 +2,7 @@
 from mthydra.controller.restore.summary import summarize_db
 from mthydra.controller.state.authority import insert_authority
 from mthydra.controller.state.burned import mark_burned
-from mthydra.controller.state.cover_pool import add_candidate, attest_verified, assign_to_box
+from mthydra.controller.state.cover_pool import add_candidate, assign_to_box, attest_verified
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.descriptor import insert_signing_key
 from mthydra.controller.state.ru_boxes import insert_box, mark_live

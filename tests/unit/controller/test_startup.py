@@ -4,7 +4,7 @@ import shutil
 import pytest
 
 from mthydra.controller.bootstrap import init_state
-from mthydra.controller.startup import StartupCheckResult, run_startup_checks
+from mthydra.controller.startup import run_startup_checks
 from mthydra.controller.state.authority import insert_authority
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema

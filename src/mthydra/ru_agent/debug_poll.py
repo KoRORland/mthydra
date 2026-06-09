@@ -8,8 +8,8 @@ only and dies on reboot — consistent with the no-persistent-storage invariant.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from mthydra import debuglog
 

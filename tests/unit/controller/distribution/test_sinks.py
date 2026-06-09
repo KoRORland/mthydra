@@ -9,7 +9,6 @@ from mthydra.controller.distribution.sinks import (
     TelegramDistributionSink,
 )
 
-
 # --- Telegram ---
 
 

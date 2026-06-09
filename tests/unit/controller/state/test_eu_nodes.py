@@ -4,8 +4,14 @@ import pytest
 from mthydra.controller.state.audit import recent_events
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.eu_nodes import (
-    EUNode, add_eu_node, get_eu_node, get_node, list_eu_nodes, retire_eu_node,
-    set_data_exit_identity, set_data_exit_state, update_heartbeat,
+    add_eu_node,
+    get_eu_node,
+    get_node,
+    list_eu_nodes,
+    retire_eu_node,
+    set_data_exit_identity,
+    set_data_exit_state,
+    update_heartbeat,
 )
 from mthydra.controller.state.schema import apply_schema
 

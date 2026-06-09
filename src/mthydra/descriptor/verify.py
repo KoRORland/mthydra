@@ -5,9 +5,9 @@ Import isolation is enforced by tests/unit/descriptor/test_verify_import_isolati
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Sequence
 
 from mthydra.descriptor.keys import verify as ed_verify
 from mthydra.descriptor.payload import DescriptorPayload, canonical_bytes, payload_hash

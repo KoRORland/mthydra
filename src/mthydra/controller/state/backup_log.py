@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 
 
-class BackupTrigger(str, enum.Enum):
+class BackupTrigger(enum.StrEnum):
     FLOOR_TIMER = "floor_timer"
     BURNED_DOMAINS_CHANGE = "burned_domains_change"
     MANUAL = "manual"
@@ -43,7 +43,9 @@ def record_started(
     conn.commit()
 
 
-def record_pushed(conn: sqlite3.Connection, generation: int, sha256: str, size_bytes: int, pushed_at: str) -> None:
+def record_pushed(
+    conn: sqlite3.Connection, generation: int, sha256: str, size_bytes: int, pushed_at: str
+) -> None:
     conn.execute(
         "UPDATE backup_log SET sha256=?, size_bytes=?, pushed_at=? WHERE generation=?",
         (sha256, size_bytes, pushed_at, generation),
@@ -69,7 +71,7 @@ def abandon_zombie_starts(
 
     Returns the number of rows updated.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     cutoff = (
         datetime.fromisoformat(now_iso.replace("Z", "+00:00"))

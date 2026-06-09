@@ -6,7 +6,6 @@ from mthydra.controller.state.descriptor import (
     insert_descriptor,
     insert_signing_key,
     latest_descriptor,
-    retire_signing_key,
 )
 from mthydra.controller.state.schema import apply_schema
 

@@ -28,6 +28,7 @@ def test_install_runs_iptables_with_expected_args(monkeypatch):
 
 def test_install_raises_on_failure(monkeypatch):
     import pytest
+
     from mthydra.ru_agent import iptables
     monkeypatch.setattr(
         iptables.subprocess, "run",

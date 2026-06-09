@@ -4,13 +4,12 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
-
 
 _AWS_REGION_RE = re.compile(r"^https?://s3[.\-]([a-z0-9-]+)\.amazonaws\.com/?$")
 
@@ -63,7 +62,7 @@ class S3Destination:
         return f"gen-{generation:010d}.age"
 
     def put_blob(self, generation: int, blob_path: Path) -> None:
-        retain_until = datetime.now(timezone.utc) + timedelta(days=self.object_lock_days)
+        retain_until = datetime.now(UTC) + timedelta(days=self.object_lock_days)
         with open(blob_path, "rb") as fh:
             self._client.put_object(
                 Bucket=self.bucket,
@@ -78,7 +77,7 @@ class S3Destination:
             {"highest_gen": highest_gen, "sha256": sha256, "size_bytes": size_bytes, "ts": ts},
             sort_keys=True,
         ).encode("utf-8")
-        retain_until = datetime.now(timezone.utc) + timedelta(days=self.object_lock_days)
+        retain_until = datetime.now(UTC) + timedelta(days=self.object_lock_days)
         self._client.put_object(
             Bucket=self.bucket,
             Key="index.json",
@@ -127,7 +126,7 @@ class S3Destination:
         Goes into the same bucket (Object Lock COMPLIANCE required); the
         accumulated versions are accepted residual (spec F §11).
         """
-        retain_until = datetime.now(timezone.utc) + timedelta(days=self.object_lock_days)
+        retain_until = datetime.now(UTC) + timedelta(days=self.object_lock_days)
         self._client.put_object(
             Bucket=self.bucket,
             Key=self._heartbeat_key(node_id),
@@ -172,7 +171,7 @@ class S3Destination:
         self, *, image_version: str, binary_path: Path, manifest: bytes,
     ) -> None:
         """Upload binary + manifest to B2, both under Object Lock COMPLIANCE."""
-        retain_until = datetime.now(timezone.utc) + timedelta(days=self.object_lock_days)
+        retain_until = datetime.now(UTC) + timedelta(days=self.object_lock_days)
         with open(binary_path, "rb") as fh:
             self._client.put_object(
                 Bucket=self.bucket,
@@ -214,7 +213,7 @@ class S3Destination:
         descriptors rotate) — same pattern as index.json. The blob is
         the binary wire format produced by
         descriptor.sign.encode_descriptor_blob."""
-        retain_until = datetime.now(timezone.utc) + timedelta(days=self.object_lock_days)
+        retain_until = datetime.now(UTC) + timedelta(days=self.object_lock_days)
         self._client.put_object(
             Bucket=self.bucket,
             Key=self._DESCRIPTOR_KEY,
@@ -236,7 +235,7 @@ class S3Destination:
             ExpiresIn=ttl_seconds,
         )
         expires_at_iso = (
-            datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+            datetime.now(UTC) + timedelta(seconds=ttl_seconds)
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
         return url, expires_at_iso
 
@@ -256,6 +255,6 @@ class S3Destination:
             ExpiresIn=ttl_seconds,
         )
         expires_at_iso = (
-            datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+            datetime.now(UTC) + timedelta(seconds=ttl_seconds)
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
         return url, expires_at_iso

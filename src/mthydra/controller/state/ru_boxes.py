@@ -129,6 +129,7 @@ def clear_canary_flag(
 ) -> None:
     """Demote a canary box to regular fleet. Writes an audit row."""
     import json as _json
+
     from mthydra.controller.state import audit
     row = conn.execute(
         "SELECT is_canary FROM ru_boxes WHERE box_id=?", (box_id,)

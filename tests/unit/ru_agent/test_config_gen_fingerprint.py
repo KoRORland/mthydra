@@ -1,6 +1,7 @@
 """Task 3 — _pick_fingerprint deterministic per-box uTLS selection."""
 import pytest
-from mthydra.ru_agent.config_gen import _pick_fingerprint, ConfigError
+
+from mthydra.ru_agent.config_gen import ConfigError, _pick_fingerprint
 
 
 def test_none_list_falls_back_to_chrome():

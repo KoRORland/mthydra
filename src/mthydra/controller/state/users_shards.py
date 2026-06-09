@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from mthydra.controller.state import audit
 
@@ -34,7 +35,8 @@ def add_user(
     at: str,
 ) -> None:
     conn.execute(
-        "INSERT INTO users (user_id, display_name, out_of_band_channel, added_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO users (user_id, display_name, out_of_band_channel, added_at) "
+        "VALUES (?, ?, ?, ?)",
         (user_id, display_name, out_of_band_channel, at),
     )
     conn.commit()
@@ -42,7 +44,8 @@ def add_user(
 
 def list_users(conn: sqlite3.Connection) -> list[User]:
     rows = conn.execute(
-        "SELECT user_id, display_name, out_of_band_channel, current_shard_id, added_at FROM users ORDER BY user_id"
+        "SELECT user_id, display_name, out_of_band_channel, current_shard_id, added_at "
+        "FROM users ORDER BY user_id"
     ).fetchall()
     return [User(*r) for r in rows]
 

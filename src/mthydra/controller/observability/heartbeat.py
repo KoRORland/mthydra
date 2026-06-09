@@ -12,7 +12,7 @@ import json
 import os
 import subprocess
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -38,7 +38,6 @@ def smtp_smoke(host: str, port: int, *, timeout_s: float = 5.0) -> dict[str, obj
     without needing the real credentials.
     """
     import smtplib
-    import socket as _socket
     try:
         with smtplib.SMTP(host, port, timeout=timeout_s) as s:
             code, msg = s.ehlo()
@@ -47,7 +46,7 @@ def smtp_smoke(host: str, port: int, *, timeout_s: float = 5.0) -> dict[str, obj
                 "ehlo_code": int(code),
                 "ehlo_response": msg.decode("ascii", errors="replace").splitlines()[0][:200],
             }
-    except _socket.timeout:
+    except TimeoutError:
         return {"ok": False, "error": f"timeout connecting to {host}:{port}"}
     except OSError as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -99,7 +98,7 @@ def collect_identity(db_path: Path | str) -> dict[str, str]:
 
 
 def _default_clock() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _add_seconds_iso(iso: str, seconds: float) -> str:

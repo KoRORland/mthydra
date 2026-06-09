@@ -9,7 +9,7 @@ from mthydra.controller.state.descriptor import insert_signing_key
 from mthydra.controller.state.eu_exit_set import add_exit, list_active, retire_exit
 from mthydra.controller.state.schema import apply_schema
 from mthydra.descriptor.keys import generate_keypair
-from mthydra.descriptor.payload import canonical_bytes, payload_hash
+from mthydra.descriptor.payload import payload_hash
 from mthydra.descriptor.sign import sign_new_descriptor
 from mthydra.descriptor.verify import TrustedKey, verify_chain
 
@@ -64,7 +64,7 @@ def test_descriptor_chain_integrity(tmp_path_factory, ops):
     assert gens == list(range(1, len(chain) + 1))
 
     # Invariant 3: each descriptor's previous_generation_hash links correctly
-    for i, (p, (blob, _)) in enumerate(zip(chain, blobs_sigs)):
+    for i, (p, (_blob, _)) in enumerate(zip(chain, blobs_sigs, strict=False)):
         if i == 0:
             assert p.previous_generation_hash is None
         else:

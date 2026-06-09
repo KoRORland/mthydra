@@ -228,6 +228,6 @@ def get_image(conn: sqlite3.Connection, image_version: str) -> RUImage:
 
 
 def _add_days_iso(iso: str, days: int) -> str:
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     return (t + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")

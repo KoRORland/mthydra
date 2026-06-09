@@ -1,6 +1,5 @@
 """Tests for backup triggers — all-synchronous per plan §16.3."""
 import threading
-import time
 
 import pytest
 

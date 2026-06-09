@@ -6,7 +6,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from mthydra.controller.provisioning.seed import (
-    ProvisionError, SeedBundle, provision_box,
+    ProvisionError,
+    SeedBundle,
+    provision_box,
 )
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema
@@ -37,8 +39,8 @@ def _seed_placeholder_authority(conn):
 
 def _seed_descriptor(conn):
     """Insert a signing key + sign one descriptor (touches descriptor_history)."""
-    from mthydra.descriptor.keys import generate_keypair
     from mthydra.controller.state.descriptor import insert_signing_key
+    from mthydra.descriptor.keys import generate_keypair
     priv, pub = generate_keypair()
     insert_signing_key(conn, 1, priv, pub, NOW)
     from mthydra.descriptor.sign import sign_new_descriptor
@@ -123,8 +125,8 @@ def test_provision_box_happy_path(conn):
     assert cred_row is not None
     cred_blob = bytes(cred_row[0])
 
-    from mthydra.descriptor.authority import verify_onward_credential
     from mthydra.controller.state.authority import current_authority
+    from mthydra.descriptor.authority import verify_onward_credential
     pub_pem = current_authority(conn).pubkey_pem
     payload = verify_onward_credential(cred_blob, pub_pem)
     assert payload.box_id == rows[0][0]

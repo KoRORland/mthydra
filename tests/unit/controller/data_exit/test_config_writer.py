@@ -85,7 +85,9 @@ def test_render_with_live_boxes(tmp_path):
     from mthydra.controller.state.credentials import issue_credential
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_boxes import (
-        insert_box, mark_live, set_reality_uuid,
+        insert_box,
+        mark_live,
+        set_reality_uuid,
     )
     from mthydra.controller.state.schema import apply_schema
 
@@ -127,7 +129,10 @@ def test_render_excludes_revoked_and_terminated(tmp_path):
     from mthydra.controller.state.credentials import issue_credential, revoke_credential
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_boxes import (
-        insert_box, mark_live, mark_terminated, set_reality_uuid,
+        insert_box,
+        mark_live,
+        mark_terminated,
+        set_reality_uuid,
     )
     from mthydra.controller.state.schema import apply_schema
 
@@ -253,6 +258,7 @@ def test_write_atomic_creates_parent_dirs(tmp_path):
 def test_write_atomic_cleans_up_tempfile_on_failure(tmp_path, monkeypatch):
     """If os.replace raises, the tempfile is unlinked and exception re-raises."""
     import pytest
+
     from mthydra.controller.data_exit import config_writer
 
     def boom(*a, **kw):
@@ -270,6 +276,7 @@ def test_write_atomic_swallows_tempfile_missing_during_cleanup(tmp_path, monkeyp
     """If both replace fails and tmp file vanishes mid-cleanup, FileNotFoundError
     is swallowed and original exception still propagates."""
     import pytest
+
     from mthydra.controller.data_exit import config_writer
 
     def boom_replace(*a, **kw):

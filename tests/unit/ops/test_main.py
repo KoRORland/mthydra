@@ -6,15 +6,12 @@ the real binary installed.
 """
 from __future__ import annotations
 
-import io
 import json
 import subprocess
-import sys
 
 import pytest
 
 from mthydra.ops import main as ops_main
-
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -742,8 +739,8 @@ def test_bootstrap_generated_toml_satisfies_load_config_and_provision_seed(tmp_p
     [data_exit] block, and nothing ever loaded the generated config to check.
     Now we render the real template and run the real loader (2026-06-02).
     """
-    from mthydra.ops import main as m
     from mthydra.controller.config import load_config
+    from mthydra.ops import main as m
 
     cfg_path = tmp_path / "controller.toml"
     db_path = tmp_path / "state.sqlite"  # never created (fake run)
@@ -855,9 +852,10 @@ def test_controller_bin_resolves_to_venv_sibling():
     (regression: 2026-05-30 install run on AWS EC2)."""
     import sys as _sys
     from pathlib import Path as _Pp
+
     from mthydra.ops import main as m
     expected = str(_Pp(_sys.executable).parent / "mthydra-controller")
-    assert m._CONTROLLER_BIN == expected
+    assert expected == m._CONTROLLER_BIN
 
 
 def test_bootstrap_core_chowns_files_to_mthydra_best_effort(tmp_path,
@@ -1027,6 +1025,7 @@ def test_main_converts_called_process_error_to_clean_exit(monkeypatch, capsys):
     """A leaked CalledProcessError must surface the child's stderr cleanly
     and preserve its exit code, not traceback."""
     import subprocess as _sp
+
     from mthydra.ops import main as m
 
     def _boom(args):

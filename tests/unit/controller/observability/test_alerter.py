@@ -5,14 +5,12 @@ import pytest
 
 from mthydra.controller.observability.alerter import AlertSweep
 from mthydra.controller.observability.sinks import (
-    AlertPayload,
     DryRunSink,
     SinkResult,
 )
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.obligations import set_obligation
 from mthydra.controller.state.schema import apply_schema
-
 
 NOW = "2026-05-25T12:00:00Z"
 LATER = "2026-05-25T12:01:00Z"

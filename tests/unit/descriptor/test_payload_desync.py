@@ -1,7 +1,10 @@
 import pytest
 
 from mthydra.descriptor.payload import (
-    DescriptorPayload, EUExit, SCHEMA_V3, canonical_bytes,
+    SCHEMA_V3,
+    DescriptorPayload,
+    EUExit,
+    canonical_bytes,
 )
 
 
@@ -36,9 +39,9 @@ def test_v3_none_desync_strategy_omitted_from_blob():
 
 def test_v2_blob_with_desync_strategy_rejected():
     blob = (
-        '{"desync_strategy":"--dpi-desync=fake","eu_exit_set":[],"generation":1,'
-        '"issued_at":"x","next_signing_pubkey":null,"previous_generation_hash":null,'
-        '"schema":"mthydra.descriptor.v2","signing_key_gen":1,"valid_until":"y"}'
-    ).encode("utf-8")
+        b'{"desync_strategy":"--dpi-desync=fake","eu_exit_set":[],"generation":1,'
+        b'"issued_at":"x","next_signing_pubkey":null,"previous_generation_hash":null,'
+        b'"schema":"mthydra.descriptor.v2","signing_key_gen":1,"valid_until":"y"}'
+    )
     with pytest.raises(ValueError, match="desync_strategy only valid in v3"):
         DescriptorPayload.from_canonical_bytes(blob)

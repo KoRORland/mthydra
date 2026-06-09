@@ -3,10 +3,10 @@ from __future__ import annotations
 
 
 def test_register_started_inserts_eu_exit_set_row(tmp_path):
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.state.eu_nodes import add_eu_node, set_data_exit_identity
     from mthydra.controller.data_exit.exit_set import register_started
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import add_eu_node, set_data_exit_identity
+    from mthydra.controller.state.schema import apply_schema
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -32,10 +32,10 @@ def test_register_started_inserts_eu_exit_set_row(tmp_path):
 
 
 def test_clear_retires_row(tmp_path):
+    from mthydra.controller.data_exit.exit_set import clear, register_started
     from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
     from mthydra.controller.state.eu_nodes import add_eu_node, set_data_exit_identity
-    from mthydra.controller.data_exit.exit_set import register_started, clear
+    from mthydra.controller.state.schema import apply_schema
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -62,10 +62,10 @@ def test_clear_retires_row(tmp_path):
 
 def test_register_started_idempotent(tmp_path):
     """Calling twice doesn't double-insert; updates existing row."""
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.state.eu_nodes import add_eu_node, set_data_exit_identity
     from mthydra.controller.data_exit.exit_set import register_started
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import add_eu_node, set_data_exit_identity
+    from mthydra.controller.state.schema import apply_schema
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -93,9 +93,10 @@ def test_register_started_idempotent(tmp_path):
 def test_register_started_raises_key_error_for_missing_node(tmp_path):
     """Unknown node_id -> KeyError."""
     import pytest
+
+    from mthydra.controller.data_exit.exit_set import register_started
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.data_exit.exit_set import register_started
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -108,10 +109,11 @@ def test_register_started_raises_key_error_for_missing_node(tmp_path):
 def test_register_started_raises_value_error_for_missing_public_ip(tmp_path):
     """eu_node exists but public_ip is NULL -> ValueError."""
     import pytest
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.state.eu_nodes import add_eu_node
+
     from mthydra.controller.data_exit.exit_set import register_started
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import add_eu_node
+    from mthydra.controller.state.schema import apply_schema
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -129,10 +131,11 @@ def test_register_started_raises_value_error_for_missing_public_ip(tmp_path):
 def test_register_started_raises_value_error_for_missing_cover_sni(tmp_path):
     """public_ip present but cover_sni/reality_pubkey missing -> ValueError."""
     import pytest
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.state.eu_nodes import add_eu_node
+
     from mthydra.controller.data_exit.exit_set import register_started
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import add_eu_node
+    from mthydra.controller.state.schema import apply_schema
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -150,10 +153,10 @@ def test_register_started_raises_value_error_for_missing_cover_sni(tmp_path):
 
 def test_register_started_unretires_previously_retired_row(tmp_path):
     """If fingerprint exists but was retired, re-registering clears retired_at."""
+    from mthydra.controller.data_exit.exit_set import clear, register_started
     from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
     from mthydra.controller.state.eu_nodes import add_eu_node, set_data_exit_identity
-    from mthydra.controller.data_exit.exit_set import register_started, clear
+    from mthydra.controller.state.schema import apply_schema
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)
@@ -178,10 +181,10 @@ def test_register_started_unretires_previously_retired_row(tmp_path):
 
 def test_clear_noop_when_node_missing_or_public_ip_null(tmp_path):
     """clear() with unknown node OR null public_ip -> no-op, no exception."""
-    from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.state.eu_nodes import add_eu_node
     from mthydra.controller.data_exit.exit_set import clear
+    from mthydra.controller.state.db import connect
+    from mthydra.controller.state.eu_nodes import add_eu_node
+    from mthydra.controller.state.schema import apply_schema
 
     db = tmp_path / "state.sqlite"
     conn = connect(db)

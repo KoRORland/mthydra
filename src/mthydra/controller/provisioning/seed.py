@@ -104,7 +104,8 @@ class SeedBundle:
             # tmpfs mountpoint (satisfies hardening) and stays in RAM.
             "  - mount -t tmpfs -o nosuid,nodev,mode=0700 tmpfs /run/mthydra\n"
             "  - mkdir -p /etc/systemd/journald.conf.d\n"
-            "  - printf '[Journal]\\nStorage=volatile\\n' > /etc/systemd/journald.conf.d/99-mthydra.conf\n"
+            "  - printf '[Journal]\\nStorage=volatile\\n' > "
+            "/etc/systemd/journald.conf.d/99-mthydra.conf\n"
             "  - systemctl restart systemd-journald\n"
             "write_files:\n"
             "  - path: /run/mthydra/seed.json\n"
@@ -115,7 +116,8 @@ class SeedBundle:
             "runcmd:\n"
             "  - chmod 0700 /run/mthydra\n"
             "  - DEBIAN_FRONTEND=noninteractive apt-get update -y\n"
-            "  - DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-cryptography iptables\n"
+            "  - DEBIAN_FRONTEND=noninteractive apt-get install -y "
+            "python3 python3-cryptography iptables\n"
             # sing-box is the RU-side Reality client the agent's supervisor execs
             # (mtg is downloaded by the agent; sing-box must be on PATH).
             "  - curl -fsSL https://sing-box.app/install.sh | sh\n"

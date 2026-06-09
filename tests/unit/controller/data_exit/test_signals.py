@@ -9,6 +9,7 @@ def test_sighup_via_systemctl(monkeypatch):
 
 def test_sighup_failure_raises(monkeypatch):
     import pytest
+
     from mthydra.controller.data_exit import signals
     monkeypatch.setattr(signals.subprocess, "run",
                         lambda *a, **kw: type("R", (), {"returncode": 1, "stderr": b"oops"})())
@@ -27,6 +28,7 @@ def test_restart_via_systemctl(monkeypatch):
 
 def test_restart_failure_raises(monkeypatch):
     import pytest
+
     from mthydra.controller.data_exit import signals
     monkeypatch.setattr(signals.subprocess, "run",
                         lambda *a, **kw: type("R", (), {"returncode": 1, "stderr": b"nope"})())

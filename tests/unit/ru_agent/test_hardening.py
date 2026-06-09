@@ -125,6 +125,7 @@ def test_journald_volatile_false_when_journalctl_missing(monkeypatch):
 
 def test_journald_volatile_false_on_timeout(monkeypatch):
     import subprocess as sp
+
     from mthydra.ru_agent import hardening
 
     def fake_run(*a, **kw):
@@ -233,8 +234,9 @@ def test_path_on_tmpfs_false_when_proc_mounts_missing(monkeypatch):
 
 
 def test_verify_all_raises_on_run_mthydra_not_tmpfs(monkeypatch):
-    from mthydra.ru_agent import hardening
     import pytest
+
+    from mthydra.ru_agent import hardening
     monkeypatch.setattr(hardening, "_swap_disabled", lambda: True)
     monkeypatch.setattr(hardening, "_journald_volatile", lambda: True)
     monkeypatch.setattr(hardening, "_core_pattern_disabled", lambda: True)

@@ -10,8 +10,8 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
-from mthydra.controller.state import shards as _shards
 from mthydra import proxy_link
+from mthydra.controller.state import shards as _shards
 
 
 @dataclass(frozen=True)

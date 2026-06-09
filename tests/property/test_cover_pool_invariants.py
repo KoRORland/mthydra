@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import sqlite3
 
-import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from mthydra.controller.state.cover_pool import (
-    add_candidate, assign_to_box, attest_verified,
-    downgrade_stale_verified, rotate_and_burn,
+    add_candidate,
+    assign_to_box,
+    attest_verified,
+    downgrade_stale_verified,
+    rotate_and_burn,
 )
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.ru_boxes import insert_box, mark_live

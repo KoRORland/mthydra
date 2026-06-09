@@ -5,7 +5,6 @@ import pytest
 
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.distribution_log import (
-    DistributionLogEntry,
     append,
     last_subset_hash,
     recent,

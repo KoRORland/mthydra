@@ -88,7 +88,8 @@ def evaluate_promotion_gate(
     # W-2: same auto-tune as the kill-decision evaluator. A 1-vantage MVP
     # can't satisfy "distinct_vantages >= 2"; auto-derive from fleet.
     from mthydra.controller.probe.evaluator import (
-        count_active_vantages, effective_min_distinct_vantages,
+        count_active_vantages,
+        effective_min_distinct_vantages,
     )
     effective_min = effective_min_distinct_vantages(
         active_count=count_active_vantages(conn),
@@ -129,7 +130,6 @@ def evaluate_promotion_gate(
             r[0] for r in canary_rows if r[1] == "live"
         )
         if live_canaries:
-            placeholders = ",".join("?" * len(live_canaries))
             keys = [f"probe_kill_pending::{b}" for b in live_canaries]
             for k in keys:
                 row = conn.execute(

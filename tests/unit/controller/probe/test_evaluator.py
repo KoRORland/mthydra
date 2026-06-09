@@ -14,7 +14,6 @@ from mthydra.controller.state.probe_results import record
 from mthydra.controller.state.probe_vantages import add_candidate, attest_active
 from mthydra.controller.state.schema import apply_schema
 
-
 CFG = ProbeConfigView(
     soft_fail_window_M=4,
     soft_fail_threshold_N=3,
@@ -187,9 +186,9 @@ def test_effective_min_explicit_config_respected_when_fleet_is_bigger():
 
 def test_count_active_vantages_filters_state(tmp_path):
     """Only vantages in state='active' count toward the auto-tune."""
+    from mthydra.controller.probe.evaluator import count_active_vantages
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.probe.evaluator import count_active_vantages
     db = tmp_path / "s.sqlite"
     c = connect(db)
     apply_schema(c)

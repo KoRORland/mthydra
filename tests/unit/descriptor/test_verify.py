@@ -1,7 +1,8 @@
 """Tests for the pure-Python descriptor verifier (spec B §7)."""
 import pytest
 
-from mthydra.descriptor.keys import generate_keypair, sign as ed_sign
+from mthydra.descriptor.keys import generate_keypair
+from mthydra.descriptor.keys import sign as ed_sign
 from mthydra.descriptor.payload import (
     DescriptorPayload,
     EUExit,
@@ -266,6 +267,7 @@ def test_verifier_accepts_v2_descriptor_with_per_exit_fields():
 def test_v1_descriptor_with_cover_sni_field_rejected():
     """v1 must not carry the new per-exit fields (would be silently ignored otherwise)."""
     import json as _json
+
     from mthydra.descriptor.payload import SCHEMA_V1
     priv, pub = generate_keypair()
     p = DescriptorPayload(

@@ -8,7 +8,6 @@ import pytest
 
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.probe_vantages import (
-    ProbeVantage,
     add_candidate,
     attest_active,
     burn,

@@ -14,7 +14,6 @@ from mthydra.controller.state.probe_vantages import add_candidate, attest_active
 from mthydra.controller.state.ru_boxes import insert_box, mark_live, mark_terminated
 from mthydra.controller.state.schema import apply_schema
 
-
 NOW = "2026-05-25T12:00:00Z"
 CFG = GateConfigView(
     min_canary_boxes=1, min_cycles_per_box=4, min_distinct_vantages=2,

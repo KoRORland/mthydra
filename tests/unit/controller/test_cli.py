@@ -2,14 +2,14 @@
 import json
 import shutil
 import subprocess
+from datetime import UTC
+from unittest.mock import patch
 
 import boto3
 import pytest
 from moto import mock_aws
-from unittest.mock import patch
 
 from mthydra.controller.cli import build_parser, run
-from mthydra.controller.bootstrap import init_state
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.obligations import list_obligations
 
@@ -179,7 +179,7 @@ def test_backup_now_performs_real_backup(tmp_path):
     import subprocess as _sp
     # Generate a real age keypair
     keyfile = tmp_path / "id.key"
-    r = _sp.run(["age-keygen", "-o", str(keyfile)], capture_output=True, text=True, check=True)
+    _sp.run(["age-keygen", "-o", str(keyfile)], capture_output=True, text=True, check=True)
     recipient = next(
         line.removeprefix("# public key: ").strip()
         for line in keyfile.read_text().splitlines()
@@ -305,7 +305,7 @@ def test_obligation_proven_cadence_from_config(tmp_path):
     conn = connect(db)
     obs = {o.obligation_id: o for o in list_obligations(conn)}
     # next_due_at should be last_proven_at + 168h, not + 720h
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime
     proven = datetime.fromisoformat(obs["t1_dormant_health"].last_proven_at.replace("Z", "+00:00"))
     due = datetime.fromisoformat(obs["t1_dormant_health"].next_due_at.replace("Z", "+00:00"))
     delta_hours = (due - proven).total_seconds() / 3600
@@ -502,9 +502,9 @@ def test_rotate_provider_credential_stamps_rotation_reminder(tmp_path):
     assert "credential_rotation_proven::b2" in obs
     ob = obs["credential_rotation_proven::b2"]
     # Default for b2 is 180d.
-    from datetime import datetime, timezone
-    lpa = datetime.strptime(ob.last_proven_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    nda = datetime.strptime(ob.next_due_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    from datetime import datetime
+    lpa = datetime.strptime(ob.last_proven_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    nda = datetime.strptime(ob.next_due_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     days = (nda - lpa).days
     assert 179 <= days <= 181
 
@@ -524,9 +524,9 @@ def test_rotate_provider_credential_honors_rotation_days_override(tmp_path):
     obs = {o.obligation_id: o for o in list_obligations(conn)}
     conn.close()
     ob = obs["credential_rotation_proven::aws"]
-    from datetime import datetime, timezone
-    lpa = datetime.strptime(ob.last_proven_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    nda = datetime.strptime(ob.next_due_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    from datetime import datetime
+    lpa = datetime.strptime(ob.last_proven_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    nda = datetime.strptime(ob.next_due_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     days = (nda - lpa).days
     assert 29 <= days <= 31
 
@@ -627,10 +627,21 @@ def test_build_destination_uses_override_bucket_in_dryrun(tmp_path):
     """In dryrun mode, _build_destination must point at bucket_override, not cfg.backup.bucket."""
     from mthydra.controller.cli import _build_destination
     from mthydra.controller.config import (
-        BackupConfig, Config, CoverPoolConfig, DescriptorConfig,
-        DistributionConfig, GapMonitorConfig, ImageCanaryConfig, ImageConfig,
-        NodeConfig, ObligationsConfig, ObservabilityConfig, ProbeConfig,
-        RetentionConfig, ShardManagerConfig, StandbyConfig,
+        BackupConfig,
+        Config,
+        CoverPoolConfig,
+        DescriptorConfig,
+        DistributionConfig,
+        GapMonitorConfig,
+        ImageCanaryConfig,
+        ImageConfig,
+        NodeConfig,
+        ObligationsConfig,
+        ObservabilityConfig,
+        ProbeConfig,
+        RetentionConfig,
+        ShardManagerConfig,
+        StandbyConfig,
     )
 
     cfg = Config(
@@ -748,10 +759,21 @@ def test_build_destination_derives_region_from_aws_endpoint(monkeypatch, tmp_pat
     monkeypatch.delenv("MTHYDRA_BACKUP_REGION", raising=False)
     from mthydra.controller.cli import _build_destination
     from mthydra.controller.config import (
-        BackupConfig, Config, CoverPoolConfig, DescriptorConfig,
-        DistributionConfig, GapMonitorConfig, ImageCanaryConfig, ImageConfig,
-        NodeConfig, ObligationsConfig, ObservabilityConfig, ProbeConfig,
-        RetentionConfig, ShardManagerConfig, StandbyConfig,
+        BackupConfig,
+        Config,
+        CoverPoolConfig,
+        DescriptorConfig,
+        DistributionConfig,
+        GapMonitorConfig,
+        ImageCanaryConfig,
+        ImageConfig,
+        NodeConfig,
+        ObligationsConfig,
+        ObservabilityConfig,
+        ProbeConfig,
+        RetentionConfig,
+        ShardManagerConfig,
+        StandbyConfig,
     )
 
     def _mk_cfg(endpoint: str) -> Config:
@@ -1188,6 +1210,7 @@ def test_cover_list_default_shows_all_states(tmp_path, age_recipient, capsys):
 
 def test_cover_list_json_output_schema(tmp_path, age_recipient, capsys):
     import json
+
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     run([
@@ -1216,7 +1239,9 @@ def test_cover_rotate_burns_in_use_domain(tmp_path, age_recipient):
         "--provider-credential", "b2=id:secret",
     ])
     from mthydra.controller.state.cover_pool import (
-        add_candidate, assign_to_box, attest_verified,
+        add_candidate,
+        assign_to_box,
+        attest_verified,
     )
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_boxes import insert_box, mark_live
@@ -1274,7 +1299,9 @@ def test_cover_due_lists_overdue_and_stale(tmp_path, age_recipient, capsys):
     ])
 
     from mthydra.controller.state.cover_pool import (
-        add_candidate, assign_to_box, attest_verified,
+        add_candidate,
+        assign_to_box,
+        attest_verified,
     )
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_boxes import insert_box, mark_live
@@ -1313,6 +1340,7 @@ def test_cover_due_lists_overdue_and_stale(tmp_path, age_recipient, capsys):
 
 def test_cover_pool_stats_json(tmp_path, age_recipient, capsys):
     import json
+
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     cfg_path = tmp_path / "controller.toml"
@@ -1425,6 +1453,7 @@ def test_eu_node_retire_happy(tmp_path, age_recipient):
 
 def test_eu_node_list_json(tmp_path, age_recipient, capsys):
     import json
+
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     run(["init", "--db-path", str(db),
@@ -1453,8 +1482,8 @@ def test_eu_node_add_refused_on_standby(tmp_path, age_recipient, capsys):
 
 def test_serve_arms_cover_pool_sweeps_in_offline_mode(tmp_path, age_recipient, monkeypatch):
     """Smoke: serve with --mode offline arms the sweeps as no-ops and returns 0 quickly."""
-    import signal
     import pathlib
+
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     cfg_path = tmp_path / "controller.toml"
@@ -1570,6 +1599,7 @@ def test_standby_drill_proven_case_b_proves_caseB(tmp_path, age_recipient):
 def test_serve_standby_arms_publisher_not_orchestrator(tmp_path, age_recipient, monkeypatch):
     """Standby serve loop: heartbeat publisher armed; backup/descriptor/cover-pool NOT."""
     import threading as _t
+
     from mthydra.controller.cli import run
 
     db = tmp_path / "state.sqlite"
@@ -1708,6 +1738,7 @@ def test_image_build_refuses_empty_profile_json(tmp_path, age_recipient, capsys,
 
 def test_image_list_json(tmp_path, age_recipient, capsys):
     import json
+
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     cfg_path = tmp_path / "controller.toml"
@@ -2034,6 +2065,7 @@ def test_serve_arms_upstream_tracker(tmp_path, age_recipient, monkeypatch):
     cover-pool sweeps + heartbeat poller."""
     import pathlib
     import threading as _t
+
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     cfg_path = tmp_path / "controller.toml"
@@ -2084,6 +2116,7 @@ def test_serve_refuses_when_startup_check_fails(tmp_path, age_recipient, monkeyp
     """M12: serve validates local state and refuses (rc 10) instead of arming
     wheels against a broken config — here, a corrupted age recipient."""
     import pathlib
+
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     cfg_path = tmp_path / "controller.toml"
@@ -2118,9 +2151,9 @@ def _setup_provision_prereqs(db, age_recipient, cfg_path):
     """Build a DB that's ready for provision-seed: migrate authority,
     promote image, attest cover-domain, sign descriptor."""
     from mthydra.controller.cli import run
+    from mthydra.controller.state.cover_pool import add_candidate, attest_verified
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_images import insert_candidate, promote
-    from mthydra.controller.state.cover_pool import add_candidate, attest_verified
 
     run(["init", "--db-path", str(db),
          "--age-recipient", age_recipient,
@@ -2177,6 +2210,7 @@ def test_provision_seed_cloud_init_default(tmp_path, age_recipient, capsys, monk
 
 def test_provision_seed_json_format(tmp_path, age_recipient, capsys, monkeypatch):
     import json
+
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     cfg_path = tmp_path / "controller.toml"
@@ -2252,6 +2286,7 @@ def test_ru_box_list_empty_default(tmp_path, age_recipient, capsys):
 
 def test_ru_box_list_json_after_provision(tmp_path, age_recipient, capsys, monkeypatch):
     import json
+
     from mthydra.controller.cli import run
     db = tmp_path / "state.sqlite"
     cfg_path = tmp_path / "controller.toml"
@@ -2324,8 +2359,8 @@ def test_ru_box_terminate_burns_sni_and_revokes_credentials(tmp_path, age_recipi
     run(["provision-seed", "--provider", "hetzner", "--region", "fsn1",
          "--db-path", str(db), "--config", str(cfg_path),
          *_PROVISION_V2_ARGS])
-    from mthydra.controller.state.db import connect
     from mthydra.controller.state.burned import is_burned
+    from mthydra.controller.state.db import connect
     conn = connect(db)
     box_id, sni = conn.execute("SELECT box_id, sni FROM ru_boxes LIMIT 1").fetchone()
     conn.close()
@@ -2423,7 +2458,8 @@ def _setup_eu_node_with_identity(db, cfg_path_str, age_recipient, node_id="eu1")
     from mthydra.controller.cli import run
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.eu_nodes import (
-        add_eu_node, set_data_exit_identity,
+        add_eu_node,
+        set_data_exit_identity,
     )
     run(["init", "--db-path", str(db),
          "--age-recipient", age_recipient,
@@ -2455,7 +2491,8 @@ def test_data_exit_config_show_emits_json(tmp_path, age_recipient, capsys, monke
          "--provider-credential", "b2=id:secret"])
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.eu_nodes import (
-        add_eu_node, set_data_exit_identity,
+        add_eu_node,
+        set_data_exit_identity,
     )
     conn = connect(db)
     add_eu_node(conn, node_id="eu1", hostname="eu1.example",
@@ -2531,7 +2568,6 @@ def test_data_exit_reality_keygen_creates_keypair(tmp_path, age_recipient, monke
         reality_key_path=str(key_path),
     ))
     # Stub `sing-box generate reality-keypair` output.
-    import subprocess
     real_run = subprocess.run
     def fake_run(cmd, **kw):
         if cmd[:3] == ["sing-box", "generate", "reality-keypair"]:
@@ -2804,6 +2840,7 @@ def test_cli_shard_stats_json(tmp_path, age_recipient, capsys):
 def _make_live_box_in_shard(db, box_id, shard_id, target_size=2, members=None):
     """Helper: insert a live box bound to an existing shard, with credential + reality_uuid."""
     import json as _json
+
     from mthydra.controller.state.credentials import issue_credential
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.ru_boxes import insert_box, mark_live

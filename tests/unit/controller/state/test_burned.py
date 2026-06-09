@@ -1,7 +1,12 @@
 import pytest
 
 from mthydra.controller.state.burned import is_burned, mark_burned
-from mthydra.controller.state.cover_pool import add_candidate, list_by_state, attest_verified, assign_to_box
+from mthydra.controller.state.cover_pool import (
+    add_candidate,
+    assign_to_box,
+    attest_verified,
+    list_by_state,
+)
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema
 

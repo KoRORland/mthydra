@@ -99,8 +99,9 @@ def test_triggers_present(tmp_db_path):
 
 def test_v2_to_v3_migration_adds_column_and_triggers(tmp_db_path):
     import sqlite3
+
     from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema, migrate_v2_to_v3
+    from mthydra.controller.state.schema import migrate_v2_to_v3
     # Manually construct a v2 DB (no entered_in_use_at, no triggers)
     conn = connect(tmp_db_path)
     conn.executescript(
@@ -148,6 +149,7 @@ def test_node_state_table_present_and_seeded_active(tmp_db_path):
 
 def test_node_state_singleton_rejects_second_row(tmp_db_path):
     import sqlite3
+
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
     conn = connect(tmp_db_path)
@@ -1234,7 +1236,7 @@ def test_v13_to_v14_migration_idempotent(tmp_path):
 
 def test_v16_tables_created_no_default_shard_seeded(tmp_path):
     from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema, SCHEMA_VERSION
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
     c = connect(tmp_path / "s.sqlite")
     apply_schema(c)
     assert SCHEMA_VERSION >= 16
@@ -1253,7 +1255,7 @@ def test_v15_to_v16_upgrade_creates_tables(tmp_path):
     # Simulate a pre-v16 DB: drop the v16 tables and set version back to 15,
     # then re-apply so migrate_v15_to_v16 runs its CREATE TABLE path.
     from mthydra.controller.state.db import connect
-    from mthydra.controller.state.schema import apply_schema, SCHEMA_VERSION
+    from mthydra.controller.state.schema import SCHEMA_VERSION, apply_schema
     c = connect(tmp_path / "s.sqlite")
     apply_schema(c)
     c.execute("DROP TABLE pending_enrollments")

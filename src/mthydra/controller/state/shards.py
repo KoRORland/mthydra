@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC
 
 from mthydra.controller.state import audit
 
@@ -38,11 +39,11 @@ class ShardHealth:
 
 def _parse_iso(ts: str) -> int:
     """ISO-8601 'Z' timestamp -> POSIX seconds. Lightweight, no tz lib."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     return int(
         datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
-        .replace(tzinfo=timezone.utc)
+        .replace(tzinfo=UTC)
         .timestamp()
     )
 

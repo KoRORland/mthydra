@@ -6,9 +6,9 @@ import hashlib
 import json
 import os
 import tarfile
-from pathlib import Path
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from mthydra.ops import agent_ops
@@ -317,10 +317,11 @@ def test_get_s3_credentials_uses_config_keyid_when_secret_only(monkeypatch, tmp_
 
 def test_get_s3_credentials_raises_on_empty_secret(monkeypatch, tmp_path):
     """Defensive: 'KEY:' (key with empty secret) is malformed."""
+    import pytest
+
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
     from mthydra.controller.state.tokens import set_provider_credential
-    import pytest
 
     db = tmp_path / "s.sqlite"
     c = connect(db)
@@ -335,10 +336,11 @@ def test_get_s3_credentials_raises_on_empty_secret(monkeypatch, tmp_path):
 def test_get_s3_credentials_raises_when_secret_only_and_no_config_keyid(monkeypatch, tmp_path):
     """Defensive: secret-only credential AND empty config.backup.access_key_id
     leaves us with nothing to use as the AWS access key id — fail clearly."""
+    import pytest
+
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
     from mthydra.controller.state.tokens import set_provider_credential
-    import pytest
 
     db = tmp_path / "s.sqlite"
     c = connect(db)
@@ -362,6 +364,7 @@ def test_get_s3_credentials_raises_when_secret_only_and_no_config_keyid(monkeypa
 
 def _real_backup_cfg(endpoint: str, bucket: str, access_key_id: str = "AKIACFG"):
     from types import SimpleNamespace
+
     from mthydra.controller.config import BackupConfig, RetentionConfig
     return SimpleNamespace(backup=BackupConfig(
         floor_interval_hours=24,
@@ -436,10 +439,11 @@ def test_agent_publish_full_cli_dispatch_real_path(monkeypatch, tmp_path):
     (2026-06-02)."""
     import boto3
     from moto import mock_aws
-    from mthydra.ops import main as ops_main
+
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
     from mthydra.controller.state.tokens import set_provider_credential
+    from mthydra.ops import main as ops_main
 
     monkeypatch.delenv("MTHYDRA_BACKUP_REGION", raising=False)
     toml = (

@@ -27,7 +27,8 @@ def insert_signing_key(
     conn: sqlite3.Connection, generation: int, privkey: bytes, pubkey: bytes, created_at: str
 ) -> None:
     conn.execute(
-        "INSERT INTO descriptor_signing_key (generation, privkey, pubkey, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO descriptor_signing_key (generation, privkey, pubkey, created_at) "
+        "VALUES (?, ?, ?, ?)",
         (generation, privkey, pubkey, created_at),
     )
     conn.commit()

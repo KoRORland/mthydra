@@ -5,8 +5,12 @@ from mthydra.controller.state.audit import recent_events
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.obligations import list_obligations, set_obligation
 from mthydra.controller.state.ru_images import (
-    RUImage, current_promoted, get_image, insert_candidate, list_images,
-    promote, retire,
+    current_promoted,
+    get_image,
+    insert_candidate,
+    list_images,
+    promote,
+    retire,
 )
 from mthydra.controller.state.schema import apply_schema
 

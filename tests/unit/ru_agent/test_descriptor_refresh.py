@@ -116,7 +116,7 @@ def test_refresh_terminates_after_6h_of_failures(tmp_path):
         trust_anchors=[anchor],
         initial_descriptor=blob,
         rewrite_fn=lambda b: None,
-        fetch_fn=lambda url, ims: (_ for _ in ()).throw(IOError("boom")),
+        fetch_fn=lambda url, ims: (_ for _ in ()).throw(OSError("boom")),
         terminate_fn=lambda r: terminated.append(r),
         clock=lambda: 1.0,
     )
@@ -247,9 +247,10 @@ def test_tick_not_modified_is_success_never_terminates():
 
 def test_fetch_b2_304_returns_not_modified_sentinel(monkeypatch):
     """_fetch_b2 maps a 304 HTTPError to the NOT_MODIFIED sentinel, not an exception."""
-    from mthydra.ru_agent import descriptor_refresh
-    import urllib.request
     import urllib.error
+    import urllib.request
+
+    from mthydra.ru_agent import descriptor_refresh
 
     def fake_urlopen(req, timeout=None):
         raise urllib.error.HTTPError(
@@ -264,9 +265,10 @@ def test_fetch_b2_304_returns_not_modified_sentinel(monkeypatch):
 
 def test_fetch_b2_non_304_http_error_propagates(monkeypatch):
     """A 500 (or any non-304) HTTPError still propagates so tick() counts it."""
-    from mthydra.ru_agent import descriptor_refresh
-    import urllib.request
     import urllib.error
+    import urllib.request
+
+    from mthydra.ru_agent import descriptor_refresh
 
     def fake_urlopen(req, timeout=None):
         raise urllib.error.HTTPError(
@@ -280,8 +282,9 @@ def test_fetch_b2_non_304_http_error_propagates(monkeypatch):
 
 def test_fetch_b2_smoke(monkeypatch):
     """_fetch_b2 builds a Request, optionally adds If-Modified-Since, and reads."""
-    from mthydra.ru_agent import descriptor_refresh
     import urllib.request
+
+    from mthydra.ru_agent import descriptor_refresh
 
     class _R:
         headers = {"Last-Modified": "Sun, 23 May 2026 00:00:00 GMT"}

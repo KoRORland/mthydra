@@ -1,8 +1,8 @@
 """Routine descriptor rotation via APScheduler (spec B §8 R1, all-synchronous per plan §16.3)."""
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
+from datetime import UTC
 from pathlib import Path
 
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -58,7 +58,7 @@ class DescriptorRotator:
         return self._rotate() or -1
 
     def _rotate(self) -> int | None:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         from mthydra.controller.state.db import connect
         from mthydra.descriptor.sign import SignError, sign_new_descriptor
@@ -66,7 +66,7 @@ class DescriptorRotator:
         def _now() -> str:
             if self._clock:
                 return self._clock()
-            return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         now = _now()
         now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))

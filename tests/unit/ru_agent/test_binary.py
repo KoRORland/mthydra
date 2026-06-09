@@ -1,4 +1,5 @@
 import hashlib
+
 import pytest
 
 
@@ -67,8 +68,9 @@ def test_download_rejects_sha_mismatch(tmp_path, monkeypatch):
 
 
 def test_download_rejects_http_error(tmp_path, monkeypatch):
-    from mthydra.ru_agent import binary
     import urllib.error
+
+    from mthydra.ru_agent import binary
 
     def fake_urlopen(req, timeout=None):
         raise urllib.error.HTTPError(
@@ -104,8 +106,9 @@ def test_download_rejects_status_ge_400(tmp_path, monkeypatch):
 
 
 def test_download_rejects_url_error(tmp_path, monkeypatch):
-    from mthydra.ru_agent import binary
     import urllib.error
+
+    from mthydra.ru_agent import binary
 
     def fake_urlopen(req, timeout=None):
         raise urllib.error.URLError("DNS fail")

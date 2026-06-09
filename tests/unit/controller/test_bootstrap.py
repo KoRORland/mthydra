@@ -1,5 +1,4 @@
 """Tests for first-run bootstrap (spec A §10.1 + spec B Ed25519 key generation)."""
-import shutil
 
 import pytest
 

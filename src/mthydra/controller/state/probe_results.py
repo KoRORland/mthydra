@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC
 
 
 @dataclass(frozen=True)
@@ -97,9 +98,9 @@ def distinct_vantages_in_window(
     conn: sqlite3.Connection, box_id: str, *, window_seconds: int, now: str,
 ) -> list[str]:
     """Return vantages that submitted at least one row in (now-window, now]."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    now_dt = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    now_dt = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     start = (now_dt - timedelta(seconds=window_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = conn.execute(
         "SELECT DISTINCT vantage_id FROM probe_results "

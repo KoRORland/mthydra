@@ -1,5 +1,6 @@
 import base64
 import json
+
 import pytest
 
 
@@ -40,13 +41,13 @@ def test_load_valid_seed(tmp_path):
 
 
 def test_load_rejects_missing_file(tmp_path):
-    from mthydra.ru_agent.seed import load, SeedError
+    from mthydra.ru_agent.seed import SeedError, load
     with pytest.raises(SeedError, match="not found"):
         load(tmp_path / "missing.json")
 
 
 def test_load_rejects_malformed_json(tmp_path):
-    from mthydra.ru_agent.seed import load, SeedError
+    from mthydra.ru_agent.seed import SeedError, load
     p = tmp_path / "bad.json"
     p.write_text("not-json")
     with pytest.raises(SeedError, match="not valid JSON"):
@@ -54,7 +55,7 @@ def test_load_rejects_malformed_json(tmp_path):
 
 
 def test_load_rejects_wrong_schema(tmp_path):
-    from mthydra.ru_agent.seed import load, SeedError
+    from mthydra.ru_agent.seed import SeedError, load
     p = tmp_path / "seed.json"
     p.write_text(json.dumps(_make_seed_dict(schema="mthydra.ru_seed.v99")))
     with pytest.raises(SeedError, match="unsupported seed schema"):
@@ -62,7 +63,7 @@ def test_load_rejects_wrong_schema(tmp_path):
 
 
 def test_load_rejects_missing_required_field(tmp_path):
-    from mthydra.ru_agent.seed import load, SeedError
+    from mthydra.ru_agent.seed import SeedError, load
     d = _make_seed_dict()
     del d["reality_uuid"]
     p = tmp_path / "seed.json"
@@ -75,7 +76,8 @@ def test_verify_credential_round_trip(tmp_path):
     """A seed whose onward_credential validates against authority_pubkey_pem
     passes verify_credential()."""
     from mthydra.descriptor.authority import (
-        generate_authority_keypair, sign_onward_credential,
+        generate_authority_keypair,
+        sign_onward_credential,
     )
     from mthydra.ru_agent.seed import load, verify_credential
     priv, pub = generate_authority_keypair()
@@ -96,9 +98,10 @@ def test_verify_credential_round_trip(tmp_path):
 
 def test_verify_credential_rejects_mismatched_box_id(tmp_path):
     from mthydra.descriptor.authority import (
-        generate_authority_keypair, sign_onward_credential,
+        generate_authority_keypair,
+        sign_onward_credential,
     )
-    from mthydra.ru_agent.seed import load, verify_credential, SeedError
+    from mthydra.ru_agent.seed import SeedError, load, verify_credential
     priv, pub = generate_authority_keypair()
     cred = sign_onward_credential(
         priv, box_id="WRONG", issued_at="2026-05-23T00:00:00Z",

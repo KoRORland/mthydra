@@ -191,6 +191,7 @@ def test_detect_host_arch_mapping():
     """Auto-detect maps platform.machine() to mtg release-asset arch suffix.
     Covers the common Linux machines an EU controller might run on."""
     import platform
+
     from mthydra.ops import image_ops as io
     real = platform.machine
     try:

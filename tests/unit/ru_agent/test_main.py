@@ -11,8 +11,6 @@ journal. Discovered 2026-06-02 bringing up the first RU box: it imported fine
 """
 from __future__ import annotations
 
-import pytest
-
 from mthydra.ru_agent import __main__ as agent_main
 from mthydra.ru_agent import binary, hardening
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -37,13 +37,13 @@ from mthydra.controller.state.obligations import set_obligation
 
 
 def _default_clock() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _parse_iso(ts: str) -> int:
     return int(
         datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
-        .replace(tzinfo=timezone.utc).timestamp()
+        .replace(tzinfo=UTC).timestamp()
     )
 
 

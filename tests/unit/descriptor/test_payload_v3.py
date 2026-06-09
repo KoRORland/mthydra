@@ -1,7 +1,10 @@
 import pytest
 
 from mthydra.descriptor.payload import (
-    DescriptorPayload, EUExit, SCHEMA_V3, canonical_bytes,
+    SCHEMA_V3,
+    DescriptorPayload,
+    EUExit,
+    canonical_bytes,
 )
 
 
@@ -51,11 +54,11 @@ def test_v3_empty_fingerprints_roundtrips_to_none():
 
 def test_v2_blob_with_tls_fingerprints_rejected():
     blob = (
-        '{"eu_exit_set":[],"generation":1,"issued_at":"x","next_signing_pubkey":null,'
-        '"previous_generation_hash":null,"schema":"mthydra.descriptor.v2",'
-        '"signing_key_gen":1,"tls_fingerprints":[{"fp":"chrome","weight":60}],'
-        '"valid_until":"y"}'
-    ).encode("utf-8")
+        b'{"eu_exit_set":[],"generation":1,"issued_at":"x","next_signing_pubkey":null,'
+        b'"previous_generation_hash":null,"schema":"mthydra.descriptor.v2",'
+        b'"signing_key_gen":1,"tls_fingerprints":[{"fp":"chrome","weight":60}],'
+        b'"valid_until":"y"}'
+    )
     with pytest.raises(ValueError, match="tls_fingerprints only valid in v3"):
         DescriptorPayload.from_canonical_bytes(blob)
 

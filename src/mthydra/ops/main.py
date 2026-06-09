@@ -34,6 +34,7 @@ import subprocess
 import sys
 import textwrap
 from collections.abc import Callable
+from datetime import UTC
 from pathlib import Path
 
 # Defaults — override via flags or env.
@@ -93,7 +94,7 @@ def _run_controller_capture_both(*args: str) -> subprocess.CompletedProcess:
     _say(f"$ {' '.join(cmd)}")
     return subprocess.run(
         cmd, check=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        capture_output=True, text=True,
     )
 
 
@@ -393,7 +394,7 @@ def bootstrap_core(
     """init (if DB absent) + authority-migrate + write controller.toml (if absent)
     + write age-recipient.txt (next to the config). `run` matches _run_controller's
     signature; all secrets travel via the child env, never argv."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     db, cfg = Path(db_path), Path(config_path)
     if operator_email is None:
@@ -419,7 +420,7 @@ def bootstrap_core(
         say(f"step 3/4: write {cfg}")
         cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text(_TOML_TEMPLATE.format(
-            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             hostname=hostname,
             operator_email=operator_email,
             # Placeholder cover SNI so [data_exit] parses; operator replaces
@@ -645,9 +646,9 @@ def cmd_daily_check(args: argparse.Namespace) -> int:
 
 def cmd_monthly_compact(args: argparse.Namespace) -> int:
     """Compact log rows older than --days (default 30). Dry-run first."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=args.days)).strftime(
+    cutoff = (datetime.now(UTC) - timedelta(days=args.days)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     _say(f"step 1/2: dry-run compaction (cutoff={cutoff})")
@@ -911,10 +912,8 @@ def cmd_ru_provision(args) -> int:
     if args.cloud_init_out:
         out_path = Path(args.cloud_init_out)
         out_path.write_text(cloud_init)
-        try:
+        with contextlib.suppress(OSError):
             out_path.chmod(0o600)
-        except OSError:
-            pass
         _say(f"cloud-init written to {out_path} (mode 0600)")
     else:
         print(cloud_init)
@@ -997,7 +996,8 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--config", default=_DEFAULT_CONFIG)
 
     dc = sub.add_parser("daily-check",
-                          help="obligation/anti/recent-alert summary; exit 1 if any crit anti-obligation")
+                          help="obligation/anti/recent-alert summary; "
+                               "exit 1 if any crit anti-obligation")
     dc.add_argument("--db-path", default=_DEFAULT_DB)
 
     mc = sub.add_parser("monthly-compact",
@@ -1226,7 +1226,8 @@ def build_parser() -> argparse.ArgumentParser:
     upg.add_argument("--no-auto-rollback", action="store_true",
                      help="do NOT auto-revert to prior SHA on verify failure")
     upg.add_argument("--allow-schema-migration", action="store_true",
-                     help="acknowledge that this upgrade will perform a forward-only schema migration")
+                     help="acknowledge that this upgrade will perform a "
+                          "forward-only schema migration")
     upg.add_argument("--src-dir", default="/opt/mthydra/src",
                      help="path to the controller git checkout")
     upg.add_argument("--venv-dir", default="/opt/mthydra/venv",

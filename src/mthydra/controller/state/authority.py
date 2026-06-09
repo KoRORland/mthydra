@@ -18,7 +18,8 @@ def insert_authority(
     conn: sqlite3.Connection, generation: int, privkey_pem: str, pubkey_pem: str, created_at: str
 ) -> None:
     conn.execute(
-        "INSERT INTO credential_authority (generation, privkey_pem, pubkey_pem, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO credential_authority (generation, privkey_pem, pubkey_pem, created_at) "
+        "VALUES (?, ?, ?, ?)",
         (generation, privkey_pem, pubkey_pem, created_at),
     )
     conn.commit()

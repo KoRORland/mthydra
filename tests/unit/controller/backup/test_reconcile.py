@@ -8,7 +8,6 @@ from mthydra.controller.backup.s3_dest import S3Destination
 from mthydra.controller.state.backup_log import (
     BackupTrigger,
     list_pending_reconciliation,
-    next_generation,
     record_pushed,
     record_started,
 )

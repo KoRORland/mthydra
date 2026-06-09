@@ -9,6 +9,7 @@ stdlib only: smtplib + email.message.EmailMessage + urllib.request.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import ssl
 from collections.abc import Callable
@@ -80,12 +81,12 @@ class TelegramDistributionSink:
         for k, v in fields.items():
             parts.append(
                 (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\""
-                 f"\r\n\r\n{v}\r\n").encode("utf-8"))
+                 f"\r\n\r\n{v}\r\n").encode())
         parts.append(
             (f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; "
-             f"filename=\"proxy.png\"\r\nContent-Type: image/png\r\n\r\n").encode("utf-8"))
+             f"filename=\"proxy.png\"\r\nContent-Type: image/png\r\n\r\n").encode())
         parts.append(png)
-        parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+        parts.append(f"\r\n--{boundary}--\r\n".encode())
         body = b"".join(parts)
         req = urllib.request.Request(
             url, data=body,
@@ -210,10 +211,8 @@ class EmailDistributionSink:
             return SinkResult(sink="email", success=False, error=repr(e))
         finally:
             if smtp is not None:
-                try:
+                with contextlib.suppress(Exception):
                     smtp.quit()
-                except Exception:
-                    pass
         return SinkResult(sink="email", success=True, error=None)
 
 

@@ -8,14 +8,13 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from mthydra.controller.observability.severity import (
     severity_for_anti,
     severity_for_eu_heartbeat,
     severity_for_obligation_staleness,
 )
-
 
 # Anti-obligation single-row keys (no "::" suffix).
 _SINGLETON_ANTI_KEYS = frozenset({
@@ -105,7 +104,7 @@ class Snapshot:
 def _parse_iso(ts: str) -> int:
     return int(
         datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
-        .replace(tzinfo=timezone.utc).timestamp()
+        .replace(tzinfo=UTC).timestamp()
     )
 
 

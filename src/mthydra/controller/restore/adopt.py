@@ -97,7 +97,9 @@ def adopt_restored_state(
             actor="operator",
             action="adopt_restored_state",
             target=str(live_path),
-            details_json=json.dumps({"case": case, "rotate_published_subset": rotate_published_subset}),
+            details_json=json.dumps(
+                {"case": case, "rotate_published_subset": rotate_published_subset}
+            ),
         )
 
         # Step 4: Case B re-key

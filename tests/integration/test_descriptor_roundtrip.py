@@ -1,10 +1,10 @@
 """Integration: full sign → store → fetch → verify cycle (spec B §13.2)."""
 from mthydra.controller.state.db import connect
-from mthydra.controller.state.descriptor import insert_signing_key, latest_descriptor_with_signature
+from mthydra.controller.state.descriptor import insert_signing_key
 from mthydra.controller.state.eu_exit_set import add_exit
 from mthydra.controller.state.schema import apply_schema
 from mthydra.descriptor.keys import generate_keypair
-from mthydra.descriptor.payload import DescriptorPayload, payload_hash
+from mthydra.descriptor.payload import payload_hash
 from mthydra.descriptor.sign import sign_new_descriptor
 from mthydra.descriptor.verify import TrustedKey, verify_descriptor
 

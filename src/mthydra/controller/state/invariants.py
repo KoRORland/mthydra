@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from datetime import UTC
 
 
 class InvariantViolation(RuntimeError):
@@ -46,7 +47,8 @@ def check_all(
 
     overlap = _scalar(
         conn,
-        "SELECT COUNT(*) FROM cover_domain_pool WHERE domain IN (SELECT domain FROM burned_domains)",
+        "SELECT COUNT(*) FROM cover_domain_pool "
+        "WHERE domain IN (SELECT domain FROM burned_domains)",
     )
     if overlap > 0:
         raise InvariantViolation(
@@ -125,7 +127,7 @@ def check_all(
         except json.JSONDecodeError as e:
             raise InvariantViolation(
                 f"check 15: descriptor_history.generation={gen} has invalid JSON: {e}"
-            )
+            ) from e
         ph = obj.get("previous_generation_hash")
         if gen == 1:
             if ph is not None:
@@ -466,7 +468,7 @@ def _check_42_heartbeat_freshness_at_startup(
     (heartbeat_interval = 30m) doesn't yield a 1h window that flaps under
     normal restart latency.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     role_row = conn.execute(
         "SELECT role FROM node_state WHERE rowid=1"
@@ -490,11 +492,11 @@ def _check_42_heartbeat_freshness_at_startup(
     try:
         last_s = int(
             datetime.strptime(row[0], "%Y-%m-%dT%H:%M:%SZ")
-            .replace(tzinfo=timezone.utc).timestamp()
+            .replace(tzinfo=UTC).timestamp()
         )
         now_s = int(
             datetime.strptime(now_iso, "%Y-%m-%dT%H:%M:%SZ")
-            .replace(tzinfo=timezone.utc).timestamp()
+            .replace(tzinfo=UTC).timestamp()
         )
     except (ValueError, OSError):
         return

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def terminate_box(reason: str, *, dry_run: bool = False) -> None:
@@ -13,7 +13,7 @@ def terminate_box(reason: str, *, dry_run: bool = False) -> None:
     calls `shutdown -h now`. In dry_run mode, the shutdown command is
     not executed (used in tests).
     """
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(
         f"mthydra-agent: TERMINATING at {ts} - reason: {reason}",
         file=sys.stderr,

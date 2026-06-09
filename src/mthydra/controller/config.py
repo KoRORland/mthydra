@@ -459,8 +459,12 @@ def _load_observability(data: dict) -> ObservabilityConfig:
 
 def _load_probe(data: dict) -> ProbeConfig:
     sec = data.get("probe", {})
-    M = _require_positive("probe.soft_fail_window_M", sec.get("soft_fail_window_M", 4), positive=True)
-    N = _require_positive("probe.soft_fail_threshold_N", sec.get("soft_fail_threshold_N", 3), positive=True)
+    M = _require_positive(
+        "probe.soft_fail_window_M", sec.get("soft_fail_window_M", 4), positive=True
+    )
+    N = _require_positive(
+        "probe.soft_fail_threshold_N", sec.get("soft_fail_threshold_N", 3), positive=True
+    )
     if N > M:
         raise ConfigError(
             f"probe.soft_fail_threshold_N ({N}) must be <= soft_fail_window_M ({M})"
@@ -549,7 +553,9 @@ def load_config(path: Path | str) -> Config:
     return Config(
         node=NodeConfig(role=role, hostname=str(node["hostname"])),
         backup=BackupConfig(
-            floor_interval_hours=_require_positive("backup.floor_interval_hours", backup["floor_interval_hours"], positive=True),
+            floor_interval_hours=_require_positive(
+                "backup.floor_interval_hours", backup["floor_interval_hours"], positive=True
+            ),
             on_change_debounce_seconds=_require_positive(
                 "backup.on_change_debounce_seconds", backup["on_change_debounce_seconds"]
             ),
@@ -557,19 +563,29 @@ def load_config(path: Path | str) -> Config:
             bucket=str(backup["bucket"]),
             access_key_id=str(backup["access_key_id"]),
             retention=RetentionConfig(
-                keep_daily=_require_positive("backup.retention.keep_daily", retention["keep_daily"]),
-                keep_monthly=_require_positive("backup.retention.keep_monthly", retention["keep_monthly"]),
+                keep_daily=_require_positive(
+                    "backup.retention.keep_daily", retention["keep_daily"]
+                ),
+                keep_monthly=_require_positive(
+                    "backup.retention.keep_monthly", retention["keep_monthly"]
+                ),
                 object_lock_days=_require_positive(
                     "backup.retention.object_lock_days", retention["object_lock_days"]
                 ),
             ),
         ),
         gap_monitor=GapMonitorConfig(
-            poll_interval_minutes=_require_positive("gap_monitor.poll_interval_minutes", gap["poll_interval_minutes"], positive=True),
-            alarm_threshold_hours=_require_positive("gap_monitor.alarm_threshold_hours", gap["alarm_threshold_hours"]),
+            poll_interval_minutes=_require_positive(
+                "gap_monitor.poll_interval_minutes", gap["poll_interval_minutes"], positive=True
+            ),
+            alarm_threshold_hours=_require_positive(
+                "gap_monitor.alarm_threshold_hours", gap["alarm_threshold_hours"]
+            ),
             recipient_email=str(gap["recipient_email"]),
         ),
-        obligations=ObligationsConfig(timers_hours={str(k): int(v) for k, v in obligations.items()}),
+        obligations=ObligationsConfig(
+            timers_hours={str(k): int(v) for k, v in obligations.items()}
+        ),
         descriptor=DescriptorConfig(
             rotation_interval_hours=int(desc.get("rotation_interval_hours", 1)),
             validity_window_hours=int(desc.get("validity_window_hours", 24)),

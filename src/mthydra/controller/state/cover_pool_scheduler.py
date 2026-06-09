@@ -19,7 +19,7 @@ import json
 import socket
 import ssl
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -38,7 +38,7 @@ from mthydra.controller.state.obligations import set_obligation
 
 
 def _default_clock() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _add_seconds_iso(iso: str, seconds: float) -> str:
@@ -227,12 +227,14 @@ def auto_reverify_check(domain: str, *, port: int = 443, timeout_s: float = 5.0
         # use private CAs at the edge.
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        with socket.create_connection((domain, port), timeout=timeout_s) as sock:
-            with ctx.wrap_socket(sock, server_hostname=domain) as tls:
-                # Peer cert isn't validated, but pulling it forces handshake completion.
-                tls.getpeercert(binary_form=True)
+        with (
+            socket.create_connection((domain, port), timeout=timeout_s) as sock,
+            ctx.wrap_socket(sock, server_hostname=domain) as tls,
+        ):
+            # Peer cert isn't validated, but pulling it forces handshake completion.
+            tls.getpeercert(binary_form=True)
         return True, "tls-handshake-ok"
-    except socket.timeout:
+    except TimeoutError:
         return False, "timeout"
     except OSError as e:
         return False, f"connect-error: {type(e).__name__}: {e}"

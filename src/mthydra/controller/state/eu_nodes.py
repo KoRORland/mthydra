@@ -185,7 +185,7 @@ def get_node(conn: sqlite3.Connection, node_id: str) -> dict | None:
         "last_heartbeat_b2_etag", "notes", "cover_sni", "reality_pubkey",
         "data_exit_state", "data_exit_started_at",
     )
-    return dict(zip(cols, row))
+    return dict(zip(cols, row, strict=False))
 
 
 def list_eu_nodes(

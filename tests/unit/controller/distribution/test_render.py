@@ -1,8 +1,8 @@
 """Tests for distribution.render — human message + QR (spec K2)."""
 from __future__ import annotations
 
-from mthydra.controller.distribution.payload import SubsetBox, SubsetPayload
 from mthydra.controller.distribution import render
+from mthydra.controller.distribution.payload import SubsetBox, SubsetPayload
 
 
 def _payload(boxes):

@@ -78,7 +78,8 @@ def _mirror_event(
 
 def recent_events(conn: sqlite3.Connection, limit: int = 100) -> list[AuditEvent]:
     rows = conn.execute(
-        "SELECT id, ts, actor, action, target, details_json FROM audit_log ORDER BY id DESC LIMIT ?",
+        "SELECT id, ts, actor, action, target, details_json FROM audit_log "
+        "ORDER BY id DESC LIMIT ?",
         (limit,),
     ).fetchall()
     return [AuditEvent(*r) for r in rows]

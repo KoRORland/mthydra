@@ -8,6 +8,7 @@ stdlib only: smtplib + email.message.EmailMessage + urllib.request.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import ssl
 from collections.abc import Callable
@@ -156,10 +157,8 @@ class EmailAlertSink:
             return SinkResult(sink="email", success=False, error=repr(e))
         finally:
             if smtp is not None:
-                try:
+                with contextlib.suppress(Exception):
                     smtp.quit()
-                except Exception:
-                    pass
         return SinkResult(sink="email", success=True, error=None)
 
 

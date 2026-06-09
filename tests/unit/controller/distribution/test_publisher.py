@@ -1,8 +1,6 @@
 """Tests for distribution.publisher — delta-only per-user dispatch."""
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from mthydra.controller.distribution.publisher import DistributionPublisher
@@ -11,7 +9,6 @@ from mthydra.controller.observability.sinks import SinkResult
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema
 from mthydra.controller.state.user_channels import set_channels
-
 
 NOW = "2026-05-25T12:00:00Z"
 LATER = "2026-05-25T13:00:00Z"

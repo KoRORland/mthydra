@@ -6,7 +6,7 @@ import json
 import random
 import struct
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519

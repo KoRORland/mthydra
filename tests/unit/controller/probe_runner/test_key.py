@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from mthydra.controller.probe_runner import key as keymod
+from mthydra.controller.state import probe_key as pk
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.schema import apply_schema
-from mthydra.controller.state import probe_key as pk
-from mthydra.controller.probe_runner import key as keymod
 
 
 @pytest.fixture
@@ -77,9 +77,9 @@ def test_wheel_start_materializes_key_from_db(tmp_path, monkeypatch):
     """A promoted standby restores the DB; wheel.start() must rematerialize
     the probe.key file before scheduling ticks."""
     from mthydra.controller.probe_runner.wheel import ProbeRunnerWheel
+    from mthydra.controller.state import probe_key as pk
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.schema import apply_schema
-    from mthydra.controller.state import probe_key as pk
 
     db = tmp_path / "state.sqlite"
     c = connect(db)

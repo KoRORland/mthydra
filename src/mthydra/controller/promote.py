@@ -7,6 +7,7 @@ invoke systemctl — the operator stops/starts the service.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -178,9 +179,7 @@ def promote_active(
             bak_path.rename(db_path)
             raise PromotionError(f"invariant check failed after promotion: {e}") from e
     finally:
-        try:
+        with contextlib.suppress(Exception):
             conn.close()
-        except Exception:
-            pass
 
     return _CASE_B_CHECKLIST if case == "B" else None

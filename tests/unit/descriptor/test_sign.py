@@ -5,7 +5,8 @@ from mthydra.controller.state.db import connect
 from mthydra.controller.state.descriptor import insert_signing_key, latest_descriptor_with_signature
 from mthydra.controller.state.eu_exit_set import add_exit
 from mthydra.controller.state.schema import apply_schema
-from mthydra.descriptor.keys import generate_keypair, verify as ed_verify
+from mthydra.descriptor.keys import generate_keypair
+from mthydra.descriptor.keys import verify as ed_verify
 from mthydra.descriptor.payload import DescriptorPayload, payload_hash
 from mthydra.descriptor.sign import SignError, sign_new_descriptor
 
@@ -192,6 +193,7 @@ def test_encode_descriptor_blob_matches_seed_inline_encoding():
     in-flight RU boxes (which were provisioned against the inline form)
     would mismatch fetched descriptors against their initial_descriptor."""
     import struct as _struct
+
     from mthydra.descriptor.sign import encode_descriptor_blob
     payload = b'{"generation":7,"valid_until":"2026-12-31T23:59:59Z"}'
     sig = bytes(range(64))

@@ -16,7 +16,8 @@ def test_data_exit_lifecycle_full(tmp_path, age_recipient, monkeypatch):
     from mthydra.controller.state.credentials import revoke_credential
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.eu_nodes import (
-        add_eu_node, set_data_exit_identity,
+        add_eu_node,
+        set_data_exit_identity,
     )
 
     db = tmp_path / "state.sqlite"
@@ -46,7 +47,8 @@ def test_data_exit_lifecycle_full(tmp_path, age_recipient, monkeypatch):
 
     # Set up image + 3 cover domains + signed descriptor.
     from mthydra.controller.state.cover_pool import (
-        add_candidate, attest_verified,
+        add_candidate,
+        attest_verified,
     )
     from mthydra.controller.state.ru_images import insert_candidate, promote
     conn = connect(db)

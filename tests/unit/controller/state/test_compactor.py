@@ -1,8 +1,6 @@
 """Tests for state.compactor — spec M."""
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 from mthydra.controller.state.compactor import (

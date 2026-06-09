@@ -4,7 +4,8 @@ import pytest
 from mthydra.controller.state.audit import recent_events
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.node_state import (
-    NodeState, current_node_state, set_node_role,
+    current_node_state,
+    set_node_role,
 )
 from mthydra.controller.state.schema import apply_schema
 

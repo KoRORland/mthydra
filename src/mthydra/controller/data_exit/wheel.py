@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -20,7 +20,7 @@ from mthydra.controller.state.db import connect
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class DataExitWheel:

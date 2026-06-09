@@ -6,7 +6,6 @@ severity bucket: 'info' | 'warn' | 'crit'.
 """
 from __future__ import annotations
 
-
 # Anti-obligation prefixes that always map to a fixed severity regardless of age.
 _FIXED: dict[str, str] = {
     "probe_kill_pending":              "crit",

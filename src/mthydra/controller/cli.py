@@ -12,7 +12,7 @@ import os
 import sqlite3
 import sys
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from mthydra.controller import debug_flag, debug_runtime
@@ -26,7 +26,6 @@ from mthydra.controller.restore.summary import summarize_db
 from mthydra.controller.startup import run_startup_checks
 from mthydra.controller.state.db import connect
 from mthydra.controller.state.obligations import prove
-
 
 DEFAULT_DB = "/var/lib/mthydra/state.sqlite"
 DEFAULT_RECIPIENT_FILE = "/etc/mthydra/age-recipient.txt"
@@ -43,7 +42,7 @@ _CRED_ROTATION_DEFAULT_DAYS = {
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _read_recipient(path: str) -> str:
@@ -433,13 +432,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ----- spec D subcommands -----
     ib = sub.add_parser("image-build",
-                         help="download upstream release, verify checksum, upload to B2, register candidate")
+                         help="download upstream release, verify checksum, "
+                              "upload to B2, register candidate")
     ib.add_argument("--release", required=True)
     ib.add_argument("--asset", default=None,
                      help="override asset filename (defaults to cfg.image.upstream_release_asset)")
     ib.add_argument("--notes", default=None)
     ib.add_argument("--profile-json", required=True, dest="profile_json",
-                     help="path to known-good profile JSON file, or '-' to read stdin (spec D2 atomic pin)")
+                     help="path to known-good profile JSON file, "
+                          "or '-' to read stdin (spec D2 atomic pin)")
     ib.add_argument("--profile-recorded-by", default="operator", dest="profile_recorded_by",
                      help="who pinned the profile (default 'operator')")
     ib.add_argument("--db-path", default=DEFAULT_DB)
@@ -455,7 +456,8 @@ def build_parser() -> argparse.ArgumentParser:
     il.add_argument("--json", action="store_true")
 
     ip = sub.add_parser("image-promote",
-                         help="atomic candidate -> promoted; prior promoted -> retired (spec D2 gated)")
+                         help="atomic candidate -> promoted; "
+                              "prior promoted -> retired (spec D2 gated)")
     ip.add_argument("image_version")
     ip.add_argument("--evidence", required=True,
                      help="operator-attested evidence text (recorded in audit; not validated)")
@@ -514,7 +516,8 @@ def build_parser() -> argparse.ArgumentParser:
     rbr.add_argument("--db-path", default=DEFAULT_DB)
 
     ps = sub.add_parser("provision-seed",
-                         help="atomic provisioning: claim cover domain + image + credential, emit seed")
+                         help="atomic provisioning: claim cover domain + image + "
+                              "credential, emit seed")
     ps.add_argument("--provider", required=True)
     ps.add_argument("--region", required=True)
     ps.add_argument("--format", choices=["cloud-init", "json"], default="cloud-init")
@@ -955,7 +958,10 @@ def run(argv: list[str]) -> int:
         if getattr(args, "config", None):
             try:
                 from mthydra.controller.config import (
-                    ConfigError as _CE, load_config as _lc,
+                    ConfigError as _CE,
+                )
+                from mthydra.controller.config import (
+                    load_config as _lc,
                 )
                 _cfg = _lc(args.config)
                 _hb_interval = _cfg.observability.heartbeat_interval_seconds
@@ -1044,7 +1050,7 @@ def run(argv: list[str]) -> int:
             except ConfigError:
                 next_due_hours = 720
 
-        now_dt = datetime.now(timezone.utc)
+        now_dt = datetime.now(UTC)
         next_due = (now_dt + timedelta(hours=next_due_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
         conn = connect(args.db_path)
         try:
@@ -1091,7 +1097,8 @@ def run(argv: list[str]) -> int:
             # calendar reminder before the credential ages out.
             # cadence comes from _CRED_ROTATION_DEFAULT_DAYS; operator can
             # override per provider with --rotation-days.
-            from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+            from datetime import datetime as _dt
+            from datetime import timedelta as _td
             days = (args.rotation_days if args.rotation_days is not None
                     else _CRED_ROTATION_DEFAULT_DAYS.get(args.provider, 90))
             next_due = (
@@ -1328,7 +1335,6 @@ def run(argv: list[str]) -> int:
 def _cmd_backup_now(args, mode: str) -> int:
     """Run a manual backup synchronously (decision 2a — real pipeline call)."""
     from mthydra.controller.backup.pipeline import BackupPipeline
-    from mthydra.controller.backup.s3_dest import S3Destination
     from mthydra.controller.config import ConfigError, load_config
     from mthydra.controller.state.backup_log import BackupTrigger
     from mthydra.controller.state.tokens import get_provider_credential
@@ -1385,6 +1391,7 @@ def _cmd_backup_now(args, mode: str) -> int:
 def _descriptor_valid_until(cfg_path: str, now_dt) -> str:
     """Compute valid_until from config, falling back to now+24h."""
     from datetime import timedelta
+
     from mthydra.controller.config import ConfigError, load_config
     try:
         cfg = load_config(cfg_path)
@@ -1395,8 +1402,9 @@ def _descriptor_valid_until(cfg_path: str, now_dt) -> str:
 
 
 def _cmd_descriptor_sign_now(args) -> int:
-    from datetime import datetime, timezone
-    from mthydra.descriptor.sign import SignError, sign_new_descriptor
+    from datetime import datetime
+
+    from mthydra.descriptor.sign import sign_new_descriptor
     now = _now()
     now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
     valid_until = _descriptor_valid_until(args.config, now_dt)
@@ -1472,6 +1480,7 @@ def _cmd_descriptor_publish_now(args, mode: str) -> int:
 
 def _cmd_descriptor_show(args) -> int:
     import json as _json
+
     from mthydra.controller.state.descriptor import latest_descriptor_with_signature
     conn = connect(args.db_path)
     try:
@@ -1658,11 +1667,12 @@ def _cmd_descriptor_verify(args) -> int:
 
 
 def _cmd_signing_key_rotate(args) -> int:
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
+
     from mthydra.controller.state.audit import log_event
     from mthydra.controller.state.obligations import prove
     from mthydra.descriptor.keys import generate_keypair
-    from mthydra.descriptor.sign import SignError, sign_new_descriptor
+    from mthydra.descriptor.sign import sign_new_descriptor
 
     now = _now()
     now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
@@ -1691,7 +1701,8 @@ def _cmd_signing_key_rotate(args) -> int:
 
         # Mark current key as outgoing (retired_at = now + validity_window)
         conn.execute(
-            "UPDATE descriptor_signing_key SET retired_at=? WHERE generation=? AND retired_at IS NULL",
+            "UPDATE descriptor_signing_key SET retired_at=? "
+            "WHERE generation=? AND retired_at IS NULL",
             (outgoing_at, cur_gen),
         )
         # Insert new key
@@ -1717,11 +1728,10 @@ def _cmd_signing_key_rotate(args) -> int:
         except Exception:
             vh2 = 8760
         nxt = (now_dt + timedelta(hours=vh2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        try:
+        # obligation may not exist on old DBs
+        with contextlib.suppress(KeyError):
             prove(conn, obligation_id="descriptor_signing_key_rotation",
                   proven_by="operator", at=now, next_due_at=nxt, details=None)
-        except KeyError:
-            pass  # obligation may not exist on old DBs
 
         print(f"rotated: new signing key gen={new_gen}, descriptor gen={gen}")
         return 0
@@ -1733,10 +1743,11 @@ def _cmd_signing_key_rotate(args) -> int:
 
 
 def _cmd_eu_add(args) -> int:
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from mthydra.controller.state.audit import log_event
     from mthydra.controller.state.eu_exit_set import add_exit
-    from mthydra.descriptor.sign import SignError, sign_new_descriptor
+    from mthydra.descriptor.sign import sign_new_descriptor
 
     now = _now()
     now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
@@ -1757,10 +1768,11 @@ def _cmd_eu_add(args) -> int:
 
 
 def _cmd_eu_retire(args) -> int:
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from mthydra.controller.state.audit import log_event
     from mthydra.controller.state.eu_exit_set import retire_exit
-    from mthydra.descriptor.sign import SignError, sign_new_descriptor
+    from mthydra.descriptor.sign import sign_new_descriptor
 
     now = _now()
     now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
@@ -1781,10 +1793,11 @@ def _cmd_eu_retire(args) -> int:
 
 
 def _cmd_descriptor_migrate_placeholder(args) -> int:
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from mthydra.controller.state.audit import log_event
     from mthydra.descriptor.keys import generate_keypair, is_placeholder
-    from mthydra.descriptor.sign import SignError, sign_new_descriptor
+    from mthydra.descriptor.sign import sign_new_descriptor
 
     now = _now()
     now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
@@ -1952,7 +1965,8 @@ def _dispatch_debug_alert(tg_sink, em_sink, conn, *, payload, now) -> dict:
             success, err = False, repr(e)
         results[label] = (success, err)
         if conn is not None:
-            try:
+            # forensic record is best-effort; never block the toggle
+            with contextlib.suppress(Exception):
                 _al.append(
                     conn, attempted_at=now,
                     delivered_at=now if success else None,
@@ -1961,8 +1975,6 @@ def _dispatch_debug_alert(tg_sink, em_sink, conn, *, payload, now) -> dict:
                     payload=f"{payload.subject}\n\n{payload.body}",
                     error=err,
                 )
-            except Exception:
-                pass  # forensic record is best-effort; never block the toggle
     return results
 
 
@@ -2053,8 +2065,6 @@ def _cmd_debug(args, mode: str) -> int:
 
 def _cmd_serve(args) -> int:
     """Run the backup orchestrator loop (spec A stub; spec F will add the full controller plane)."""
-    import signal
-    import time
 
     from mthydra.controller.backup.pipeline import BackupPipeline
     from mthydra.controller.backup.triggers import BackupOrchestrator
@@ -2185,22 +2195,22 @@ def _cmd_serve(args) -> int:
     )
 
     # Enable audit-log file mirror (spec §4.7)
+    from mthydra.controller.backup.integrity import BackupIntegritySweep
+    from mthydra.controller.distribution.publisher import DistributionPublisher
+    from mthydra.controller.observability.alerter import AlertSweep
+    from mthydra.controller.observability.heartbeat import ObsHeartbeatPublisher
+    from mthydra.controller.probe.audit_wheel import ProbeAuditWheel
+    from mthydra.controller.probe.evaluator import ProbeConfigView
+    from mthydra.controller.probe_runner.wheel import ProbeRunnerWheel
+    from mthydra.controller.shard_manager.wheel import ShardReshuffleWheel
+    from mthydra.controller.standby.heartbeat import StandbyHeartbeatPoller
     from mthydra.controller.state.audit import set_audit_mirror
-    from mthydra.descriptor.scheduler import DescriptorRotator
     from mthydra.controller.state.cover_pool_scheduler import (
         CoverPoolAutoReverifySweep,
         CoverPoolReverifySweep,
         CoverPoolRotationSweep,
     )
-    from mthydra.controller.backup.integrity import BackupIntegritySweep
-    from mthydra.controller.standby.heartbeat import StandbyHeartbeatPoller
-    from mthydra.controller.shard_manager.wheel import ShardReshuffleWheel
-    from mthydra.controller.probe.audit_wheel import ProbeAuditWheel
-    from mthydra.controller.probe.evaluator import ProbeConfigView
-    from mthydra.controller.probe_runner.wheel import ProbeRunnerWheel
-    from mthydra.controller.observability.alerter import AlertSweep
-    from mthydra.controller.observability.heartbeat import ObsHeartbeatPublisher
-    from mthydra.controller.distribution.publisher import DistributionPublisher
+    from mthydra.descriptor.scheduler import DescriptorRotator
 
     set_audit_mirror("/var/lib/mthydra/logs/audit.log")
 
@@ -2396,7 +2406,17 @@ def _cmd_serve(args) -> int:
             reality_observer.arm()
         if cfg.probe.runner_enabled:
             probe_runner.start()
-        print("serve: backup orchestrator + descriptor rotator + cover-pool sweeps (TTL + auto-reverify) + backup integrity sweep + standby poller + upstream tracker + shard wheel + probe audit wheel + vantage self-check + alerter + obs heartbeat + dist publisher" + (" + eu exit observer" if exit_observer is not None else "") + (" + reality handshake observer" if reality_observer is not None else "") + " armed", flush=True)
+        armed = (
+            "serve: backup orchestrator + descriptor rotator + cover-pool sweeps "
+            "(TTL + auto-reverify) + backup integrity sweep + standby poller + "
+            "upstream tracker + shard wheel + probe audit wheel + vantage "
+            "self-check + alerter + obs heartbeat + dist publisher"
+        )
+        if exit_observer is not None:
+            armed += " + eu exit observer"
+        if reality_observer is not None:
+            armed += " + reality handshake observer"
+        print(armed + " armed", flush=True)
     else:
         print("serve: offline mode — triggers not armed", flush=True)
 
@@ -2558,12 +2578,11 @@ def _cmd_cover_add(args) -> int:
             print(f"cover-add: {e}", file=sys.stderr)
             return 2
         next_due = _add_hours_iso(now, 90 * 24)  # default replenishment_interval_days
-        try:
+        # obligation may not be seeded in older DBs; non-fatal
+        with contextlib.suppress(KeyError):
             prove(conn, "cover_pool_replenishment_proven",
                   proven_by="operator", at=now,
                   next_due_at=next_due, details=args.domain)
-        except KeyError:
-            pass  # obligation may not be seeded in older DBs; non-fatal
         print(f"cover-add: {args.domain} added (candidate_unverified)")
         return 0
     finally:
@@ -2587,23 +2606,20 @@ def _cmd_cover_attest_verified(args) -> int:
             print(f"cover-attest-verified: {e}", file=sys.stderr)
             return 2
         next_due = _add_hours_iso(now, 60 * 24)
-        try:
+        with contextlib.suppress(KeyError):
             prove(conn, "cover_pool_reverify_pass_proven",
                   proven_by="operator", at=now,
                   next_due_at=next_due, details=args.domain)
-        except KeyError:
-            pass
         # A manual attestation is also the operator's override for the routine
         # t5 pool revalidation (otherwise auto-proven by the auto-reverify
         # sweep). Prove it here so following the remediation actually clears
         # the t5 warn.
-        try:
+        with contextlib.suppress(KeyError):
             prove(conn, "t5_pool_revalidation",
                   proven_by="operator", at=now,
                   next_due_at=_add_hours_iso(now, 168), details=args.domain)
-        except KeyError:
-            pass
-        print(f"cover-attest-verified: {args.domain} -> candidate_verified (vantage={args.vantage})")
+        print(f"cover-attest-verified: {args.domain} -> candidate_verified "
+              f"(vantage={args.vantage})")
         return 0
     finally:
         conn.close()
@@ -2784,7 +2800,9 @@ def _cmd_cover_due(args) -> int:
 
     from mthydra.controller.config import ConfigError, load_config
     from mthydra.controller.state.cover_pool import (
-        _iso_minus_days, list_due_for_rotation, pool_health,
+        _iso_minus_days,
+        list_due_for_rotation,
+        pool_health,
     )
     from mthydra.controller.state.db import connect
 
@@ -2840,7 +2858,9 @@ def _cmd_authority_rotate(args) -> int:
 
     from mthydra.controller.state.audit import log_event
     from mthydra.controller.state.authority import (
-        current_authority, insert_authority, retire_authority,
+        current_authority,
+        insert_authority,
+        retire_authority,
     )
     from mthydra.controller.state.db import connect
     from mthydra.descriptor.authority import generate_authority_keypair
@@ -3255,7 +3275,8 @@ def _cmd_image_promote(args) -> int:
 
     from mthydra.controller.config import ConfigError, load_config
     from mthydra.controller.image.gate import (
-        GateConfigView, evaluate_promotion_gate,
+        GateConfigView,
+        evaluate_promotion_gate,
     )
     from mthydra.controller.state.audit import log_event
     from mthydra.controller.state.db import connect
@@ -3450,7 +3471,7 @@ def _cmd_provision_seed(args) -> int:
 
 def _cmd_ru_box_list(args) -> int:
     import json as _json
-    from dataclasses import asdict
+
     from mthydra.controller.state.db import connect
 
     conn = connect(args.db_path)
@@ -3473,7 +3494,7 @@ def _cmd_ru_box_list(args) -> int:
         cols = ("box_id", "provider", "region", "public_ip", "sni", "shard_id",
                 "state", "image_version", "created_at", "went_live_at",
                 "terminated_at", "termination_reason")
-        out = [dict(zip(cols, r)) for r in rows]
+        out = [dict(zip(cols, r, strict=False)) for r in rows]
         if args.json:
             print(_json.dumps(out, indent=2))
         else:
@@ -3665,7 +3686,7 @@ def _cmd_data_exit_status(args) -> int:
         path = Path(cfg.data_exit.config_path)
         if path.exists():
             mtime_ts = os.path.getmtime(path)
-            mtime = datetime.fromtimestamp(mtime_ts, tz=timezone.utc).strftime(
+            mtime = datetime.fromtimestamp(mtime_ts, tz=UTC).strftime(
                 "%Y-%m-%dT%H:%M:%SZ")
         else:
             mtime = "(file not present)"
@@ -3749,7 +3770,8 @@ def _cmd_data_exit_reality_keygen(args) -> int:
     from mthydra.controller.state.audit import log_event
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.eu_nodes import (
-        get_node, set_data_exit_identity,
+        get_node,
+        set_data_exit_identity,
     )
 
     try:
@@ -3816,10 +3838,8 @@ def _cmd_data_exit_reality_keygen(args) -> int:
             finally:
                 os.close(dir_fd)
         except Exception:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 os.unlink(tmp_path)
-            except FileNotFoundError:
-                pass
             raise
         cover_sni = cfg.data_exit.cover_sni_for(args.node_id)
         set_data_exit_identity(
@@ -4029,6 +4049,7 @@ def _cmd_shard_assign_box(args) -> int:
 def _cmd_shard_reshuffle(args) -> int:
     import json as _json
     import uuid as _uuid
+
     from mthydra.controller.config import ConfigError, load_config
     from mthydra.controller.shard_manager.picker import pick_new_rosters
     from mthydra.controller.state import shards as _shards
@@ -4170,12 +4191,10 @@ def _cmd_vantage_attest_active(args) -> int:
         # Operator override for the routine t3 vantage revalidation (otherwise
         # auto-proven by the vantage self-check sweep). Prove it so following
         # the remediation actually clears the t3 warn.
-        try:
+        with contextlib.suppress(KeyError):
             prove(conn, "t3_vantage_revalidation",
                   proven_by="operator", at=now,
                   next_due_at=_add_hours_iso(now, 168), details=args.vantage_id)
-        except KeyError:
-            pass
         print(f"vantage-attest-active: {args.vantage_id} -> active")
         return 0
     finally:
@@ -4248,8 +4267,8 @@ def _cmd_vantage_burn(args) -> int:
 
 
 def _cmd_vantage_set_ssh(args) -> int:
-    from mthydra.controller.state.db import connect
     from mthydra.controller.state import probe_vantages as _pv
+    from mthydra.controller.state.db import connect
     with connect(args.db_path) as conn:
         try:
             _pv.set_ssh(conn, args.vantage_id,
@@ -4379,7 +4398,9 @@ def _cmd_probe_record(args) -> int:
 def _cmd_probe_evaluate(args) -> int:
     from mthydra.controller.config import ConfigError, load_config
     from mthydra.controller.probe.evaluator import (
-        EvaluationError, ProbeConfigView, evaluate_box,
+        EvaluationError,
+        ProbeConfigView,
+        evaluate_box,
     )
     from mthydra.controller.state.db import connect
     try:
@@ -4440,7 +4461,8 @@ def _cmd_probe_due(args) -> int:
         rotation = [
             r[0] for r in conn.execute(
                 "SELECT obligation_id FROM obligation_clocks "
-                "WHERE obligation_id LIKE 'probe_vantage_rotation_pending::%' ORDER BY obligation_id"
+                "WHERE obligation_id LIKE 'probe_vantage_rotation_pending::%' "
+                "ORDER BY obligation_id"
             ).fetchall()
         ]
         blocked = [
@@ -4475,7 +4497,9 @@ def _build_alert_sinks(cfg, mode: str):
     """Return (telegram_sink, email_sink). Both are DryRunSinks in offline mode
     OR when the corresponding credential section is missing."""
     from mthydra.controller.observability.sinks import (
-        DryRunSink, EmailAlertSink, TelegramAlertSink,
+        DryRunSink,
+        EmailAlertSink,
+        TelegramAlertSink,
     )
     if mode == "offline":
         return DryRunSink(label="telegram"), DryRunSink(label="email")
@@ -4646,7 +4670,8 @@ def _cmd_obs_alert_test(args, mode: str) -> int:
 def _cmd_obs_heartbeat_now(args, mode: str) -> int:
     from mthydra.controller.config import ConfigError, load_config
     from mthydra.controller.observability.heartbeat import (
-        ObsHeartbeatPublisher, smtp_smoke,
+        ObsHeartbeatPublisher,
+        smtp_smoke,
     )
     try:
         cfg = load_config(args.config)
@@ -4682,7 +4707,9 @@ def _cmd_obs_heartbeat_now(args, mode: str) -> int:
 def _build_dist_sinks(cfg, mode: str):
     """Return (telegram_sink, email_sink). DryRun in offline OR when creds missing."""
     from mthydra.controller.distribution.sinks import (
-        DryRunDistributionSink, EmailDistributionSink, TelegramDistributionSink,
+        DryRunDistributionSink,
+        EmailDistributionSink,
+        TelegramDistributionSink,
     )
     if mode == "offline":
         return (DryRunDistributionSink(label="telegram"),
@@ -4932,8 +4959,8 @@ def _cmd_user_onboard(args) -> int:
     from mthydra.controller.config import ConfigError, load_config
     from mthydra.controller.distribution import enrollment
     from mthydra.controller.distribution.sinks import TelegramDistributionSink
-    from mthydra.controller.state.db import connect
     from mthydra.controller.state import user_channels as _uc
+    from mthydra.controller.state.db import connect
     from mthydra.controller.state.shards import create_shard
     from mthydra.controller.state.users_shards import add_user, assign_user_to_shard
 
@@ -5000,7 +5027,8 @@ def _cmd_user_onboard(args) -> int:
 def _cmd_image_promote_status(args) -> int:
     from mthydra.controller.config import ConfigError, load_config
     from mthydra.controller.image.gate import (
-        GateConfigView, evaluate_promotion_gate,
+        GateConfigView,
+        evaluate_promotion_gate,
     )
     from mthydra.controller.state.db import connect
 
@@ -5051,7 +5079,9 @@ def _cmd_image_rollback(args) -> int:
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.obligations import set_obligation
     from mthydra.controller.state.ru_images import (
-        get_image, list_live_boxes_for_image, retire,
+        get_image,
+        list_live_boxes_for_image,
+        retire,
     )
 
     if args.image_version == args.target_version:
@@ -5166,7 +5196,9 @@ def _cmd_ru_box_canary_clear(args) -> int:
 
 def _cmd_compact_logs(args) -> int:
     from mthydra.controller.state.compactor import (
-        compact_alert_acks, compact_alert_log, compact_distribution_log,
+        compact_alert_acks,
+        compact_alert_log,
+        compact_distribution_log,
         compact_probe_results,
     )
     from mthydra.controller.state.db import connect
@@ -5234,7 +5266,7 @@ def _parse_duration_seconds(spec: str) -> int:
 
 
 def _cmd_obs_alert_ack(args) -> int:
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from mthydra.controller.state.alert_acks import ack
     from mthydra.controller.state.db import connect
@@ -5248,7 +5280,7 @@ def _cmd_obs_alert_ack(args) -> int:
     expires = (
         datetime.fromisoformat(now.replace("Z", "+00:00"))
         + timedelta(seconds=secs)
-    ).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn = connect(args.db_path)
     try:
         ack(
@@ -5295,10 +5327,10 @@ def _cmd_obs_alert_ack_list(args) -> int:
 def _cmd_probe_credential_issue(args) -> int:
     import uuid as _uuid
 
-    from mthydra.descriptor.authority import sign_onward_credential
     from mthydra.controller.state.authority import current_authority
     from mthydra.controller.state.db import connect
     from mthydra.controller.state.probe_credentials import issue
+    from mthydra.descriptor.authority import sign_onward_credential
     conn = connect(args.db_path)
     try:
         rc = _require_active_role(conn, "probe-credential-issue")

@@ -70,7 +70,7 @@ class DescriptorPayload:
     desync_strategy: str | None = None
 
     @classmethod
-    def from_canonical_bytes(cls, blob: bytes) -> "DescriptorPayload":
+    def from_canonical_bytes(cls, blob: bytes) -> DescriptorPayload:
         """Parse without re-serialising. Raises ValueError on any structural error.
 
         Accepts both v1 and v2 schema labels.
