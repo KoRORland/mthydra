@@ -7,7 +7,24 @@ what (if anything) the operator must do when upgrading.
 
 ---
 
-## Unreleased — 2026-06-09
+## v0.0.11 — 2026-06-10
+
+Accumulated work since v0.0.10 (2026-06-03): EU/RU operator debug mode,
+controller vantage self-attestation, uTLS fingerprint diversity + egress
+self-measurement, optional desync-strategy support, the RU-agent tarball fix,
+and a CI + lint/type-check gate. **Operator action:** none beyond
+`mthydra-ops upgrade`; per-date detail below.
+
+### 2026-06-10 — CI + lint/type-check gates (no operator-visible change)
+
+- ci: GitHub Actions now runs ruff + mypy + the full test suite (controller and
+  backup-monitor) on every push and pull request; a separate workflow runs the
+  integration gate — boots the EU+vantage+RU-box+MinIO fleet and asserts
+  `✅ TUNNEL UP` — on demand and nightly. `make lint` and a new `make typecheck`
+  are now green and enforced, with ruff and mypy pinned so CI matches local.
+  Developer-facing only; no controller or RU-agent behaviour changes.
+
+### 2026-06-09
 
 - fix(ru-agent): the published RU-agent tarball now ships the top-level
   `mthydra.debuglog` and `mthydra.proxy_link` modules, not just the `ru_agent`
@@ -23,7 +40,7 @@ what (if anything) the operator must do when upgrading.
   comes up on `:443` and is reachable from the vantage. This harness caught the
   agent-closure bug above. Run with `bash harness/integration-mvp/run.sh`.
 
-## Unreleased — 2026-06-06
+### 2026-06-06
 
 - feat(self-attest): the controller now self-proves the routine revalidation
   obligations from its own vantage instead of nagging the operator. A new
@@ -83,7 +100,7 @@ no operator action). To debug a flagged box: SSH in and
 
 ---
 
-## Unreleased — 2026-06-05
+### 2026-06-05
 
 **Stale "user not registered" alerts self-clear.** A `dist_user_unregistered`
 alert is now cleared when its user is no longer assigned to a shard (deleted or
@@ -146,7 +163,7 @@ one table; no data migration). Existing vantages keep working; re-run
 
 ---
 
-## Unreleased — 2026-06-03
+### 2026-06-03
 
 **New: `mthydra-controller user-onboard` — one-command user onboarding with
 Telegram deep-link enrollment.** Replaces the four-step
