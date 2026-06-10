@@ -416,6 +416,11 @@ def test_cmd_upgrade_refuses_schema_migration_without_flag(monkeypatch, tmp_path
 def test_cmd_upgrade_noop_when_already_at_target(monkeypatch, tmp_path):
     prior_sha = _seed_min_src(tmp_path / "src")
     _seed_schema_db(tmp_path / "db.sqlite", 15)
+    # Match the seeded source version (_seed_min_src writes 0.0.1) so partial-state
+    # detection stays off — otherwise the real installed mthydra version (e.g.
+    # 0.0.10 in a fresh `pip install -e`) suppresses the no-op short-circuit and
+    # the test depends on the ambient environment.
+    monkeypatch.setattr(upgrade, "_installed_version", lambda: "0.0.1")
     monkeypatch.setattr(upgrade, "_call_resolve_latest_tag",
                         lambda **kw: prior_sha)
     fetched = {"v": False}
