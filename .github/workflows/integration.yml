@@ -1,0 +1,31 @@
+name: Integration (release gate)
+
+# The release gate from doc/release-playbook.md: boots a real EU controller +
+# RU vantage + RU box fleet (+ MinIO standing in for S3) in Docker and asserts
+# the mtg tunnel comes up on :443 ("✅ TUNNEL UP"). Too heavy for every push,
+# so it runs on demand (Actions tab) and nightly. Everything runs in
+# containers; the runner only needs Docker (pre-installed on ubuntu-latest).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *" # nightly 03:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache mtg tarball
+        uses: actions/cache@v4
+        with:
+          path: harness/agent-boot/.cache
+          key: mtg-tarball-v1
+
+      - name: Integration gate (boot fleet, assert TUNNEL UP)
+        run: make integration
