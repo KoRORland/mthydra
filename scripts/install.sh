@@ -56,6 +56,7 @@ if [ "$(id -u)" -ne 0 ] && [ "${MTHYDRA_SKIP_APT:-0}" != "1" ]; then
 fi
 
 if [ -r /etc/os-release ]; then
+  # shellcheck source=/dev/null  # runtime-only file; not available at lint time
   . /etc/os-release
   case "${VERSION_ID:-}" in
     24.04) : ;;
