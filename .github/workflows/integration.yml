@@ -9,7 +9,7 @@ name: Integration (release gate)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *" # nightly 03:00 UTC
+    - cron: "0 3 1 * *" # nightly 03:00 UTC
 
 permissions:
   contents: read
